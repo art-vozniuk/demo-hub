@@ -86,8 +86,6 @@ If you fork this project and want to set up CI/CD, you'll need to configure the 
 - `RABBITMQ_USER` - RabbitMQ username
 - `RABBITMQ_PASSWORD` - RabbitMQ password
 - `SENTRY_DSN` - Sentry error tracking DSN
-- `RATE_LIMIT_QUEUE_PER_MINUTE` - Rate limit for job submissions
-- `RATE_LIMIT_STATUS_PER_MINUTE` - Rate limit for status checks
 - `ALLOWED_ORIGINS` - CORS allowed origins
 - `ENV` - Environment name (production/staging)
 
