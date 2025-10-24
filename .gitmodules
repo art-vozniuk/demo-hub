@@ -1,0 +1,3 @@
+[submodule "services/external/face_swap"]
+	path = services/external/face_swap
+	url = https://github.com/art-vozniuk/reactor-face-swap
