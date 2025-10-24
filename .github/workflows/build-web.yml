@@ -1,0 +1,52 @@
+name: build and push web
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: create env file
+        run: |
+          cat > /tmp/web.env << EOF
+          VITE_APP_URL=${{ secrets.VITE_APP_URL }}
+          VITE_CORE_API_URL=${{ secrets.VITE_CORE_API_URL }}
+          VITE_S3_ACCESS_KEY_ID=${{ secrets.S3_ACCESS_KEY_ID }}
+          VITE_S3_ACCESS_KEY_SECRET=${{ secrets.S3_ACCESS_KEY_SECRET }}
+          VITE_S3_ENDPOINT=${{ secrets.S3_ENDPOINT }}
+          VITE_S3_PUBLIC_BUCKETS_ENDPOINT=${{ secrets.S3_PUBLIC_BUCKETS_ENDPOINT }}
+          VITE_S3_REGION=${{ secrets.S3_REGION }}
+          VITE_SUPABASE_URL=${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+          EOF
+
+      - name: login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: set up docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: build and push docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/web/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/web:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          secret-files: |
+            env=/tmp/web.env

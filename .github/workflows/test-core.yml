@@ -1,0 +1,49 @@
+name: test core
+
+on:
+  pull_request:
+    paths:
+      - 'services/core/**'
+      - 'services/common/**'
+      - '.github/workflows/test-core.yml'
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: set up python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: install uv
+        run: pip install uv
+
+      - name: install dependencies
+        run: |
+          cd services/common
+          uv pip install --system -e .
+          cd ../core
+          uv pip install --system -e ".[dev]"
+
+      - name: run tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          ENV: test
+          DATABASE_URL: sqlite+aiosqlite:///:memory
+          SUPABASE_URL: http://localhost:8000
+          RABBITMQ_URL: amqp://guest:guest@localhost:5672/
+          REDIS_URL: redis://localhost:6379
+          ALLOWED_ORIGINS: http://localhost:8085
+        run: |
+          cd services/core
+          pytest tests/ -v --tb=short
+

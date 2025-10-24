@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Uvicorn (Compute Service)",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/services/compute/.venv/bin/uvicorn",
+      "args": [
+        "services.compute.main:app",
+        "--host", "0.0.0.0",
+        "--port", "8080",
+        "--reload"
+      ],
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/services/compute:${workspaceFolder}/services/external/face_swap:${workspaceFolder}/services/external/hair_swap"
+      },
+      "envFile": "${workspaceFolder}/services/compute/.env",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}

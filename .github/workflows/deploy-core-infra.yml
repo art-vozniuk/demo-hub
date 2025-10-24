@@ -1,0 +1,78 @@
+name: deploy core infra
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-core:
+    uses: ./.github/workflows/build-core.yml
+    secrets: inherit
+
+  build-web:
+    uses: ./.github/workflows/build-web.yml
+    secrets: inherit
+
+  deploy:
+    needs: [build-core, build-web]
+    if: ${{ success() }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Copy compose and configs to server
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "docker-compose.yml,nginx"
+          target: demo-hub
+
+      - name: Connect and deploy
+        uses: appleboy/ssh-action@v1.1.0
+        env:
+          RABBITMQ_USER: ${{ secrets.RABBITMQ_USER }}
+          RABBITMQ_PASSWORD: ${{ secrets.RABBITMQ_PASSWORD }}
+          CERTBOT_EMAIL: ${{ secrets.CERTBOT_EMAIL }}
+          CERTBOT_DOMAINS: ${{ secrets.CERTBOT_DOMAINS }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: RABBITMQ_USER,RABBITMQ_PASSWORD,CERTBOT_EMAIL,CERTBOT_DOMAINS
+          script: |
+            set -euo pipefail
+            cd demo-hub
+
+            mkdir -p nginx
+
+            cat > nginx/.env << EOF
+            CERTBOT_EMAIL=${CERTBOT_EMAIL}
+            CERTBOT_DOMAINS=${CERTBOT_DOMAINS}
+            EOF
+
+            export RABBITMQ_USER=${RABBITMQ_USER}
+            export RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
+
+            echo "Logging in to GHCR..."
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            echo "Pulling latest images..."
+            docker compose pull --quiet 2>&1 | tee /tmp/compose.log
+
+            echo "Recreating containers..."
+            docker compose up -d --force-recreate --remove-orphans 2>&1 | tee -a /tmp/compose.log
+
+            echo "Checking for errors..."
+            if grep -Eqi "err:|error|failed" /tmp/compose.log; then
+              echo "Deployment log contains errors (ERR / ERROR / FAILED)"
+              grep -E "error|failed" /tmp/compose.log || true
+              exit 1
+            fi
+
+            echo "Reloading nginx config..."
+            docker exec meme-fusion-nginx-1 nginx -s reload || true
+
+            echo "Deployment completed successfully!"

@@ -1,0 +1,23 @@
+services:
+  compute-gpu:
+    image: ghcr.io/art-vozniuk/compute:latest
+    container_name: compute-gpu
+    environment:
+      RABBITMQ_PREFETCH: "60"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+#  compute-cpu:
+#    image: ghcr.io/art-vozniuk/compute-cpu:latest
+#    environment:
+#      RABBITMQ_PREFETCH: "1"
+#    deploy:
+#      replicas: 0
+#    restart: unless-stopped
+

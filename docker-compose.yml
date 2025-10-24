@@ -1,0 +1,84 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    networks:
+      - app_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  core:
+    image: ghcr.io/art-vozniuk/core:latest
+    container_name: core
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app_network
+    restart: unless-stopped
+
+  web:
+    image: ghcr.io/art-vozniuk/web:latest
+    container_name: web
+    ports:
+      - "5173:80"
+    depends_on:
+      - core
+    networks:
+      - app_network
+    restart: unless-stopped
+
+  nginx:
+    image: jonasal/nginx-certbot:latest
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    env_file:
+      - nginx/.env
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/user_conf.d/default.conf:ro
+      - ./nginx/local.conf:/etc/nginx/user_conf.d/local.conf:ro
+      - nginx_secrets:/etc/letsencrypt
+    depends_on:
+      - web
+      - core
+    networks:
+      - app_network
+
+volumes:
+  rabbitmq_data:
+    name: rabbitmq-data
+  nginx_secrets:
+    name: nginx-secrets
+
+networks:
+  app_network:
+    driver: bridge
+

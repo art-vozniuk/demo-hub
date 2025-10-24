@@ -1,0 +1,22 @@
+[project]
+name = "common"
+version = "0.1.0"
+description = "common"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "aio-pika>=9.5.7",
+    "aioboto3>=15.1.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "ruff>=0.13.2",
+    "redis[asyncio]>=5.0.0",
+    "httpx>=0.27.0",
+    "pyjwt[crypto]>=2.8.0",
+]
+
+[tool.setuptools]
+py-modules = []
+
+[tool.setuptools.packages.find]
+include = ["logging"]

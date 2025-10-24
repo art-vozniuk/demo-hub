@@ -1,0 +1,97 @@
+# --- Python cache & build artifacts ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.pdb
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+wheels/
+pip-wheel-metadata/
+*.manifest
+*.spec
+.installed.cfg
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+
+# --- Compiled extensions ---
+*.so
+*.dylib
+*.dll
+*.a
+*.o
+
+# --- Logs and debug ---
+*.log
+*.out
+*.err
+logs/
+debug.log
+
+# --- Jupyter & notebooks ---
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+*.ipynb
+
+# --- System files & IDEs ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- Git ---
+.git/
+.gitignore
+.gitattributes
+
+# --- Environment & local config ---
+.env.local
+.env.development
+.env.production
+.env.test
+.env
+
+# --- Caches ---
+__pypackages__/
+.mypy_cache/
+pytest_cache/
+.pytest_cache/
+.coverage
+.cache/
+.tox/
+htmlcov/
+coverage.xml
+
+# --- Node / frontend ---
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# --- Local data ---
+tmp/
+temp/
+*.tmp
+*.bak
+*.old
+
+services/external/hair_swap/hair_transfer/models/
+services/external/hair_swap/hair_transfer/test_imgs/
+services/external/hair_swap/hair_transfer/assets/
+
+# don't ignore services/external/face_swap/models/insightface/inswapper_128.onnx
+# original download link doesn't work
+services/external/face_swap/models/insightface/models/
+services/external/face_swap/models/facerestore_models/
+
+services/compute/.venv/

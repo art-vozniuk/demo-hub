@@ -1,0 +1,50 @@
+name: test compute
+
+on:
+  pull_request:
+    paths:
+      - 'services/compute/**'
+      - 'services/common/**'
+      - '.github/workflows/test-compute.yml'
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: set up python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: install uv
+        run: pip install uv
+
+      - name: install dependencies
+        run: |
+          cd services/common
+          uv pip install --system -e .
+          cd ../compute
+          uv pip install --system -e ".[dev]"
+
+      - name: run tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          ENV: test
+          S3_ACCESS_KEY_ID: test
+          S3_ACCESS_KEY_SECRET: test
+          S3_ENDPOINT: http://localhost:9000
+          S3_PUBLIC_BUCKETS_ENDPOINT: http://localhost:9000
+          S3_REGION: us-east-1
+          RABBITMQ_URL: amqp://guest:guest@localhost:5672/
+        run: |
+          cd services/compute
+          pytest tests/ -v --tb=short
+

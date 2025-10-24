@@ -1,0 +1,43 @@
+name: deploy compute infra
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-compute-gpu:
+    uses: ./.github/workflows/build-compute.yml
+    secrets: inherit
+
+#  build-compute-cpu:
+#    uses: ./.github/workflows/build-compute-cpu.yml
+#    secrets: inherit
+
+  deploy:
+    needs: [build-compute-gpu]
+    if: ${{ success() }}
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        run: |
+          echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Pull latest images
+        run: |
+          docker compose -f docker-compose.compute.yml pull
+
+      - name: Deploy compute services
+        run: |
+          docker compose -f docker-compose.compute.yml up -d --force-recreate --remove-orphans
+
+      - name: Verify deployment
+        run: |
+          echo "=== Services Status ==="
+          docker compose -f docker-compose.compute.yml ps
+          echo ""
+          echo "=== Recent Logs ==="
+          docker compose -f docker-compose.compute.yml logs --tail=50
+
