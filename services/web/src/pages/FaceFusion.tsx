@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import Masonry from "react-masonry-css";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Loader2 } from "lucide-react";
+import {Sparkles, Loader2, Github} from "lucide-react";
 import { recastApi, type RecastTemplateRead } from "@/api";
 import TemplateCard from "@/components/TemplateCard";
 import "./masonry.css";
@@ -90,13 +90,36 @@ const FaceFusion = () => {
           <h1 className="text-5xl font-bold tracking-tight sm:text-6xl">
             <span className="text-gradient">Try Style</span>
           </h1>
+
+          <div className="flex items-center justify-center gap-3">
+            <span className="text-lg text-muted-foreground">
+              Check out the repository
+            </span>
+                <Button
+                    variant="outline"
+                    size="icon"
+                    className="hover-glow rounded-full"
+                    asChild
+                >
+                  <a
+                      href="https://github.com/art-vozniuk/demo-hub"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label="GitHub Profile"
+                  >
+                    <Github className="h-5 w-5"/>
+                  </a>
+                </Button>
+          </div>
+
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
             Select up to {MAX_SELECTION} templates
           </p>
         </div>
 
         <div ref={counterRef} className="flex justify-center">
-          <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/20 border border-primary/30 transition-opacity ${isSticky ? "opacity-0" : "opacity-100"}`}>
+          <div
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/20 border border-primary/30 transition-opacity ${isSticky ? "opacity-0" : "opacity-100"}`}>
             <span className="text-sm font-medium">
               Selected: {selectedTemplates.length}/{MAX_SELECTION}
             </span>
@@ -105,8 +128,8 @@ const FaceFusion = () => {
       </section>
 
       {isSticky && (
-        <div className="fixed top-8 left-1/2 -translate-x-1/2 z-40">
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/20 border border-primary/30">
+          <div className="fixed top-8 left-1/2 -translate-x-1/2 z-40">
+            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/20 border border-primary/30">
             <span className="text-sm font-medium">
               Selected: {selectedTemplates.length}/{MAX_SELECTION}
             </span>

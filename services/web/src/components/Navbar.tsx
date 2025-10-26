@@ -8,7 +8,7 @@ const Navbar = () => {
   
   const navLinks = [
     { to: "/", label: "Home" },
-    { to: "/face-fusion", label: "Try Style" },
+    { to: "/face-fusion", label: "Try Style Demo" },
   ];
 
   const handleSignOut = async () => {
