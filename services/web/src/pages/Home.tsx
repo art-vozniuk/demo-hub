@@ -18,10 +18,8 @@ const Home = () => {
           </h1>
 
           <p className="mx-auto max-w-xl text-lg leading-relaxed text-muted-foreground">
-            I’m a software engineer with over a decade of experience building high-performance systems and, in
-            recent years, end-to-end infrastructure for Generative and Visual AI. I specialize in designing scalable
-            orchestration pipelines, optimizing inference, and developing production-ready systems for fast
-            experimentation.
+            I’m a software engineer with over a decade of experience building high-performance systems and
+            end-to-end infrastructure for Generative AI.
             My background in C++ and applied mathematics helps me bridge low-level performance engineering with
             modern AI infrastructure.
             Feel free to explore my{" "}
@@ -168,17 +166,24 @@ const Home = () => {
               <Link to="https://saber.games/" className="text-cyan-500 hover:underline">
                 Saber Interactive
               </Link>{" "}
-              and{" "}
+              ,{" "}
               <Link
                 to="https://www.themultiplayergroup.com/"
                 className="text-cyan-500 hover:underline"
               >
                 The Multiplayer Group
               </Link>
-              , contributing to AAA titles such as <strong>Quake Champions</strong> and{" "}
-              <strong>World War Z</strong>.
-              Specialized in gameplay, physics, and engine systems, with deep experience in C++, low-level
-              optimizations, and cross-platform performance (PC & consoles).
+              {" "}and{" "}
+              <Link
+                to="https://playrix.com/"
+                className="text-cyan-500 hover:underline"
+              >
+                Playrix
+              </Link>
+              , contributing to AAA and mobile titles such as <strong>Quake Champions</strong>, {" "}
+              <strong>World War Z</strong>, <strong>Gardenscapes</strong> and more.
+              Specialized in gameplay, and engine systems, with deep experience in C++, low-level
+              optimizations, and cross-platform performance (PC, consoles, mobile).
             </p>
           </div>
         </div>
