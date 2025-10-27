@@ -3,7 +3,7 @@ services:
     image: ghcr.io/art-vozniuk/compute:latest
     container_name: compute-gpu
     environment:
-      RABBITMQ_PREFETCH: "60"
+      RABBITMQ_PREFETCH: "10"
     deploy:
       resources:
         reservations:

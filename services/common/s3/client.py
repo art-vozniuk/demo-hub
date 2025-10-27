@@ -16,7 +16,7 @@ class S3Client:
         self.boto_config = BotoConfig(
             region_name=config.S3_REGION,
             connect_timeout=30,
-            read_timeout=300,
+            read_timeout=60,
             retries={"max_attempts": 5, "mode": "adaptive"},
         )
         self.session = aioboto3.Session()
@@ -49,7 +49,7 @@ class S3Client:
         async with await self._get_client() as s3:
             response = await s3.get_object(Bucket=s3_bucket, Key=s3_key)
             total = response["ContentLength"]
-            chunk_size = 1024 * 1024
+            chunk_size = 512 * 1024
             downloaded = 0
             last_log = 0
 

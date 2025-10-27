@@ -11,6 +11,7 @@ interface GenerationCardProps {
   imageUrl: string;
   isProcessing: boolean;
   generatedImage?: string;
+  errorMessage?: string | null;
   templateName?: string | null;
   onAnimationComplete?: () => void;
 }
@@ -19,6 +20,7 @@ const GenerationCard = ({
   imageUrl,
   isProcessing,
   generatedImage,
+  errorMessage,
   templateName,
   onAnimationComplete,
 }: GenerationCardProps) => {
@@ -34,21 +36,23 @@ const GenerationCard = ({
       setIsImageLoaded(false);
       setShowSpinner(true);
     } else if (generatedImage) {
-      // Preload the generated image
       const img = new Image();
       img.onload = () => {
-        // Once loaded, swap to the blurred result image
         setDisplayImage(generatedImage);
         setIsImageLoaded(true);
       };
       img.src = generatedImage;
+    } else if (errorMessage) {
+      setBlurAmount(0);
+      setShowSpinner(false);
+      setDisplayImage(imageUrl);
+      onAnimationComplete?.();
     } else {
-      // Processing stopped without a result (error case) - reset to original
       setBlurAmount(0);
       setShowSpinner(false);
       setDisplayImage(imageUrl);
     }
-  }, [isProcessing, generatedImage, imageUrl]);
+  }, [isProcessing, generatedImage, errorMessage, imageUrl, onAnimationComplete]);
 
   useEffect(() => {
     if (isImageLoaded && generatedImage) {
@@ -119,6 +123,16 @@ const GenerationCard = ({
         {showSpinner && (
           <div className="absolute inset-0 flex items-center justify-center bg-background/10 backdrop-blur-sm">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          </div>
+        )}
+
+        {errorMessage && (
+          <div className="absolute inset-0 flex items-center justify-center bg-destructive/10 backdrop-blur-sm p-4">
+            <div className="text-center max-w-full px-2">
+              <p className="text-destructive font-semibold text-sm mb-2">Generation Failed</p>
+              <p className="text-destructive/80 text-xs break-words">{errorMessage}</p>
+              <p className="text-destructive/60 text-xs mt-2">Please try again later</p>
+            </div>
           </div>
         )}
 

@@ -20,3 +20,8 @@ py-modules = []
 
 [tool.setuptools.packages.find]
 include = ["logging"]
+
+[tool.uv.workspace]
+members = [
+    "tests",
+]

@@ -93,6 +93,14 @@ test-compute:
 	cd services/compute && uv pip install -e ".[dev]"
 	cd services/compute && PYTHONPATH="$(PWD)" uv run pytest tests/ -v
 
+test-e2e:
+	@echo "Running E2E test..."
+	@if [ ! -f services/common/tests/.env ]; then echo "Error: services/common/tests/.env not found"; exit 1; fi
+	cd services/common/tests && \
+	uv pip install httpx supabase && \
+	set -a && source .env && set +a && \
+	uv run python e2e_recast_pipeline_test.py $(if $(COUNT),--count $(COUNT),)
+
 test: test-core test-compute
 	@echo "All tests passed!"
 

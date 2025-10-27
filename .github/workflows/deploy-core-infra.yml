@@ -76,3 +76,9 @@ jobs:
             docker exec meme-fusion-nginx-1 nginx -s reload || true
 
             echo "Deployment completed successfully!"
+
+  e2e-test:
+    needs: [deploy]
+    if: ${{ success() }}
+    uses: ./.github/workflows/e2e_recast_pipeline_test.yml
+    secrets: inherit

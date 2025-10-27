@@ -52,8 +52,14 @@ def rate_limit(
     limit: int,
     window_seconds: int = 60,
     get_current_user: Callable | None = None,
+    test_user_email: str | None = None,
 ) -> Callable:
     async def dependency(current_user: Any = Depends(get_current_user)) -> None:
+        user_email = getattr(current_user, "email", None)
+        if test_user_email and user_email == test_user_email:
+            log.info(f"Rate limit skipped for test user: {user_email}")
+            return
+
         user_id = getattr(current_user, "id", "anonymous")
         await check_rate_limit(
             key=f"{prefix}:{user_id}",

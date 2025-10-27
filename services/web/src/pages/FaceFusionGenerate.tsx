@@ -121,10 +121,19 @@ const FaceFusionGenerate = () => {
       const statusMap = new Map<string, PipelineStatusItem>();
       
       let allCompleted = true;
+      let hasFailures = false;
+      let failureMessages: string[] = [];
+      
       for (const pipeline of response.pipelines) {
         statusMap.set(pipeline.id, pipeline);
         if (pipeline.status !== "COMPLETED" && pipeline.status !== "FAILED") {
           allCompleted = false;
+        }
+        if (pipeline.status === "FAILED") {
+          hasFailures = true;
+          const errorMsg = pipeline.message || "Unknown error";
+          console.error(`Pipeline ${pipeline.id} failed:`, errorMsg);
+          failureMessages.push(errorMsg);
         }
       }
       
@@ -133,6 +142,10 @@ const FaceFusionGenerate = () => {
       if (allCompleted && generationStartTime.current && totalGenerationDuration === null) {
         const duration = (Date.now() - generationStartTime.current) / 1000;
         setTotalGenerationDuration(duration);
+        
+        if (hasFailures) {
+          toast.error("Some pipelines failed. Check individual results for details.");
+        }
       }
       
       if (allCompleted) {
@@ -343,7 +356,20 @@ const FaceFusionGenerate = () => {
     setCompletedAnimations((prev) => new Set([...prev, index.toString()]));
   };
 
-  const allAnimationsComplete = pipelineIds.length > 0 && completedAnimations.size === selectedTemplates.length;
+  const countCompletedOrFailed = () => {
+    let count = 0;
+    pipelineIds.forEach((pipelineId) => {
+      const status = pipelineStatuses.get(pipelineId);
+      if (status && (status.status === "COMPLETED" || status.status === "FAILED")) {
+        count++;
+      }
+    });
+    return count;
+  };
+
+  const allAnimationsComplete = pipelineIds.length > 0 && 
+    (completedAnimations.size === selectedTemplates.length || 
+     countCompletedOrFailed() === selectedTemplates.length);
 
   return (
     <main className="container mx-auto px-6 py-16 space-y-12 min-h-[calc(100vh-8rem)]">
@@ -405,6 +431,7 @@ const FaceFusionGenerate = () => {
                 const status = pipelineId ? pipelineStatuses.get(pipelineId) : null;
                 const isCardProcessing = pipelineId ? (!status || status.status === "RUNNING" || status.status === "PENDING") : false;
                 const generatedImage = status?.status === "COMPLETED" ? status.result_url : null;
+                const cardErrorMessage = status?.status === "FAILED" ? status.message : null;
 
                 return (
                   <GenerationCard
@@ -412,6 +439,7 @@ const FaceFusionGenerate = () => {
                     imageUrl={template.url}
                     isProcessing={isCardProcessing}
                     generatedImage={generatedImage || undefined}
+                    errorMessage={cardErrorMessage || undefined}
                     templateName={template.name}
                     onAnimationComplete={() => handleAnimationComplete(index)}
                   />

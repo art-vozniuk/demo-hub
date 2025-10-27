@@ -41,3 +41,8 @@ jobs:
           echo "=== Recent Logs ==="
           docker compose -f docker-compose.compute.yml logs --tail=50
 
+  e2e-test:
+    needs: [deploy]
+    if: ${{ success() }}
+    uses: ./.github/workflows/e2e_recast_pipeline_test.yml
+    secrets: inherit

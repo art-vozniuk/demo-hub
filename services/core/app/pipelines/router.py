@@ -42,7 +42,11 @@ async def get_publisher() -> RabbitMQPublisher:
     dependencies=[
         Depends(
             rate_limit(
-                "queue", config.RATE_LIMIT_QUEUE_PER_MINUTE, 60, get_current_user
+                "queue",
+                config.RATE_LIMIT_QUEUE_PER_MINUTE,
+                60,
+                get_current_user,
+                config.TEST_USER_EMAIL,
             )
         )
     ],
@@ -124,6 +128,17 @@ async def queue_pipelines(
 @router.post(
     "/status",
     response_model=PipelineStatusResponse,
+    dependencies=[
+        Depends(
+            rate_limit(
+                "status",
+                config.RATE_LIMIT_STATUS_PER_MINUTE,
+                60,
+                get_current_user,
+                config.TEST_USER_EMAIL,
+            )
+        )
+    ],
 )
 async def get_pipeline_status(
     request: PipelineStatusRequest,
