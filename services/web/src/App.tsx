@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "./contexts/AuthContext";
+import { AnalyticsProvider } from "./contexts/AnalyticsContext";
 import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
 import Home from "./pages/Home";
@@ -20,20 +21,22 @@ const App = () => (
       <Toaster />
       <Sonner />
       <BrowserRouter>
-        <AuthProvider>
-          <div className="flex min-h-screen flex-col">
-            <Navbar />
-            <div className="flex-1">
-              <Routes>
-                <Route path="/" element={<Home />} />
-                <Route path="/face-fusion" element={<FaceFusion />} />
-                <Route path="/face-fusion/generate" element={<FaceFusionGenerate />} />
-                <Route path="/auth" element={<Auth />} />
-                <Route path="*" element={<NotFound />} />
-              </Routes>
+        <AnalyticsProvider>
+          <AuthProvider>
+            <div className="flex min-h-screen flex-col">
+              <Navbar />
+              <div className="flex-1">
+                <Routes>
+                  <Route path="/" element={<Home />} />
+                  <Route path="/face-fusion" element={<FaceFusion />} />
+                  <Route path="/face-fusion/generate" element={<FaceFusionGenerate />} />
+                  <Route path="/auth" element={<Auth />} />
+                  <Route path="*" element={<NotFound />} />
+                </Routes>
+              </div>
             </div>
-          </div>
-        </AuthProvider>
+          </AuthProvider>
+        </AnalyticsProvider>
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>

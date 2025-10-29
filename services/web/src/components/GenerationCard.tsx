@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Loader2, Download } from "lucide-react";
+import { Loader2, Download, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,6 +13,7 @@ interface GenerationCardProps {
   generatedImage?: string;
   errorMessage?: string | null;
   templateName?: string | null;
+  pipelineId?: string | null;
   onAnimationComplete?: () => void;
 }
 
@@ -22,6 +23,7 @@ const GenerationCard = ({
   generatedImage,
   errorMessage,
   templateName,
+  pipelineId,
   onAnimationComplete,
 }: GenerationCardProps) => {
   const [blurAmount, setBlurAmount] = useState(0);
@@ -56,7 +58,6 @@ const GenerationCard = ({
 
   useEffect(() => {
     if (isImageLoaded && generatedImage) {
-      // Slowly unblur the image after it's loaded and swapped
       const unblurInterval = setInterval(() => {
         setBlurAmount((prev) => {
           if (prev <= 0) {
@@ -104,60 +105,89 @@ const GenerationCard = ({
     setIsModalOpen(false);
   };
 
+  const handleCopyPipelineId = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!pipelineId) return;
+    
+    try {
+      await navigator.clipboard.writeText(pipelineId);
+      toast.success("Pipeline ID copied to clipboard");
+    } catch (error) {
+      console.error('Failed to copy pipeline ID:', error);
+      toast.error("Failed to copy pipeline ID");
+    }
+  };
+
   return (
     <>
-      <div className="group relative overflow-hidden rounded-xl border border-border shadow-elegant transition-all hover:border-primary/50 bg-card">
-        <div 
-          className="aspect-square relative overflow-hidden cursor-pointer"
-          onClick={handleImageClick}
-        >
-          <img
-            src={displayImage}
-            alt={templateName || "Template"}
-            className="h-full w-full object-cover transition-all duration-700"
-            style={{
-              filter: `blur(${blurAmount}px)`,
-            }}
-          />
+      <div className="space-y-2">
+        <div className="group relative overflow-hidden rounded-xl border border-border shadow-elegant transition-all hover:border-primary/50 bg-card">
+          <div 
+            className="aspect-square relative overflow-hidden cursor-pointer"
+            onClick={handleImageClick}
+          >
+            <img
+              src={displayImage}
+              alt={templateName || "Template"}
+              className="h-full w-full object-cover transition-all duration-700"
+              style={{
+                filter: `blur(${blurAmount}px)`,
+              }}
+            />
         
-        {showSpinner && (
-          <div className="absolute inset-0 flex items-center justify-center bg-background/10 backdrop-blur-sm">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            {showSpinner && (
+              <div className="absolute inset-0 flex items-center justify-center bg-background/10 backdrop-blur-sm">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              </div>
+            )}
+
+            {errorMessage && (
+              <div className="absolute inset-0 flex items-center justify-center bg-destructive/10 backdrop-blur-sm p-4">
+                <div className="text-center max-w-full px-2">
+                  <p className="text-destructive font-semibold text-sm mb-2">Generation Failed</p>
+                  <p className="text-destructive/80 text-xs break-words">{errorMessage}</p>
+                  <p className="text-destructive/60 text-xs mt-2">Please try again later</p>
+                </div>
+              </div>
+            )}
+
+            {generatedImage && blurAmount === 0 && (
+              <div className="absolute top-2 right-2" onClick={(e) => e.stopPropagation()}>
+                <Button
+                  onClick={handleDownload}
+                  size="sm"
+                  variant="secondary"
+                  className="h-8 w-8 p-0 rounded-full shadow-lg"
+                  title="Download image"
+                >
+                  <Download className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+
+            {templateName && (
+              <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 via-black/50 to-transparent p-3">
+                <p className="text-white text-sm font-medium truncate">
+                  {templateName}
+                </p>
+              </div>
+            )}
           </div>
-        )}
-
-        {errorMessage && (
-          <div className="absolute inset-0 flex items-center justify-center bg-destructive/10 backdrop-blur-sm p-4">
-            <div className="text-center max-w-full px-2">
-              <p className="text-destructive font-semibold text-sm mb-2">Generation Failed</p>
-              <p className="text-destructive/80 text-xs break-words">{errorMessage}</p>
-              <p className="text-destructive/60 text-xs mt-2">Please try again later</p>
-            </div>
-          </div>
-        )}
-
-          {generatedImage && blurAmount === 0 && (
-            <div className="absolute top-2 right-2" onClick={(e) => e.stopPropagation()}>
-              <Button
-                onClick={handleDownload}
-                size="sm"
-                variant="secondary"
-                className="h-8 w-8 p-0 rounded-full shadow-lg"
-                title="Download image"
-              >
-                <Download className="h-4 w-4" />
-              </Button>
-            </div>
-          )}
-
-          {templateName && (
-            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 via-black/50 to-transparent p-3">
-              <p className="text-white text-sm font-medium truncate">
-                {templateName}
-              </p>
-            </div>
-          )}
         </div>
+        
+        {pipelineId && (
+          <div className="flex justify-end items-center gap-2">
+            <Button
+              onClick={handleCopyPipelineId}
+              size="sm"
+              variant="ghost"
+              className="h-5 w-5 p-0"
+              title="Copy pipeline ID"
+            >
+              <Copy className="h-3 w-3" />
+            </Button>
+          </div>
+        )}
       </div>
 
       <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
@@ -190,4 +220,3 @@ const GenerationCard = ({
 };
 
 export default GenerationCard;
-

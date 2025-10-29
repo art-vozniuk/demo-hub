@@ -1,10 +1,12 @@
 import { NavLink } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useAnalytics } from "@/hooks/useAnalytics";
 import { Button } from "@/components/ui/button";
 import { User, LogOut } from "lucide-react";
 
 const Navbar = () => {
   const { user, signOut } = useAuth();
+  const { track } = useAnalytics();
   
   const navLinks = [
     { to: "/", label: "Home" },
@@ -16,6 +18,14 @@ const Navbar = () => {
       await signOut();
     } catch (error) {
       console.error('Sign out error:', error);
+    }
+  };
+
+  const handleNavClick = (to: string) => {
+    if (to === "/") {
+      track({ name: 'nav_home_clicked', params: {} });
+    } else if (to === "/face-fusion") {
+      track({ name: 'nav_facefusion_clicked', params: {} });
     }
   };
 
@@ -34,6 +44,7 @@ const Navbar = () => {
                 <NavLink
                   to={link.to}
                   end={link.to === "/"}
+                  onClick={() => handleNavClick(link.to)}
                   className={({ isActive }) =>
                     `relative text-xs sm:text-sm font-medium transition-colors hover:text-primary ${
                       isActive ? "text-primary" : "text-muted-foreground"

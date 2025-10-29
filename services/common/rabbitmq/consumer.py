@@ -7,6 +7,8 @@ from aio_pika.abc import AbstractIncomingMessage
 from .connection import RabbitMQConnection
 from .config import RabbitMQConfig
 
+from services.common.logging.config import context_trace_id, context_pipeline_id
+
 log = logging.getLogger(__name__)
 
 
@@ -39,16 +41,15 @@ class RabbitMQConsumer:
             try:
                 body = json.loads(message.body.decode())
                 trace_id = body.get("trace_id", "unknown")
-                pipeline_id = body.get("pipeline_id")
-                pipeline_str = f", pipeline_id={pipeline_id}" if pipeline_id else ""
+                pipeline_id = body.get("pipeline_id", "unknown")
+                context_trace_id.set(trace_id)
+                context_pipeline_id.set(pipeline_id)
             except Exception as e:
                 log.error(f"Failed to parse message from {queue_name}: {e}")
                 await message.reject(requeue=False)
                 return
 
-            log.info(
-                f"[trace_id={trace_id}{pipeline_str}] Received message from {queue_name}"
-            )
+            log.info(f"Received message from {queue_name}")
 
             async def background_process():
                 # limit concurrent processing (helps with Core db connections)
@@ -56,13 +57,11 @@ class RabbitMQConsumer:
                     try:
                         await callback(body)
                         await message.ack()
-                        log.info(
-                            f"[trace_id={trace_id}{pipeline_str}] Message processed successfully from {queue_name}"
-                        )
+                        log.info(f"Message processed successfully from {queue_name}")
                     except Exception as e:
                         await message.nack(requeue=True)
                         log.error(
-                            f"[trace_id={trace_id}{pipeline_str}] Error processing message from {queue_name}: {e}",
+                            f"Error processing message from {queue_name}: {e}",
                             exc_info=True,
                         )
 

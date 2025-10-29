@@ -1,14 +1,16 @@
+# ruff: noqa: E402
 import logging
 import asyncio
 import signal
 
 import services.common.logging.config as logging_config
 
-import services.compute.app.pipelines.router as pipeline_router
+logging_config.configure()
+
+import services.compute.app.pipelines.consumer as pipeline_router
 
 from services.compute.app.config import config
 
-logging_config.configure()
 log = logging.getLogger(__name__)
 
 if config.SENTRY_DSN:
@@ -22,8 +24,12 @@ if config.SENTRY_DSN:
         traces_sample_rate=1.0,
         profile_session_sample_rate=1.0,
         profile_lifecycle="trace",
+        _experiments={
+            "attach_logger_name": True,
+        },
     )
     sentry_sdk.set_tag("service", "compute")
+    log.info("Sentry initialized for compute service")
 
 shutdown_event = asyncio.Event()
 

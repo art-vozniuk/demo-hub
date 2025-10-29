@@ -1,15 +1,68 @@
+import { useEffect, useRef, useState } from "react";
 import Avatar from "@/components/Avatar";
 import SocialIcons from "@/components/SocialIcons";
 import { Link } from "react-router-dom";
+import { useAnalytics } from "@/hooks/useAnalytics";
 import demoVideo from "@/assets/RoleCall.mp4";
 import recommendationsImage from "@/assets/recommendations.png";
 
 const Home = () => {
+  const { track } = useAnalytics();
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [hasTrackedScroll, setHasTrackedScroll] = useState(false);
+  const [videoWatchTime, setVideoWatchTime] = useState(0);
+  const videoStartTimeRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      if (hasTrackedScroll) return;
+
+      const scrollPosition = window.innerHeight + window.scrollY;
+      const documentHeight = document.documentElement.scrollHeight;
+      
+      if (scrollPosition >= documentHeight - 100) {
+        track({ name: 'home_scrolled_to_bottom', params: {} });
+        setHasTrackedScroll(true);
+      }
+    };
+
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [hasTrackedScroll, track]);
+
+  const handleVideoPlay = () => {
+    videoStartTimeRef.current = Date.now();
+  };
+
+  const handleVideoPause = () => {
+    if (videoStartTimeRef.current) {
+      const watchedDuration = (Date.now() - videoStartTimeRef.current) / 1000;
+      setVideoWatchTime((prev) => prev + watchedDuration);
+      videoStartTimeRef.current = null;
+    }
+  };
+
+  const handleVideoEnded = () => {
+    if (videoStartTimeRef.current) {
+      const watchedDuration = (Date.now() - videoStartTimeRef.current) / 1000;
+      const totalWatched = videoWatchTime + watchedDuration;
+      track({ 
+        name: 'home_demo_video_watched', 
+        params: { duration_seconds: Math.round(totalWatched) } 
+      });
+      videoStartTimeRef.current = null;
+    }
+  };
+
   return (
     <main className="flex min-h-[calc(100vh-8rem)] items-center justify-center px-6 py-16">
       <div className="max-w-2xl space-y-8 text-center animate-fade-in">
         <Avatar />
-        <SocialIcons />
+        <SocialIcons
+          onLinkedInClick={() => track({ name: 'home_linkedin_clicked', params: {} })}
+          onGitHubClick={() => track({ name: 'home_github_clicked', params: {} })}
+          onResumeClick={() => track({ name: 'home_resume_clicked', params: {} })}
+        />
 
         <div className="space-y-4">
           <h1 className="text-4xl font-bold tracking-tight sm:text-5xl leading-tight">
@@ -113,10 +166,14 @@ const Home = () => {
             <div className="mt-8">
               <h3 className="text-lg font-semibold mb-2">Demo Video</h3>
               <video
+                ref={videoRef}
                 className="max-w-xs w-full rounded-2xl shadow-lg"
                 controls
                 playsInline
                 src={demoVideo}
+                onPlay={handleVideoPlay}
+                onPause={handleVideoPause}
+                onEnded={handleVideoEnded}
               />
             </div>
           </div>

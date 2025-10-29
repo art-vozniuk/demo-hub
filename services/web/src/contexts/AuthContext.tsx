@@ -1,12 +1,14 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { User, Session, AuthError } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
+import { setUserId } from '@/lib/analytics';
 
 interface AuthContextType {
   user: User | null;
   session: Session | null;
   loading: boolean;
   signInWithGoogle: () => Promise<void>;
+  signInAsTestUser: () => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -21,12 +23,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
+      setUserId(session?.user?.id ?? null);
       setLoading(false);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       setUser(session?.user ?? null);
+      setUserId(session?.user?.id ?? null);
       setLoading(false);
     });
 
@@ -50,6 +54,32 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  const signInAsTestUser = async () => {
+    const apiUrl = import.meta.env.VITE_CORE_API_URL;
+    const response = await fetch(`${apiUrl}/auth/test-user`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Failed to sign in as test user');
+    }
+
+    const { access_token, refresh_token } = await response.json();
+
+    const { error } = await supabase.auth.setSession({
+      access_token,
+      refresh_token,
+    });
+
+    if (error) {
+      throw error;
+    }
+  };
+
   const signOut = async () => {
     const { error } = await supabase.auth.signOut();
     if (error) {
@@ -58,7 +88,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, signInWithGoogle, signOut }}>
+    <AuthContext.Provider value={{ user, session, loading, signInWithGoogle, signInAsTestUser, signOut }}>
       {children}
     </AuthContext.Provider>
   );

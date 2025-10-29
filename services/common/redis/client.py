@@ -14,12 +14,12 @@ async def get_redis_client() -> redis.Redis:
 
     if _redis_client is None:
         _redis_client = redis.from_url(
-            redis_config.URL,
+            redis_config.REDIS_URL,
             decode_responses=redis_config.decode_responses,
             socket_timeout=redis_config.socket_timeout,
             socket_connect_timeout=redis_config.socket_connect_timeout,
         )
-        log.info(f"Redis client initialized: {redis_config.URL}")
+        log.info(f"Redis client initialized: {redis_config.REDIS_URL}")
 
     return _redis_client
 

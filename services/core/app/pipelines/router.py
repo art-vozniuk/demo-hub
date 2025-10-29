@@ -56,73 +56,92 @@ async def queue_pipelines(
     db: DbSession,
     current_user: User = Depends(get_current_user),
 ) -> QueuePipelinesResponse:
-    trace_id = request.trace_id
-    log.info(
-        f"[user={current_user.id}] [trace_id={trace_id}] "
-        f"Received queue request with {len(request.jobs)} jobs"
+    import sentry_sdk
+    from services.common.logging.config import (
+        context_trace_id,
+        context_user_id,
+        context_pipeline_id,
     )
 
-    if (
-        not request.jobs
-        or len(request.jobs) == 0
-        or len(request.jobs) > config.MAX_PIPELINES_PER_REQUEST
-    ):
-        from fastapi import HTTPException, status
+    trace_id = request.trace_id
 
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid number of jobs in request: {len(request.jobs)}. "
-            f"Must be between 1 and {config.MAX_PIPELINES_PER_REQUEST}.",
+    context_trace_id.set(str(trace_id))
+    context_user_id.set(str(current_user.id))
+
+    with sentry_sdk.push_scope() as scope:
+        scope.set_tag("trace_id", str(trace_id))
+        scope.set_tag("user_id", str(current_user.id))
+        scope.set_context(
+            "request",
+            {
+                "trace_id": str(trace_id),
+                "user_id": str(current_user.id),
+                "jobs_count": len(request.jobs),
+            },
         )
 
-    connection = await get_connection()
-    queue_length = await connection.get_queue_length(rabbitmq_config.queue_main)
+        log.info(f"Received queue request with {len(request.jobs)} jobs")
 
-    pipeline_ids = []
-    publisher = await get_publisher()
+        if (
+            not request.jobs
+            or len(request.jobs) == 0
+            or len(request.jobs) > config.MAX_PIPELINES_PER_REQUEST
+        ):
+            from fastapi import HTTPException, status
 
-    for job in request.jobs:
-        pipeline_id = job.pipeline_id
-        pipeline_name = job.pipeline_name
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid number of jobs in request: {len(request.jobs)}. "
+                f"Must be between 1 and {config.MAX_PIPELINES_PER_REQUEST}.",
+            )
+
+        connection = await get_connection()
+        queue_length = await connection.get_queue_length(rabbitmq_config.queue_main)
+
+        pipeline_ids = []
+        publisher = await get_publisher()
+
+        for job in request.jobs:
+            pipeline_id = job.pipeline_id
+            pipeline_name = job.pipeline_name
+
+            context_pipeline_id.set(str(pipeline_id))
+
+            log.info(f"Creating pipeline: {pipeline_name}")
+
+            await service.create_pipeline(
+                db=db,
+                pipeline_id=pipeline_id,
+                trace_id=trace_id,
+                pipeline_name=pipeline_name,
+            )
+
+            message = {
+                "trace_id": str(trace_id),
+                "pipeline_id": str(pipeline_id),
+                "pipeline_name": pipeline_name,
+                "input": job.input,
+                "enqueued_at": datetime.utcnow().isoformat(),
+            }
+
+            await publisher.publish(
+                routing_key=rabbitmq_config.routing_submit,
+                message=message,
+                trace_id=str(trace_id),
+                pipeline_id=str(pipeline_id),
+            )
+
+            pipeline_ids.append(pipeline_id)
 
         log.info(
-            f"[trace_id={trace_id}, pipeline_id={pipeline_id}] "
-            f"Creating pipeline: {pipeline_name}"
+            f"Successfully queued {len(pipeline_ids)} pipelines, queue_length={queue_length}"
         )
 
-        await service.create_pipeline(
-            db=db,
-            pipeline_id=pipeline_id,
+        return QueuePipelinesResponse(
             trace_id=trace_id,
-            pipeline_name=pipeline_name,
+            pipeline_ids=pipeline_ids,
+            queue_length=queue_length,
         )
-
-        message = {
-            "trace_id": str(trace_id),
-            "pipeline_id": str(pipeline_id),
-            "pipeline_name": pipeline_name,
-            "input": job.input,
-            "enqueued_at": datetime.utcnow().isoformat(),
-        }
-
-        await publisher.publish(
-            routing_key=rabbitmq_config.routing_submit,
-            message=message,
-            trace_id=str(trace_id),
-            pipeline_id=str(pipeline_id),
-        )
-
-        pipeline_ids.append(pipeline_id)
-
-    log.info(
-        f"[trace_id={trace_id}] Successfully queued {len(pipeline_ids)} pipelines, queue_length={queue_length}"
-    )
-
-    return QueuePipelinesResponse(
-        trace_id=trace_id,
-        pipeline_ids=pipeline_ids,
-        queue_length=queue_length,
-    )
 
 
 @router.post(

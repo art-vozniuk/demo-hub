@@ -10,6 +10,7 @@ import GenerationCard from "@/components/GenerationCard";
 import { toast } from "sonner";
 import { v4 as uuidv4 } from 'uuid';
 import { useAuth } from "@/contexts/AuthContext";
+import { useAnalytics } from "@/hooks/useAnalytics";
 
 interface GenerationState {
   selectedTemplates: RecastTemplateRead[];
@@ -80,6 +81,7 @@ const FaceFusionGenerate = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
+  const { track } = useAnalytics();
   
   const [initialState] = useState(() => {
     const savedState = loadGenerationState();
@@ -114,10 +116,29 @@ const FaceFusionGenerate = () => {
   const pollingTimeoutRef = useRef<number | null>(null);
   const hasTriggeredAutoGenerate = useRef(false);
   const generationStartTime = useRef<number | null>(null);
+  const isMountedRef = useRef(true);
+
+  const clearPolling = useCallback(() => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+      console.log("Cleared polling interval");
+    }
+    if (pollingTimeoutRef.current) {
+      clearTimeout(pollingTimeoutRef.current);
+      pollingTimeoutRef.current = null;
+      console.log("Cleared polling timeout");
+    }
+  }, []);
 
   const pollPipelineStatuses = useCallback(async (ids: string[]) => {
+    if (!isMountedRef.current) return;
+    
     try {
       const response = await pipelinesApi.getStatus(ids);
+      
+      if (!isMountedRef.current) return;
+      
       const statusMap = new Map<string, PipelineStatusItem>();
       
       let allCompleted = true;
@@ -143,27 +164,46 @@ const FaceFusionGenerate = () => {
         const duration = (Date.now() - generationStartTime.current) / 1000;
         setTotalGenerationDuration(duration);
         
+        response.pipelines.forEach(pipeline => {
+          if (pipeline.status === "COMPLETED") {
+            track({ 
+              name: 'generation_completed', 
+              params: { 
+                pipeline_id: pipeline.id, 
+                duration_seconds: duration 
+              } 
+            });
+          } else if (pipeline.status === "FAILED") {
+            track({ 
+              name: 'generation_failed', 
+              params: { 
+                pipeline_id: pipeline.id, 
+                error: pipeline.message || "Unknown error" 
+              } 
+            });
+          }
+        });
+        
         if (hasFailures) {
           toast.error("Some pipelines failed. Check individual results for details.");
         }
       }
       
       if (allCompleted) {
+        console.log("All pipelines completed, clearing polling");
         setIsProcessing(false);
-        if (pollingIntervalRef.current) {
-          clearInterval(pollingIntervalRef.current);
-          pollingIntervalRef.current = null;
-        }
-        if (pollingTimeoutRef.current) {
-          clearTimeout(pollingTimeoutRef.current);
-          pollingTimeoutRef.current = null;
-        }
+        clearPolling();
+        return;
       }
     } catch (error) {
+      if (!isMountedRef.current) return;
+      
       console.error("Failed to poll pipeline statuses:", error);
       toast.error("Failed to poll pipeline statuses: " + error);
+      clearPolling();
+      setIsProcessing(false);
     }
-  }, [totalGenerationDuration]);
+  }, [totalGenerationDuration, clearPolling]);
 
   const handleGenerateWithFile = useCallback(async (s3Result: { bucket: string; key: string }) => {
     generationStartTime.current = Date.now();
@@ -199,29 +239,33 @@ const FaceFusionGenerate = () => {
         jobs,
       });
 
+      track({ 
+        name: 'generation_started', 
+        params: { 
+          pipeline_count: jobs.length, 
+          trace_id: traceId 
+        } 
+      });
+
       toast.success(
           `Your generation pipelines are queued.`,
           { duration: 5000 }
         );
 
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-      }
-      if (pollingTimeoutRef.current) {
-        clearTimeout(pollingTimeoutRef.current);
-      }
+      clearPolling();
 
       await pollPipelineStatuses(generatedPipelineIds);
 
       pollingIntervalRef.current = window.setInterval(() => {
+        if (!isMountedRef.current) {
+          clearPolling();
+          return;
+        }
         pollPipelineStatuses(generatedPipelineIds);
-      }, 500);
+      }, 1000);
 
       pollingTimeoutRef.current = window.setTimeout(() => {
-        if (pollingIntervalRef.current) {
-          clearInterval(pollingIntervalRef.current);
-          pollingIntervalRef.current = null;
-        }
+        clearPolling();
         setIsProcessing(false);
         setErrorMessage("Generation timeout. Sorry, GPUs might be currently offline. Please try again later.");
         toast.error("Generation timeout. GPUs might be offline.");
@@ -230,19 +274,11 @@ const FaceFusionGenerate = () => {
       console.error("Failed to queue pipelines:", error);
       toast.error("Failed to queue pipelines: " + error);
 
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
-      }
-      if (pollingTimeoutRef.current) {
-        clearTimeout(pollingTimeoutRef.current);
-        pollingTimeoutRef.current = null;
-      }
-
+      clearPolling();
       setIsProcessing(false);
       setPipelineIds([]);
     }
-  }, [selectedTemplates, pollPipelineStatuses]);
+  }, [selectedTemplates, pollPipelineStatuses, clearPolling]);
 
   const handleGenerate = async () => {
     if (!selectedFile || !uploadedImageS3) return;
@@ -250,6 +286,7 @@ const FaceFusionGenerate = () => {
     setErrorMessage(null);
 
     if (!user) {
+      track({ name: 'auth_required', params: { redirect_from: 'generate_page' } });
       try {
         await saveGenerationState({
           selectedTemplates,
@@ -273,6 +310,14 @@ const FaceFusionGenerate = () => {
       return;
     }
 
+    track({ 
+      name: 'generate_initiated', 
+      params: { 
+        template_count: selectedTemplates.length, 
+        has_auth: true 
+      } 
+    });
+
     await handleGenerateWithFile(uploadedImageS3);
   };
 
@@ -287,6 +332,13 @@ const FaceFusionGenerate = () => {
 
         const uploadResult = await uploadToS3(file, "media", userImageKey);
         setUploadedImageS3(uploadResult);
+        track({ 
+          name: 'image_uploaded', 
+          params: { 
+            file_size_kb: Math.round(file.size / 1024), 
+            file_type: file.type 
+          } 
+        });
       } catch (error) {
         console.error("Failed to upload image:", error);
         toast.error("Failed to upload image: " + error);
@@ -315,6 +367,8 @@ const FaceFusionGenerate = () => {
   }, [location.search, authLoading, user, uploadedImageS3, handleGenerateWithFile]);
 
   useEffect(() => {
+    isMountedRef.current = true;
+    
     const handleBeforeUnload = () => {
       clearGenerationState();
     };
@@ -322,15 +376,11 @@ const FaceFusionGenerate = () => {
     window.addEventListener('beforeunload', handleBeforeUnload);
     
     return () => {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-      }
-      if (pollingTimeoutRef.current) {
-        clearTimeout(pollingTimeoutRef.current);
-      }
+      isMountedRef.current = false;
+      clearPolling();
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, []);
+  }, [clearPolling]);
 
   if (selectedTemplates.length === 0) {
     return (
@@ -341,6 +391,7 @@ const FaceFusionGenerate = () => {
             Please go back and select up to 3 templates first.
           </p>
           <Button onClick={() => {
+            track({ name: 'back_to_templates', params: { source: 'no_templates_page' } });
             clearGenerationState();
             navigate("/face-fusion");
           }} variant="outline">
@@ -374,17 +425,18 @@ const FaceFusionGenerate = () => {
   return (
     <main className="container mx-auto px-6 py-16 space-y-12 min-h-[calc(100vh-8rem)]">
       <section className="max-w-4xl mx-auto space-y-6 text-center animate-fade-in">
-        <Button
-          onClick={() => {
-            clearGenerationState();
-            navigate("/face-fusion");
-          }}
-          variant="ghost"
-          className="mb-4"
-        >
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back to Templates
-        </Button>
+          <Button
+            onClick={() => {
+              track({ name: 'back_to_templates', params: { source: 'generate_page' } });
+              clearGenerationState();
+              navigate("/face-fusion");
+            }}
+            variant="ghost"
+            className="mb-4"
+          >
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to Templates
+          </Button>
 
         <div className="space-y-4">
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
@@ -441,6 +493,7 @@ const FaceFusionGenerate = () => {
                     generatedImage={generatedImage || undefined}
                     errorMessage={cardErrorMessage || undefined}
                     templateName={template.name}
+                    pipelineId={pipelineId || null}
                     onAnimationComplete={() => handleAnimationComplete(index)}
                   />
                 );
@@ -482,6 +535,11 @@ const FaceFusionGenerate = () => {
             <div className="flex justify-center gap-4 animate-fade-in">
               <Button
                 onClick={() => {
+                  const hasErrors = Array.from(pipelineStatuses.values()).some(s => s.status === "FAILED");
+                  track({ 
+                    name: 'try_other_templates_clicked', 
+                    params: { from_status: hasErrors ? 'error' : 'success' } 
+                  });
                   clearGenerationState();
                   navigate("/face-fusion");
                 }}

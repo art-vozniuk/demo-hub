@@ -2,30 +2,45 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
+import { useAnalytics } from '@/hooks/useAnalytics';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 const Auth = () => {
-  const { user, loading: authLoading, signInWithGoogle } = useAuth();
+  const { user, loading: authLoading, signInWithGoogle, signInAsTestUser } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const { track } = useAnalytics();
   const [isSigningIn, setIsSigningIn] = useState(false);
 
   const returnPath = location.state?.returnPath || '/face-fusion';
   const selectedTemplates = location.state?.selectedTemplates;
+  const autoGenerate = location.state?.autoGenerate;
 
   useEffect(() => {
     if (!authLoading && user) {
+      track({ name: 'auth_completed', params: { provider: 'google' } });
+      
+      const navState: any = {};
       if (selectedTemplates) {
-        navigate(returnPath, {
-          state: { selectedTemplates },
-          replace: true,
-        });
-      } else {
-        navigate(returnPath, { replace: true });
+        navState.selectedTemplates = selectedTemplates;
       }
+      
+      const searchParams = new URLSearchParams();
+      if (autoGenerate) {
+        searchParams.set('autoGenerate', 'true');
+      }
+      
+      const finalPath = searchParams.toString() 
+        ? `${returnPath}?${searchParams.toString()}` 
+        : returnPath;
+      
+      navigate(finalPath, {
+        state: Object.keys(navState).length > 0 ? navState : undefined,
+        replace: true,
+      });
     }
-  }, [user, authLoading, navigate, returnPath, selectedTemplates]);
+  }, [user, authLoading, navigate, returnPath, selectedTemplates, autoGenerate, track]);
 
   const handleSignIn = async () => {
     setIsSigningIn(true);
@@ -34,6 +49,17 @@ const Auth = () => {
     } catch (error) {
       console.error('Sign in error:', error);
       toast.error('Failed to sign in. Please try again.');
+      setIsSigningIn(false);
+    }
+  };
+
+  const handleTestUserSignIn = async () => {
+    setIsSigningIn(true);
+    try {
+      await signInAsTestUser();
+    } catch (error) {
+      console.error('Test user sign in error:', error);
+      toast.error('Failed to sign in as test user. Please try again.');
       setIsSigningIn(false);
     }
   };
@@ -91,6 +117,16 @@ const Auth = () => {
                 Sign in with Google
               </>
             )}
+          </Button>
+
+          <Button
+            onClick={handleTestUserSignIn}
+            disabled={isSigningIn}
+            variant="secondary"
+            size="sm"
+            className="w-full"
+          >
+            Sign In as Test User
           </Button>
 
           <Button

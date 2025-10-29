@@ -27,6 +27,7 @@ jobs:
           VITE_S3_REGION=${{ secrets.S3_REGION }}
           VITE_SUPABASE_URL=${{ secrets.SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+          VITE_GA_MEASUREMENT_ID=${{ secrets.VITE_GA_MEASUREMENT_ID }}
           EOF
 
       - name: login to GHCR

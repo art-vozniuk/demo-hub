@@ -28,10 +28,7 @@ class RabbitMQPublisher:
 
         body = json.dumps(message).encode()
 
-        pipeline_str = f", pipeline_id={pipeline_id}" if pipeline_id else ""
-        log.info(
-            f"[trace_id={trace_id}{pipeline_str}] Publishing message to {routing_key}"
-        )
+        log.info(f"Publishing message to {routing_key}")
 
         await exchange.publish(
             Message(
@@ -43,6 +40,4 @@ class RabbitMQPublisher:
             timeout=self.config.publish_confirm_timeout,
         )
 
-        log.info(
-            f"[trace_id={trace_id}{pipeline_str}] Message published to {routing_key}"
-        )
+        log.info(f"Message published to {routing_key}")

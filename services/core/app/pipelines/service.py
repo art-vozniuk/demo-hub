@@ -26,10 +26,7 @@ async def create_pipeline(
     await db.commit()
     await db.refresh(pipeline)
 
-    log.info(
-        f"[trace_id={trace_id}, pipeline_id={pipeline_id}] "
-        f"Pipeline created with status {PipelineStatus.PENDING}"
-    )
+    log.info(f"Pipeline created with status {PipelineStatus.PENDING}")
 
     return pipeline
 
@@ -67,9 +64,6 @@ async def update_pipeline_status(
     await db.commit()
     await db.refresh(pipeline)
 
-    log.info(
-        f"[trace_id={pipeline.trace_id}, pipeline_id={pipeline_id}] "
-        f"Pipeline status updated to {status}"
-    )
+    log.info(f"Pipeline status updated to {status}")
 
     return pipeline

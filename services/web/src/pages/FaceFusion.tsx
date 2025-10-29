@@ -1,25 +1,75 @@
 import { useState, useEffect, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import Masonry from "react-masonry-css";
 import { Button } from "@/components/ui/button";
-import {Sparkles, Loader2, Github} from "lucide-react";
+import {Sparkles, Loader2, Github, Linkedin} from "lucide-react";
 import { recastApi, type RecastTemplateRead } from "@/api";
 import TemplateCard from "@/components/TemplateCard";
+import { useAnalytics } from "@/hooks/useAnalytics";
+import type { AnalyticsEvent } from "@/types/analytics";
 import "./masonry.css";
+import {Tooltip, TooltipContent, TooltipTrigger} from "@/components/ui/tooltip.tsx";
 
 const MAX_SELECTION = 6;
+const MIN_TEMPLATES_TO_SHOW = 6;
 
 const FaceFusion = () => {
   const navigate = useNavigate();
+  const { track } = useAnalytics();
   const [selectedTemplates, setSelectedTemplates] = useState<RecastTemplateRead[]>([]);
   const [isSticky, setIsSticky] = useState(false);
   const counterRef = useRef<HTMLDivElement>(null);
+  const [loadedTemplates, setLoadedTemplates] = useState<RecastTemplateRead[]>([]);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const loadingRef = useRef(false);
 
-  const { data: templates, isLoading, error } = useQuery({
-    queryKey: ["recast-templates"],
-    queryFn: recastApi.getTemplates,
-  });
+  useEffect(() => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+
+    const loadTemplates = async () => {
+      try {
+        console.log("Fetching templates from API...");
+        const templates = await recastApi.getTemplates();
+        console.log(`Received ${templates.length} templates from API`);
+        
+        let loadedCount = 0;
+        let initialLoadingCompleted = false;
+
+        templates.forEach((template, index) => {
+          const img = new Image();
+          
+          const handleLoad = () => {
+            loadedCount++;
+            console.log(`Template ${index + 1}/${templates.length} loaded: ${template.name} (${loadedCount} total)`);
+            
+            setLoadedTemplates((prev) => {
+              console.log(`Adding template to state. Previous count: ${prev.length}, New count: ${prev.length + 1}`);
+              return [...prev, template];
+            });
+            
+            if (loadedCount === MIN_TEMPLATES_TO_SHOW && !initialLoadingCompleted) {
+              initialLoadingCompleted = true;
+              console.log(`Reached ${MIN_TEMPLATES_TO_SHOW} loaded templates - showing page`);
+              setIsInitialLoading(false);
+              track({ name: 'template_viewed', params: { template_count: MIN_TEMPLATES_TO_SHOW } });
+            }
+          };
+          
+          img.onload = handleLoad;
+          img.onerror = handleLoad;
+          img.src = template.url;
+        });
+      } catch (err) {
+        console.error("Failed to load templates:", err);
+        setError(err instanceof Error ? err.message : "Failed to load templates");
+        setIsInitialLoading(false);
+      }
+    };
+
+    loadTemplates();
+  }, []);
 
   const breakpointColumns = {
     default: 4,
@@ -30,18 +80,42 @@ const FaceFusion = () => {
   };
 
   const handleToggleTemplate = (template: RecastTemplateRead) => {
-    setSelectedTemplates((prev) => {
-      const isSelected = prev.some((t) => t.id === template.id);
-      if (isSelected) {
-        return prev.filter((t) => t.id !== template.id);
-      } else if (prev.length < MAX_SELECTION) {
-        return [...prev, template];
-      }
-      return prev;
-    });
+    const isSelected = selectedTemplates.some((t) => t.id === template.id);
+    
+    if (isSelected) {
+      const newLength = selectedTemplates.length - 1;
+      const event: AnalyticsEvent = { 
+        name: 'template_deselected', 
+        params: { 
+          template_id: template.id, 
+          template_name: template.name,
+          total_selected: newLength
+        } 
+      };
+      track(event);
+      setSelectedTemplates((prev) => prev.filter((t) => t.id !== template.id));
+    } else if (selectedTemplates.length < MAX_SELECTION) {
+      const newLength = selectedTemplates.length + 1;
+      const event: AnalyticsEvent = { 
+        name: 'template_selected', 
+        params: { 
+          template_id: template.id, 
+          template_name: template.name,
+          total_selected: newLength
+        } 
+      };
+      track(event);
+      setSelectedTemplates((prev) => [...prev, template]);
+    } else {
+      track({ name: 'max_templates_reached', params: { max_allowed: MAX_SELECTION } });
+    }
   };
 
   const handleGenerate = () => {
+    track({ 
+      name: 'generate_clicked', 
+      params: { template_count: selectedTemplates.length, source: 'face_fusion' } 
+    });
     navigate("/face-fusion/generate", { state: { selectedTemplates } });
   };
 
@@ -59,7 +133,7 @@ const FaceFusion = () => {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
-  if (isLoading) {
+  if (isInitialLoading) {
     return (
       <main className="container mx-auto px-6 py-16 flex items-center justify-center min-h-[calc(100vh-8rem)]">
         <div className="flex flex-col items-center gap-4">
@@ -75,9 +149,7 @@ const FaceFusion = () => {
       <main className="container mx-auto px-6 py-16 flex items-center justify-center min-h-[calc(100vh-8rem)]">
         <div className="text-center space-y-4">
           <h2 className="text-2xl font-bold text-destructive">Failed to load templates</h2>
-          <p className="text-muted-foreground">
-            {error instanceof Error ? error.message : "Unknown error occurred"}
-          </p>
+          <p className="text-muted-foreground">{error}</p>
         </div>
       </main>
     );
@@ -92,24 +164,30 @@ const FaceFusion = () => {
           </h1>
 
           <div className="flex items-center justify-center gap-3">
-            <span className="text-lg text-muted-foreground">
-              Check out the repository
-            </span>
+            <Tooltip>
+              <TooltipTrigger asChild>
                 <Button
-                    variant="outline"
-                    size="icon"
-                    className="hover-glow rounded-full"
-                    asChild
-                >
-                  <a
-                      href="https://github.com/art-vozniuk/demo-hub"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      aria-label="GitHub Profile"
-                  >
-                    <Github className="h-5 w-5"/>
-                  </a>
-                </Button>
+                        variant="outline"
+                        size="icon"
+                        className="rounded-full animate-pulse-glow"
+                        asChild
+                    >
+                      <a
+                          href="https://github.com/art-vozniuk/demo-hub"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label="GitHub Profile"
+                          onClick={() => track({ name: 'facefusion_github_repo_clicked', params: {} })}
+                      >
+                        <Github className="h-5 w-5"/>
+                      </a>
+                    </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                <p>Visit the repository</p>
+              </TooltipContent>
+            </Tooltip>
+
           </div>
 
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
@@ -151,13 +229,13 @@ const FaceFusion = () => {
       )}
 
       <section className="max-w-7xl mx-auto">
-        {templates && templates.length > 0 ? (
+        {loadedTemplates.length > 0 ? (
           <Masonry
             breakpointCols={breakpointColumns}
             className="masonry-grid"
             columnClassName="masonry-grid-column"
           >
-            {templates.map((template) => {
+            {loadedTemplates.map((template) => {
               const isSelected = selectedTemplates.some((t) => t.id === template.id);
               const isDisabled = selectedTemplates.length >= MAX_SELECTION && !isSelected;
 

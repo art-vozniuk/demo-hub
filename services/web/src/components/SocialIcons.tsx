@@ -8,7 +8,13 @@ import {
 } from "@/components/ui/tooltip";
 import cvPdf from "@/assets/Artem Vozniuk AI infra & R&D.pdf";
 
-const SocialIcons = () => {
+interface SocialIconsProps {
+  onLinkedInClick?: () => void;
+  onGitHubClick?: () => void;
+  onResumeClick?: () => void;
+}
+
+const SocialIcons = ({ onLinkedInClick, onGitHubClick, onResumeClick }: SocialIconsProps) => {
   return (
     <TooltipProvider>
       <div className="flex justify-center gap-4">
@@ -25,6 +31,7 @@ const SocialIcons = () => {
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label="LinkedIn Profile"
+                onClick={onLinkedInClick}
               >
                 <Linkedin className="h-5 w-5" />
               </a>
@@ -48,6 +55,7 @@ const SocialIcons = () => {
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label="GitHub Profile"
+                onClick={onGitHubClick}
               >
                 <Github className="h-5 w-5" />
               </a>
@@ -70,6 +78,7 @@ const SocialIcons = () => {
                 href={cvPdf}
                 download="Artem Vozniuk AI infra & R&D.pdf"
                 aria-label="Download CV"
+                onClick={onResumeClick}
               >
                 <FileText className="h-5 w-5" />
               </a>

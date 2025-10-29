@@ -11,6 +11,7 @@ from services.common.domain.enums import PipelineStatus
 from services.common.s3.client import S3Client
 
 from services.compute.app.pipelines.service import create_service, pipeline_templates
+from services.common.logging.config import context_trace_id, context_pipeline_id
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +56,9 @@ async def _process_pipeline(message: Dict[str, Any]) -> None:
     pipeline_id = message["pipeline_id"]
     pipeline_name = message["pipeline_name"]
     pipeline_input_dict = message["input"]
+
+    context_trace_id.set(str(trace_id))
+    context_pipeline_id.set(str(pipeline_id))
 
     log.info(f"Processing pipeline: {pipeline_name}, trace_id: {trace_id}")
 
