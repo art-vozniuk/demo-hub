@@ -6,7 +6,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import cvPdf from "@/assets/Artem Vozniuk AI infra & R&D.pdf";
+import cvPdf from "@/assets/Artem Vozniuk - AI Infrastructure.pdf";
 
 interface SocialIconsProps {
   onLinkedInClick?: () => void;
@@ -27,7 +27,7 @@ const SocialIcons = ({ onLinkedInClick, onGitHubClick, onResumeClick }: SocialIc
               asChild
             >
               <a
-                href="https://www.linkedin.com/in/artem-vozniuk-6036b290/"
+                href="https://www.linkedin.com/in/artem-vozniuk-ai/"
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label="LinkedIn Profile"
@@ -76,7 +76,7 @@ const SocialIcons = ({ onLinkedInClick, onGitHubClick, onResumeClick }: SocialIc
             >
               <a
                 href={cvPdf}
-                download="Artem Vozniuk AI infra & R&D.pdf"
+                download="Artem Vozniuk - AI Infrastructure.pdf"
                 aria-label="Download CV"
                 onClick={onResumeClick}
               >

@@ -4,7 +4,10 @@ import SocialIcons from "@/components/SocialIcons";
 import { Link } from "react-router-dom";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import demoVideo from "@/assets/RoleCall.mp4";
-import recommendationsImage from "@/assets/recommendations.png";
+import recommendationsImage1 from "@/assets/recs1.png";
+import recommendationsImage2 from "@/assets/recs2.png";
+import recommendationsImage3 from "@/assets/recs3.png";
+import recommendationsImage4 from "@/assets/recs4.png";
 
 const Home = () => {
   const { track } = useAnalytics();
@@ -19,7 +22,7 @@ const Home = () => {
 
       const scrollPosition = window.innerHeight + window.scrollY;
       const documentHeight = document.documentElement.scrollHeight;
-      
+
       if (scrollPosition >= documentHeight - 100) {
         track({ name: 'home_scrolled_to_bottom', params: {} });
         setHasTrackedScroll(true);
@@ -46,9 +49,9 @@ const Home = () => {
     if (videoStartTimeRef.current) {
       const watchedDuration = (Date.now() - videoStartTimeRef.current) / 1000;
       const totalWatched = videoWatchTime + watchedDuration;
-      track({ 
-        name: 'home_demo_video_watched', 
-        params: { duration_seconds: Math.round(totalWatched) } 
+      track({
+        name: 'home_demo_video_watched',
+        params: { duration_seconds: Math.round(totalWatched) }
       });
       videoStartTimeRef.current = null;
     }
@@ -250,9 +253,24 @@ const Home = () => {
           <h2 className="text-xl font-semibold mb-4 text-left">Recommendations</h2>
           <div className="space-y-4">
             <img
-              src={recommendationsImage}
-              alt="Recommendations"
-              className="rounded-2xl shadow-lg w-full mx-auto text-left"
+                src={recommendationsImage1}
+                alt="Recommendations"
+                className="rounded-2xl shadow-lg w-full mx-auto text-left"
+            />
+            <img
+                src={recommendationsImage2}
+                alt="Recommendations"
+                className="rounded-2xl shadow-lg w-full mx-auto text-left"
+            />
+            <img
+                src={recommendationsImage3}
+                alt="Recommendations"
+                className="rounded-2xl shadow-lg w-full mx-auto text-left"
+            />
+            <img
+                src={recommendationsImage4}
+                alt="Recommendations"
+                className="rounded-2xl shadow-lg w-full mx-auto text-left"
             />
           </div>
         </div>
