@@ -10,7 +10,7 @@ import type { AnalyticsEvent } from "@/types/analytics";
 import "./masonry.css";
 import {Tooltip, TooltipContent, TooltipTrigger} from "@/components/ui/tooltip.tsx";
 
-const MAX_SELECTION = 6;
+const MAX_SELECTION = 3;
 const MIN_TEMPLATES_TO_SHOW = 6;
 
 const FaceFusion = () => {

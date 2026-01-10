@@ -14,7 +14,7 @@ class Config(BaseSettings):
     RATE_LIMIT_QUEUE_PER_MINUTE: int = 5
     RATE_LIMIT_STATUS_PER_MINUTE: int = 600
 
-    MAX_PIPELINES_PER_REQUEST: int = 6
+    MAX_PIPELINES_PER_REQUEST: int = 3
 
     TEST_USER_EMAIL: str | None = None
 

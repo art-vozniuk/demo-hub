@@ -46,7 +46,7 @@ services:
     image: ghcr.io/art-vozniuk/compute-cpu:latest
     environment:
       RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
-      RABBITMQ_PREFETCH: "1"
+      RABBITMQ_PREFETCH: "10"
     depends_on:
       rabbitmq:
         condition: service_healthy
