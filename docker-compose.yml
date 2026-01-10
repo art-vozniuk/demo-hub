@@ -42,6 +42,18 @@ services:
       - app_network
     restart: unless-stopped
 
+  compute:
+    image: ghcr.io/art-vozniuk/compute-cpu:latest
+    environment:
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+      RABBITMQ_PREFETCH: "1"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - app_network
+    restart: unless-stopped
+
   web:
     image: ghcr.io/art-vozniuk/web:latest
     container_name: web
