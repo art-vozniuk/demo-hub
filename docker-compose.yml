@@ -78,6 +78,7 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/user_conf.d/default.conf:ro
       - ./nginx/local.conf:/etc/nginx/user_conf.d/local.conf:ro
       - nginx_secrets:/etc/letsencrypt
+      - nginx_webroot:/var/www/letsencrypt
     depends_on:
       - web
       - core
@@ -89,6 +90,8 @@ volumes:
     name: rabbitmq-data
   nginx_secrets:
     name: nginx-secrets
+  nginx_webroot:
+    name: nginx-webroot
 
 networks:
   app_network:

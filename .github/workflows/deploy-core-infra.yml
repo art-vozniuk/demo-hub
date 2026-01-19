@@ -3,6 +3,10 @@ name: deploy core infra
 on:
   workflow_dispatch:
 
+concurrency:
+  group: demo-hub-deploy
+  cancel-in-progress: true
+
 jobs:
   build-core:
     uses: ./.github/workflows/build-core.yml
@@ -18,14 +22,14 @@ jobs:
 
   deploy:
     needs: [build-core, build-web, build-compute-cpu]
-    if: ${{ success() }}
     runs-on: ubuntu-latest
+    if: ${{ success() }}
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Copy compose and configs to server
+      - name: Copy compose and nginx configs to server
         uses: appleboy/scp-action@v1
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -34,50 +38,57 @@ jobs:
           source: "docker-compose.yml,nginx"
           target: demo-hub
 
-      - name: Connect and deploy
+      - name: Deploy on server
         uses: appleboy/ssh-action@v1.1.0
         env:
           RABBITMQ_USER: ${{ secrets.RABBITMQ_USER }}
           RABBITMQ_PASSWORD: ${{ secrets.RABBITMQ_PASSWORD }}
           CERTBOT_EMAIL: ${{ secrets.CERTBOT_EMAIL }}
           CERTBOT_DOMAINS: ${{ secrets.CERTBOT_DOMAINS }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: RABBITMQ_USER,RABBITMQ_PASSWORD,CERTBOT_EMAIL,CERTBOT_DOMAINS
+          envs: RABBITMQ_USER,RABBITMQ_PASSWORD,CERTBOT_EMAIL,CERTBOT_DOMAINS,GHCR_TOKEN,GH_ACTOR
           script: |
             set -euo pipefail
+
             cd demo-hub
 
+            # Ensure nginx env exists (used by jonasal/nginx-certbot)
             mkdir -p nginx
-
             cat > nginx/.env << EOF
             CERTBOT_EMAIL=${CERTBOT_EMAIL}
             CERTBOT_DOMAINS=${CERTBOT_DOMAINS}
             EOF
 
-            export RABBITMQ_USER=${RABBITMQ_USER}
-            export RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
+            # Export variables used by docker-compose.yml
+            export RABBITMQ_USER="${RABBITMQ_USER}"
+            export RABBITMQ_PASSWORD="${RABBITMQ_PASSWORD}"
 
             echo "Logging in to GHCR..."
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GH_ACTOR}" --password-stdin
 
             echo "Pulling latest images..."
-            docker compose pull --quiet 2>&1 | tee /tmp/compose.log
+            docker compose pull
 
-            echo "Recreating containers..."
-            docker compose up -d --force-recreate --remove-orphans --scale compute=1 2>&1 | tee -a /tmp/compose.log
+            echo "Starting / updating services..."
+            docker compose up -d --remove-orphans --scale compute=1
 
-            echo "Checking for errors..."
-            if grep -Eqi "err:|error|failed" /tmp/compose.log; then
-              echo "Deployment log contains errors (ERR / ERROR / FAILED)"
-              grep -E "error|failed" /tmp/compose.log || true
-              exit 1
-            fi
+            echo "Testing ACME challenge path (must return 200)..."
+            docker compose exec -T nginx sh -lc 'mkdir -p /var/www/letsencrypt/.well-known/acme-challenge && echo ok > /var/www/letsencrypt/.well-known/acme-challenge/test.txt'
+            curl -fsS "http://artemv.tech/.well-known/acme-challenge/test.txt" | grep -qx "ok"
 
-            echo "Reloading nginx config..."
-            docker exec meme-fusion-nginx-1 nginx -s reload || true
+            echo "Attempting certbot renew (safe to run every deploy)..."
+            docker compose exec -T nginx certbot renew || true
+
+            echo "Reloading nginx..."
+            docker compose exec -T nginx nginx -s reload || true
+
+            echo "Show current certificate dates (for debugging)..."
+            echo | openssl s_client -servername artemv.tech -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -dates || true
 
             echo "Deployment completed successfully!"
 
