@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Avatar from "@/components/Avatar";
 import SocialIcons from "@/components/SocialIcons";
 import { Link } from "react-router-dom";
 import { useAnalytics } from "@/hooks/useAnalytics";
-import demoVideo from "@/assets/RoleCall.mp4";
 import recommendationsImage1 from "@/assets/recs1.png";
 import recommendationsImage2 from "@/assets/recs2.png";
 import recommendationsImage3 from "@/assets/recs3.png";
@@ -11,10 +10,7 @@ import recommendationsImage4 from "@/assets/recs4.png";
 
 const Home = () => {
   const { track } = useAnalytics();
-  const videoRef = useRef<HTMLVideoElement>(null);
   const [hasTrackedScroll, setHasTrackedScroll] = useState(false);
-  const [videoWatchTime, setVideoWatchTime] = useState(0);
-  const videoStartTimeRef = useRef<number | null>(null);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -32,30 +28,6 @@ const Home = () => {
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, [hasTrackedScroll, track]);
-
-  const handleVideoPlay = () => {
-    videoStartTimeRef.current = Date.now();
-  };
-
-  const handleVideoPause = () => {
-    if (videoStartTimeRef.current) {
-      const watchedDuration = (Date.now() - videoStartTimeRef.current) / 1000;
-      setVideoWatchTime((prev) => prev + watchedDuration);
-      videoStartTimeRef.current = null;
-    }
-  };
-
-  const handleVideoEnded = () => {
-    if (videoStartTimeRef.current) {
-      const watchedDuration = (Date.now() - videoStartTimeRef.current) / 1000;
-      const totalWatched = videoWatchTime + watchedDuration;
-      track({
-        name: 'home_demo_video_watched',
-        params: { duration_seconds: Math.round(totalWatched) }
-      });
-      videoStartTimeRef.current = null;
-    }
-  };
 
   return (
     <main className="flex min-h-[calc(100vh-8rem)] items-center justify-center px-6 py-16">
@@ -132,121 +104,6 @@ const Home = () => {
         </div>
 
         <div className="border-t border-gray-700" />
-
-        <div className="text-center">
-          <h2 className="text-2xl font-semibold mb-4">My Experience</h2>
-        </div>
-
-        {/* Allegory */}
-        <div className="text-left">
-          <h2 className="text-xl font-semibold mb-4 text-left">Allegory (09.2024 – now)</h2>
-          <div className="space-y-4">
-            <p className="text-lg leading-relaxed text-muted-foreground text-left">
-              Building a Generative AI platform with an orchestration system for image, video, and multimodal
-              workflows.
-            </p>
-
-            <ul className="list-disc list-inside text-lg leading-relaxed text-muted-foreground text-left space-y-1">
-              <li>
-                Designed and implemented full backend and infrastructure using FastAPI, Kubernetes, Terraform, AWS,
-                PostgreSQL, and Redis.
-              </li>
-              <li>
-                Created a declarative YAML-based workflow engine integrating LLMs, diffusion pipelines (SDXL, Flux,
-                Hedra), and OpenAI APIs for multimodal generation.
-              </li>
-              <li>
-                Implemented observability stack with Prometheus, Grafana, and Sentry, and CI/CD with GitHub Actions.
-              </li>
-              <li>
-                Enabled rapid prototyping by allowing non-engineers to define and deploy new workflows within minutes.
-              </li>
-              <li>
-                Collaborated with frontend engineers to deliver AI-powered MVPs in Next.js and React Native.
-              </li>
-            </ul>
-
-            <div className="mt-8">
-              <h3 className="text-lg font-semibold mb-2">Demo Video</h3>
-              <video
-                ref={videoRef}
-                className="max-w-xs w-full rounded-2xl shadow-lg"
-                controls
-                playsInline
-                src={demoVideo}
-                onPlay={handleVideoPlay}
-                onPause={handleVideoPause}
-                onEnded={handleVideoEnded}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Inworld AI */}
-        <div className="text-left">
-          <h2 className="text-xl font-semibold mb-4 text-left">Inworld AI (02.2022 – 09.2024)</h2>
-          <div className="space-y-4">
-            <p className="text-lg leading-relaxed text-muted-foreground text-left">
-              <Link to="https://inworld.ai/" className="text-cyan-500 hover:underline">
-                Inworld
-              </Link>{" "}
-              provides a scalable AI infrastructure platform that enables developers to deploy real-time, multi-modal AI experiences.
-              I worked on cross-platform C++ SDKs and on-device inference systems to support low-latency workflows, optimized for production at scale.
-            </p>
-
-            <ul className="list-disc list-inside text-lg leading-relaxed text-muted-foreground text-left space-y-1">
-              <li>
-                Designed and launched cross-platform C++ SDKs with gRPC-based real-time communication for AI
-                characters.
-              </li>
-              <li>
-                Implemented edge inference for low-latency features such as VAD (Silero) and Whisper speech-to-text.
-              </li>
-              <li>
-                Built Unreal Engine SDK from scratch, reducing integration time to minutes.
-              </li>
-              <li>
-                Created CI/CD pipelines for cross-platform builds via GitHub Actions (Windows, macOS, Linux, iOS,
-                Android).
-              </li>
-              <li>
-                Collaborated with partners including NVIDIA, Ubisoft, and Disney to develop technical demos and
-                integrations.
-              </li>
-            </ul>
-          </div>
-        </div>
-
-        {/* Game Development */}
-        <div className="text-left">
-          <h2 className="text-xl font-semibold mb-4 text-left">Game Development (02.2014 – 01.2022)</h2>
-          <div className="space-y-4">
-            <p className="text-lg leading-relaxed text-muted-foreground text-left">
-              Worked at{" "}
-              <Link to="https://saber.games/" className="text-cyan-500 hover:underline">
-                Saber Interactive
-              </Link>{" "}
-              ,{" "}
-              <Link
-                to="https://www.themultiplayergroup.com/"
-                className="text-cyan-500 hover:underline"
-              >
-                The Multiplayer Group
-              </Link>
-              {" "}and{" "}
-              <Link
-                to="https://playrix.com/"
-                className="text-cyan-500 hover:underline"
-              >
-                Playrix
-              </Link>
-              , contributing to AAA and mobile titles such as <strong>Quake Champions</strong>, {" "}
-              <strong>World War Z</strong>, <strong>Gardenscapes</strong> and more.
-              Specialized in gameplay, and engine systems, with deep experience in C++, low-level
-              optimizations, and cross-platform performance (PC, consoles, mobile).
-            </p>
-          </div>
-        </div>
 
         {/* Recommendations */}
         <div className="text-left">
