@@ -139,8 +139,9 @@ jobs:
           print('Patched Sandbox.html with style overrides and postMessage hook.')
           PYEOF
 
-      # Small files (.html, .js, .wasm) go to S3 — fast to serve, no size issues.
-      - name: upload small files to S3
+      # Upload all build artifacts to S3 (Supabase Storage).
+      # nginx proxies /renderer/* from S3, so all files are served from the same origin.
+      - name: upload build artifacts to S3
         if: steps.check.outputs.skip != 'true'
         working-directory: services/external/OpenGL-Renderer/build-web
         run: |
@@ -156,8 +157,10 @@ jobs:
           aws s3 cp Sandbox.wasm "${BASE}/Sandbox.wasm" ${EP} \
             --content-type "application/wasm"
 
-      # Sandbox.data (~250 MB) exceeds S3 size limits — upload to GitHub Releases.
-      # The release 'renderer-latest' is recreated each time so the URL stays stable.
+          aws s3 cp Sandbox.data "${BASE}/data/Sandbox.data" ${EP} \
+            --content-type "application/octet-stream"
+
+      # Also upload to GitHub Releases as backup / stable URL.
       - name: upload Sandbox.data to GitHub Releases
         if: steps.check.outputs.skip != 'true'
         working-directory: services/external/OpenGL-Renderer/build-web
