@@ -1,6 +1,6 @@
 # Demo Hub
 
-Personal demo hub for showcasing side projects — ML experiments, real-time rendering, and other things I build.
+Personal demo hub for showcasing side projects.
 
 ## Live
 
