@@ -69,13 +69,8 @@ jobs:
       - name: patch Sandbox.html
         if: steps.check.outputs.skip != 'true'
         working-directory: services/external/OpenGL-Renderer/build-web
-        env:
-          GH_REPO: ${{ github.repository }}
         run: |
           python3 - <<'PYEOF'
-          import os
-          gh_repo = os.environ.get('GH_REPO', 'art-vozniuk/demo-hub')
-
           with open('Sandbox.html') as f:
               html = f.read()
 
@@ -89,19 +84,15 @@ jobs:
           assert '</head>' in html, "Could not find </head> in Sandbox.html"
           html = html.replace('</head>', style_patch + '\n</head>', 1)
 
-          gh_data_url = f'https://github.com/{gh_repo}/releases/download/renderer-latest/'
-
           patch = f"""<script>
           (function () {{
-            // Fetch .data files directly from GitHub Releases (CORS-friendly CDN).
-            // Bypasses nginx proxy which cannot follow GitHub's 302 redirects.
-            var GH_RELEASE = '{gh_data_url}';
+            // Route .data files to /renderer/data/ (served as static files from VPS)
             function hookLocateFile() {{
               if (typeof Module !== 'undefined') {{
                 var origLocate = Module.locateFile || function(p) {{ return p; }};
                 Module.locateFile = function(path, prefix) {{
                   if (path.endsWith('.data')) {{
-                    return GH_RELEASE + path;
+                    return '/renderer/data/' + path;
                   }}
                   return origLocate(path, prefix);
                 }};

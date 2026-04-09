@@ -79,6 +79,7 @@ services:
       - ./nginx/local.conf:/etc/nginx/user_conf.d/local.conf:ro
       - nginx_secrets:/etc/letsencrypt
       - nginx_webroot:/var/www/letsencrypt
+      - ./renderer-data:/var/www/renderer_data:ro
     depends_on:
       - web
       - core

@@ -112,11 +112,12 @@ jobs:
           CERTBOT_DOMAINS: ${{ secrets.CERTBOT_DOMAINS }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
           GH_ACTOR: ${{ github.actor }}
+          GH_REPO: ${{ github.repository }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: RABBITMQ_USER,RABBITMQ_PASSWORD,CERTBOT_EMAIL,CERTBOT_DOMAINS,GHCR_TOKEN,GH_ACTOR
+          envs: RABBITMQ_USER,RABBITMQ_PASSWORD,CERTBOT_EMAIL,CERTBOT_DOMAINS,GHCR_TOKEN,GH_ACTOR,GH_REPO
           script: |
             set -euo pipefail
 
@@ -128,6 +129,15 @@ jobs:
             CERTBOT_EMAIL=${CERTBOT_EMAIL}
             CERTBOT_DOMAINS=${CERTBOT_DOMAINS}
             EOF
+
+            # Download renderer data files from GitHub Releases to serve statically.
+            # Skips download if the file already matches the current release.
+            echo "Downloading renderer data from GitHub Releases..."
+            mkdir -p renderer-data
+            RELEASE_URL="https://github.com/${GH_REPO}/releases/download/renderer-latest/Sandbox.data"
+            curl -fSL -o renderer-data/Sandbox.data.tmp "$RELEASE_URL" \
+              && mv renderer-data/Sandbox.data.tmp renderer-data/Sandbox.data \
+              || echo "Warning: failed to download Sandbox.data (renderer may not work)"
 
             # Export variables used by docker-compose.yml
             export RABBITMQ_USER="${RABBITMQ_USER}"
