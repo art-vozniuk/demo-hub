@@ -7,6 +7,7 @@ class Config(BaseSettings):
 
     ENV: str
     SENTRY_DSN: str | None = None
+    MODELS_BASE_URL: str
 
 
 config = Config()

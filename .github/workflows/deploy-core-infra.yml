@@ -3,27 +3,92 @@ name: deploy core infra
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write              # needed by build-renderer for gh release upload
+  packages: write              # needed by build jobs for GHCR push
+
 concurrency:
   group: demo-hub-deploy
   cancel-in-progress: true
 
 jobs:
+  # Compare HEAD against the 'last-deploy' tag to detect which services changed.
+  # On first deploy (no tag) everything is built.
+  check-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      core: ${{ steps.diff.outputs.core }}
+      web: ${{ steps.diff.outputs.web }}
+      compute: ${{ steps.diff.outputs.compute }}
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: detect changed paths
+        id: diff
+        run: |
+          if ! BASE=$(git rev-parse last-deploy 2>/dev/null); then
+            echo "No 'last-deploy' tag found — building everything."
+            echo "core=true"    >> $GITHUB_OUTPUT
+            echo "web=true"     >> $GITHUB_OUTPUT
+            echo "compute=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "Comparing $BASE..HEAD"
+          changed=$(git diff --name-only "$BASE" HEAD)
+
+          has_core=false
+          has_web=false
+          has_compute=false
+
+          echo "$changed" | grep -qE '^services/core/|^services/common/' && has_core=true
+          echo "$changed" | grep -qE '^services/web/'                    && has_web=true
+          echo "$changed" | grep -qE '^services/compute/|^services/common/|^services/external/face_swap' && has_compute=true
+
+          echo "core=$has_core"       >> $GITHUB_OUTPUT
+          echo "web=$has_web"         >> $GITHUB_OUTPUT
+          echo "compute=$has_compute" >> $GITHUB_OUTPUT
+
+          echo "Changed files:"
+          echo "$changed"
+          echo "---"
+          echo "core=$has_core web=$has_web compute=$has_compute"
+
   build-core:
+    needs: [check-changes]
+    if: needs.check-changes.outputs.core == 'true'
     uses: ./.github/workflows/build-core.yml
     secrets: inherit
 
   build-web:
+    needs: [check-changes]
+    if: needs.check-changes.outputs.web == 'true'
     uses: ./.github/workflows/build-web.yml
     secrets: inherit
 
   build-compute-cpu:
+    needs: [check-changes]
+    if: needs.check-changes.outputs.compute == 'true'
     uses: ./.github/workflows/build-compute-cpu.yml
     secrets: inherit
 
+  # Runs in parallel with other builds. Skips the Emscripten compile when the
+  # OpenGL-Renderer submodule commit hasn't changed since the last deploy.
+  build-renderer:
+    uses: ./.github/workflows/build-renderer.yml
+    secrets: inherit
+
   deploy:
-    needs: [build-core, build-web, build-compute-cpu]
+    needs: [check-changes, build-core, build-web, build-compute-cpu]
+    # Run deploy even when some builds were skipped (not needed).
+    if: |
+      always() &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-latest
-    if: ${{ success() }}
 
     steps:
       - name: Checkout repo
@@ -91,6 +156,12 @@ jobs:
             echo | openssl s_client -servername artemv.tech -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -dates || true
 
             echo "Deployment completed successfully!"
+
+      # Tag current HEAD so the next deploy knows what changed since this one.
+      - name: update last-deploy tag
+        run: |
+          git tag -f last-deploy HEAD
+          git push -f origin last-deploy
 
   e2e-test:
     needs: [deploy]

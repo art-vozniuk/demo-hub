@@ -11,6 +11,7 @@ const Navbar = () => {
   const navLinks = [
     { to: "/", label: "Home" },
     { to: "/face-fusion", label: "Try Style" },
+    { to: "/renderer", label: "Renderer" },
   ];
 
   const handleSignOut = async () => {
@@ -26,6 +27,8 @@ const Navbar = () => {
       track({ name: 'nav_home_clicked', params: {} });
     } else if (to === "/face-fusion") {
       track({ name: 'nav_facefusion_clicked', params: {} });
+    } else if (to === "/renderer") {
+      track({ name: 'nav_renderer_clicked', params: {} });
     }
   };
 

@@ -1,0 +1,149 @@
+name: build and deploy renderer
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: write              # needed for gh release upload
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY_SECRET }}
+      AWS_DEFAULT_REGION: ${{ secrets.S3_REGION }}
+      S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+      S3_BUCKET: media
+      GH_REPO: ${{ github.repository }}
+
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: check if renderer needs rebuild
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CURRENT=$(git rev-parse HEAD:services/external/OpenGL-Renderer)
+          echo "current_commit=$CURRENT" >> $GITHUB_OUTPUT
+
+          # The deployed version is stored in the release body of 'renderer-latest'.
+          DEPLOYED=$(gh release view renderer-latest --json body -q '.body' 2>/dev/null || echo "")
+
+          if [ "$CURRENT" = "$DEPLOYED" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Renderer up to date at commit ${CURRENT}, skipping build."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "Renderer changed: '${DEPLOYED}' -> '${CURRENT}', rebuilding."
+          fi
+
+      # emsdk is large — cache it between runs to avoid re-downloading LLVM each time.
+      # Pin the version string when you need reproducible builds.
+      - name: setup emsdk
+        if: steps.check.outputs.skip != 'true'
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+          actions-cache-folder: emsdk-cache
+
+      - name: configure (emcmake)
+        if: steps.check.outputs.skip != 'true'
+        working-directory: services/external/OpenGL-Renderer
+        run: emcmake cmake -B build-web -DCMAKE_BUILD_TYPE=Release
+
+      - name: build
+        if: steps.check.outputs.skip != 'true'
+        working-directory: services/external/OpenGL-Renderer
+        run: cmake --build build-web --parallel $(nproc)
+
+      # Patch the generated Sandbox.html so it posts a message to the parent
+      # React frame once the WebAssembly runtime and all preloaded assets are ready.
+      - name: patch Sandbox.html with postMessage
+        if: steps.check.outputs.skip != 'true'
+        working-directory: services/external/OpenGL-Renderer/build-web
+        run: |
+          python3 - <<'PYEOF'
+          with open('Sandbox.html') as f:
+              html = f.read()
+
+          patch = f"""<script>
+          (function () {{
+            // Send loading progress and ready signal to parent frame.
+            function hookSetStatus() {{
+              if (typeof Module !== 'undefined' && typeof Module.setStatus === 'function') {{
+                var orig = Module.setStatus;
+                Module.setStatus = function (text) {{
+                  orig.call(Module, text);
+                  if (window.parent === window) return;
+                  if (text === '') {{
+                    window.parent.postMessage({{ type: 'renderer-ready' }}, '*');
+                    Module.setStatus = orig;
+                  }} else {{
+                    // Emscripten status format: "Downloading data... (X/Y)"
+                    var m = text.match(/\((\d+(?:\.\d+)?)\/(\d+)\)/);
+                    if (m) {{
+                      window.parent.postMessage({{
+                        type: 'renderer-progress',
+                        loaded: parseFloat(m[1]),
+                        total: parseFloat(m[2])
+                      }}, '*');
+                    }}
+                  }}
+                }};
+              }} else {{
+                requestAnimationFrame(hookSetStatus);
+              }}
+            }}
+            hookSetStatus();
+          }})();
+          </script>"""
+
+          assert '</body>' in html, "Could not find </body> in Sandbox.html"
+          html = html.replace('</body>', patch + '\n</body>', 1)
+
+          with open('Sandbox.html', 'w') as f:
+              f.write(html)
+
+          print('Patched Sandbox.html with renderer-ready postMessage hook.')
+          PYEOF
+
+      # Small files (.html, .js, .wasm) go to S3 — fast to serve, no size issues.
+      - name: upload small files to S3
+        if: steps.check.outputs.skip != 'true'
+        working-directory: services/external/OpenGL-Renderer/build-web
+        run: |
+          BASE="s3://${S3_BUCKET}/renderer"
+          EP="--endpoint-url ${S3_ENDPOINT}"
+
+          aws s3 cp Sandbox.html "${BASE}/Sandbox.html" ${EP} \
+            --content-type "text/html"
+
+          aws s3 cp Sandbox.js "${BASE}/Sandbox.js" ${EP} \
+            --content-type "application/javascript"
+
+          aws s3 cp Sandbox.wasm "${BASE}/Sandbox.wasm" ${EP} \
+            --content-type "application/wasm"
+
+      # Sandbox.data (~250 MB) exceeds S3 size limits — upload to GitHub Releases.
+      # The release 'renderer-latest' is recreated each time so the URL stays stable.
+      - name: upload Sandbox.data to GitHub Releases
+        if: steps.check.outputs.skip != 'true'
+        working-directory: services/external/OpenGL-Renderer/build-web
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          COMMIT="${{ steps.check.outputs.current_commit }}"
+
+          # Delete old release if exists, then recreate with current commit in body.
+          gh release delete renderer-latest --yes 2>/dev/null || true
+          gh release create renderer-latest \
+            --title "Renderer Build" \
+            --notes "$COMMIT" \
+            Sandbox.data

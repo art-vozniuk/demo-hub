@@ -34,6 +34,7 @@ jobs:
           ENV=${{ secrets.ENV }}
           SENTRY_DSN=${{ secrets.SENTRY_DSN }}
           RABBITMQ_URL=amqp://${{ secrets.RABBITMQ_USER }}:${{ secrets.RABBITMQ_PASSWORD }}@${{ secrets.SERVER_HOST }}:5672/
+          MODELS_BASE_URL=${{ secrets.MODELS_BASE_URL }}
           EOF
 
       - name: login to GHCR

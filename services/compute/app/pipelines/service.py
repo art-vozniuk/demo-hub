@@ -29,9 +29,13 @@ class Service:
 
     @staticmethod
     async def download_model(
-        s3: S3Client, relative_path: str, check_exists: bool = False
+        s3: S3Client,
+        relative_path: str,
+        check_exists: bool = False,
     ) -> str:
         import os
+        import aiohttp
+        from services.compute.app.config import config
 
         absolute_path = os.path.abspath(relative_path)
         if check_exists and os.path.exists(absolute_path):
@@ -40,10 +44,16 @@ class Service:
         os.makedirs(os.path.dirname(absolute_path), exist_ok=True)
 
         name = os.path.basename(relative_path)
-        s3_key = f"models/{name}"
-        await s3.download_file_to_disc(
-            s3_bucket="media", s3_key=s3_key, path=absolute_path
-        )
+        url = f"{config.MODELS_BASE_URL}/{name}"
+
+        log.info(f"Downloading model: {url}")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                resp.raise_for_status()
+                with open(absolute_path, "wb") as f:
+                    async for chunk in resp.content.iter_chunked(8 * 1024 * 1024):
+                        f.write(chunk)
+        log.info(f"Downloaded {name} to {absolute_path}")
 
         return absolute_path
 

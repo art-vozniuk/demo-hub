@@ -1,3 +1,6 @@
 [submodule "services/external/face_swap"]
 	path = services/external/face_swap
 	url = https://github.com/art-vozniuk/reactor-face-swap
+[submodule "services/external/OpenGL-Renderer"]
+	path = services/external/OpenGL-Renderer
+	url = https://github.com/art-vozniuk/OpenGL-Renderer
