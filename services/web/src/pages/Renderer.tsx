@@ -94,7 +94,7 @@ const Renderer = () => {
         ) : (
           <>
             <div
-              className="relative w-full rounded-lg overflow-hidden"
+              className="relative w-full"
               style={{ height: "75vh" }}
             >
               {!isReady && (
