@@ -94,7 +94,7 @@ const Renderer = () => {
         ) : (
           <>
             <div
-              className="relative w-full rounded-lg overflow-hidden border border-border"
+              className="relative w-full rounded-lg overflow-hidden"
               style={{ height: "75vh" }}
             >
               {!isReady && (
@@ -116,7 +116,7 @@ const Renderer = () => {
               <iframe
                 ref={iframeRef}
                 src={RENDERER_URL}
-                className="w-full h-full border-0"
+                className="w-full h-full border-0 outline-none"
                 allow="fullscreen"
                 title="OpenGL Renderer"
               />
@@ -126,7 +126,7 @@ const Renderer = () => {
               <p className="mt-3 text-xs text-muted-foreground text-center">
                 Hold{" "}
                 <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">
-                  RMB
+                  LMB
                 </kbd>{" "}
                 and use{" "}
                 <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">
