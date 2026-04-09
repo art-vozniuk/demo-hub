@@ -140,7 +140,10 @@ jobs:
             docker compose pull
 
             echo "Starting / updating services..."
-            docker compose up -d --remove-orphans --force-recreate nginx --scale compute=1
+            docker compose up -d --remove-orphans --scale compute=1
+
+            echo "Recreating nginx to pick up config changes..."
+            docker compose up -d --force-recreate nginx
 
             echo "Testing ACME challenge path (must return 200)..."
             docker compose exec -T nginx sh -lc 'mkdir -p /var/www/letsencrypt/.well-known/acme-challenge && echo ok > /var/www/letsencrypt/.well-known/acme-challenge/test.txt'
