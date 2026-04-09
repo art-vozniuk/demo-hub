@@ -82,7 +82,7 @@ jobs:
     secrets: inherit
 
   deploy:
-    needs: [check-changes, build-core, build-web, build-compute-cpu]
+    needs: [check-changes, build-core, build-web, build-compute-cpu, build-renderer]
     # Run deploy even when some builds were skipped (not needed).
     if: |
       always() &&
