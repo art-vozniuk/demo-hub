@@ -140,7 +140,7 @@ jobs:
             docker compose pull
 
             echo "Starting / updating services..."
-            docker compose up -d --remove-orphans --scale compute=1
+            docker compose up -d --remove-orphans --force-recreate nginx --scale compute=1
 
             echo "Testing ACME challenge path (must return 200)..."
             docker compose exec -T nginx sh -lc 'mkdir -p /var/www/letsencrypt/.well-known/acme-challenge && echo ok > /var/www/letsencrypt/.well-known/acme-challenge/test.txt'
@@ -148,9 +148,6 @@ jobs:
 
             echo "Attempting certbot renew (safe to run every deploy)..."
             docker compose exec -T nginx certbot renew || true
-
-            echo "Reloading nginx..."
-            docker compose exec -T nginx nginx -s reload || true
 
             echo "Show current certificate dates (for debugging)..."
             echo | openssl s_client -servername artemv.tech -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -dates || true

@@ -60,6 +60,22 @@ html = html.replace("</head>", style_patch + "\n</head>", 1)
 
 patch = """<script>
 (function () {
+  // Route .data files to /renderer/data/ (proxied to GitHub Releases in prod)
+  function hookLocateFile() {
+    if (typeof Module !== 'undefined') {
+      var origLocate = Module.locateFile || function(p) { return p; };
+      Module.locateFile = function(path, prefix) {
+        if (path.endsWith('.data')) {
+          return '/renderer/data/' + path;
+        }
+        return origLocate(path, prefix);
+      };
+    } else {
+      requestAnimationFrame(hookLocateFile);
+    }
+  }
+  hookLocateFile();
+
   function hookSetStatus() {
     if (typeof Module !== 'undefined' && typeof Module.setStatus === 'function') {
       var orig = Module.setStatus;

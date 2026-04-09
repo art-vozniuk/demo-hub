@@ -79,6 +79,21 @@ export default defineConfig(({ mode }) => {
             ".wasm": "application/wasm",
             ".data": "application/octet-stream",
           };
+          // Also serve /renderer/data/<file> from the same local build dir
+          server.middlewares.use("/renderer/data/", (req, res, next) => {
+            const fileName = req.url?.split("?")[0]?.replace(/^\//, "") || "";
+            if (!fileName) return next();
+            const filePath = path.join(localBuildDir, fileName);
+            if (!fs.existsSync(filePath)) return next();
+            const stat = fs.statSync(filePath);
+            res.writeHead(200, {
+              "content-type": "application/octet-stream",
+              "content-length": String(stat.size),
+              "cache-control": "no-store",
+            });
+            fs.createReadStream(filePath).pipe(res);
+          });
+
           server.middlewares.use("/renderer/", (req, res, next) => {
             const fileName = req.url?.split("?")[0]?.replace(/^\//, "") || "";
             if (!fileName) return next();
@@ -96,14 +111,17 @@ export default defineConfig(({ mode }) => {
           return;
         }
 
-        // Remote mode: proxy Sandbox.data from GitHub Releases (302 → Azure Blob).
-        server.middlewares.use("/renderer/Sandbox.data", (_req, res) => {
+        // Remote mode: proxy /renderer/data/<file> from GitHub Releases (302 → Azure Blob).
+        server.middlewares.use("/renderer/data/", (req, res) => {
           if (!rendererDataUrl) {
             res.writeHead(502);
             res.end("RENDERER_DATA_URL not set");
             return;
           }
-          https.get(rendererDataUrl, (ghRes: any) => {
+          // Replace Sandbox.data in the base URL with the requested filename
+          const fileName = req.url?.split("?")[0]?.replace(/^\//, "") || "Sandbox.data";
+          const fileUrl = rendererDataUrl.replace(/\/[^/]+$/, "/" + fileName);
+          https.get(fileUrl, (ghRes: any) => {
             const redirect = ghRes.headers.location;
             if (ghRes.statusCode === 302 && redirect) {
               https.get(redirect, (finalRes: any) => {
