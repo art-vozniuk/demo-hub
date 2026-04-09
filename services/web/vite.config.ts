@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
+import fs from "fs";
 import https from "https";
 
 // https://vitejs.dev/config/
@@ -8,12 +9,14 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const s3Public = env.VITE_S3_PUBLIC_BUCKETS_ENDPOINT || "";
   const rendererDataUrl = env.RENDERER_DATA_URL || "";
+  const rendererLocal = env.RENDERER_LOCAL === "true";
+  const localBuildDir = path.resolve(__dirname, "../external/OpenGL-Renderer/build-web");
 
   return {
   server: {
     host: "::",
     port: 8085,
-    proxy: s3Public
+    proxy: s3Public && !rendererLocal
       ? {
           // Other renderer files (html, js, wasm) — proxy from Supabase
           "/renderer/": {
@@ -65,11 +68,35 @@ export default defineConfig(({ mode }) => {
   },
   plugins: [
     {
-      name: "renderer-data-proxy",
+      name: "renderer-local-or-proxy",
       configureServer(server) {
-        // Sandbox.data (~250MB) is on GitHub Releases, not Supabase.
-        // GitHub 302s to Azure Blob — neither supports CORS.
-        // Stream it through our dev server to avoid CORS issues.
+        if (rendererLocal) {
+          // Serve renderer files from local Emscripten build directory.
+          // Usage: RENDERER_LOCAL=true npm run dev
+          const mimeTypes: Record<string, string> = {
+            ".html": "text/html",
+            ".js": "application/javascript",
+            ".wasm": "application/wasm",
+            ".data": "application/octet-stream",
+          };
+          server.middlewares.use("/renderer/", (req, res, next) => {
+            const fileName = req.url?.split("?")[0]?.replace(/^\//, "") || "";
+            if (!fileName) return next();
+            const filePath = path.join(localBuildDir, fileName);
+            if (!fs.existsSync(filePath)) return next();
+            const ext = path.extname(fileName);
+            const stat = fs.statSync(filePath);
+            res.writeHead(200, {
+              "content-type": mimeTypes[ext] || "application/octet-stream",
+              "content-length": String(stat.size),
+              "cache-control": "no-store",
+            });
+            fs.createReadStream(filePath).pipe(res);
+          });
+          return;
+        }
+
+        // Remote mode: proxy Sandbox.data from GitHub Releases (302 → Azure Blob).
         server.middlewares.use("/renderer/Sandbox.data", (_req, res) => {
           if (!rendererDataUrl) {
             res.writeHead(502);

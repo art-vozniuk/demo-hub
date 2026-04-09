@@ -1,10 +1,27 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Button } from "@/components/ui/button";
+import { Github } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useAnalytics } from "@/hooks/useAnalytics";
 
 const RENDERER_URL = import.meta.env.VITE_RENDERER_URL as string | undefined;
 
 const Renderer = () => {
   const [isReady, setIsReady] = useState(false);
   const [progress, setProgress] = useState(0);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const { track } = useAnalytics();
+
+  const checkIfAlreadyReady = useCallback(() => {
+    try {
+      const iWin = iframeRef.current?.contentWindow as any;
+      if (iWin?.Module?.setStatus && iWin?.document?.title === "Engine") {
+        setIsReady(true);
+      }
+    } catch {
+      // cross-origin — ignore
+    }
+  }, []);
 
   useEffect(() => {
     const handleMessage = (e: MessageEvent) => {
@@ -16,21 +33,57 @@ const Renderer = () => {
       }
     };
     window.addEventListener("message", handleMessage);
-    return () => window.removeEventListener("message", handleMessage);
-  }, []);
+
+    // If the iframe loaded before this listener was set up (race condition
+    // with fast local builds), poll briefly to detect it.
+    const poll = setInterval(checkIfAlreadyReady, 500);
+    const timeout = setTimeout(() => clearInterval(poll), 60_000);
+
+    return () => {
+      window.removeEventListener("message", handleMessage);
+      clearInterval(poll);
+      clearTimeout(timeout);
+    };
+  }, [checkIfAlreadyReady]);
 
   return (
     <main className="container mx-auto px-6 py-16 space-y-8 min-h-[calc(100vh-8rem)]">
-      <section className="max-w-4xl mx-auto space-y-4 text-center animate-fade-in">
-        <h1 className="text-5xl font-bold tracking-tight sm:text-6xl">
-          <span className="text-gradient">OpenGL Renderer</span>
-        </h1>
-        <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-          Real-time 3D renderer built with a custom C++ engine. Features Phong
-          lighting, normal mapping, cubemap reflections, and post-processing
-          effects — compiled to WebAssembly via Emscripten and running in your
-          browser using WebGL 2.
-        </p>
+      <section className="max-w-4xl mx-auto space-y-6 text-center animate-fade-in">
+        <div className="space-y-4">
+          <h1 className="text-5xl font-bold tracking-tight sm:text-6xl">
+            <span className="text-gradient">3D Renderer</span>
+          </h1>
+          <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
+            Real-time 3D renderer running entirely in your browser.
+            Built from scratch in C++ with a custom rendering engine,
+            compiled to WebAssembly via Emscripten and powered by WebGL 2.
+          </p>
+          <div className="flex items-center justify-center gap-3">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="rounded-full animate-pulse-glow"
+                  asChild
+                >
+                  <a
+                    href="https://github.com/art-vozniuk/OpenGL-Renderer"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="GitHub Repository"
+                    onClick={() => track({ name: 'renderer_github_repo_clicked', params: {} })}
+                  >
+                    <Github className="h-5 w-5" />
+                  </a>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                <p>Visit the repository</p>
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </div>
       </section>
 
       <div className="max-w-5xl mx-auto">
@@ -61,6 +114,7 @@ const Renderer = () => {
                 </div>
               )}
               <iframe
+                ref={iframeRef}
                 src={RENDERER_URL}
                 className="w-full h-full border-0"
                 allow="fullscreen"

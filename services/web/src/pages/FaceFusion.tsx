@@ -163,31 +163,35 @@ const FaceFusion = () => {
             <span className="text-gradient">Try Style</span>
           </h1>
 
+          <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
+            AI-powered face swap pipeline built with Python, PyTorch and ONNX Runtime.
+            Event-driven async backend on FastAPI with RabbitMQ message orchestration.
+          </p>
+
           <div className="flex items-center justify-center gap-3">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
-                        variant="outline"
-                        size="icon"
-                        className="rounded-full animate-pulse-glow"
-                        asChild
-                    >
-                      <a
-                          href="https://github.com/art-vozniuk/demo-hub"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          aria-label="GitHub Profile"
-                          onClick={() => track({ name: 'facefusion_github_repo_clicked', params: {} })}
-                      >
-                        <Github className="h-5 w-5"/>
-                      </a>
-                    </Button>
+                  variant="outline"
+                  size="icon"
+                  className="rounded-full animate-pulse-glow"
+                  asChild
+                >
+                  <a
+                    href="https://github.com/art-vozniuk/demo-hub"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="GitHub Repository"
+                    onClick={() => track({ name: 'facefusion_github_repo_clicked', params: {} })}
+                  >
+                    <Github className="h-5 w-5" />
+                  </a>
+                </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
                 <p>Visit the repository</p>
               </TooltipContent>
             </Tooltip>
-
           </div>
 
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
