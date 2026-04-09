@@ -139,28 +139,9 @@ jobs:
           print('Patched Sandbox.html with style overrides and postMessage hook.')
           PYEOF
 
-      # Upload all build artifacts to S3 (Supabase Storage).
-      # nginx proxies /renderer/* from S3, so all files are served from the same origin.
-      - name: upload build artifacts to S3
-        if: steps.check.outputs.skip != 'true'
-        working-directory: services/external/OpenGL-Renderer/build-web
-        run: |
-          BASE="s3://${S3_BUCKET}/renderer"
-          EP="--endpoint-url ${S3_ENDPOINT}"
-
-          aws s3 cp Sandbox.html "${BASE}/Sandbox.html" ${EP} \
-            --content-type "text/html"
-
-          aws s3 cp Sandbox.js "${BASE}/Sandbox.js" ${EP} \
-            --content-type "application/javascript"
-
-          aws s3 cp Sandbox.wasm "${BASE}/Sandbox.wasm" ${EP} \
-            --content-type "application/wasm"
-
-          aws s3 cp Sandbox.data "${BASE}/data/Sandbox.data" ${EP} \
-            --content-type "application/octet-stream"
-
-      # Also upload to GitHub Releases as backup / stable URL.
+      # Sandbox.data (~250MB) exceeds Supabase S3 upload limit — upload to GitHub Releases.
+      # The release 'renderer-latest' is recreated each time so the URL stays stable.
+      # nginx proxies /renderer/data/* → GitHub Releases for the browser.
       - name: upload Sandbox.data to GitHub Releases
         if: steps.check.outputs.skip != 'true'
         working-directory: services/external/OpenGL-Renderer/build-web
@@ -175,3 +156,20 @@ jobs:
             --title "Renderer Build" \
             --notes "$COMMIT" \
             Sandbox.data
+
+      # Small files (.html, .js, .wasm) go to S3 (Supabase Storage).
+      - name: upload small files to S3
+        if: steps.check.outputs.skip != 'true'
+        working-directory: services/external/OpenGL-Renderer/build-web
+        run: |
+          BASE="s3://${S3_BUCKET}/renderer"
+          EP="--endpoint-url ${S3_ENDPOINT}"
+
+          aws s3 cp Sandbox.html "${BASE}/Sandbox.html" ${EP} \
+            --content-type "text/html"
+
+          aws s3 cp Sandbox.js "${BASE}/Sandbox.js" ${EP} \
+            --content-type "application/javascript"
+
+          aws s3 cp Sandbox.wasm "${BASE}/Sandbox.wasm" ${EP} \
+            --content-type "application/wasm"
