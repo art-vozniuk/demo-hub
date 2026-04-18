@@ -9,6 +9,7 @@ import { useAnalytics } from "@/hooks/useAnalytics";
 import type { AnalyticsEvent } from "@/types/analytics";
 import "./masonry.css";
 import {Tooltip, TooltipContent, TooltipTrigger} from "@/components/ui/tooltip.tsx";
+import { ExpandableDescription } from "@/components/ExpandableDescription";
 
 const MAX_SELECTION = 3;
 const MIN_TEMPLATES_TO_SHOW = 6;
@@ -163,10 +164,10 @@ const FaceFusion = () => {
             <span className="text-gradient">Try Style</span>
           </h1>
 
-          <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
+          <ExpandableDescription>
             AI-powered face swap pipeline built with Python, PyTorch and ONNX Runtime.
             Event-driven async backend on FastAPI with RabbitMQ message orchestration.
-          </p>
+          </ExpandableDescription>
 
           <div className="flex items-center justify-center gap-3">
             <Tooltip>

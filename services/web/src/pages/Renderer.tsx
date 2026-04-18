@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Github } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAnalytics } from "@/hooks/useAnalytics";
+import { ExpandableDescription } from "@/components/ExpandableDescription";
 
 const RENDERER_URL = import.meta.env.VITE_RENDERER_URL as string | undefined;
 
@@ -25,8 +26,8 @@ const SCENES: SceneOption[] = [
   },
   {
     id: "gsplat",
-    label: "Gaussian Splat (preview)",
-    description: "Placeholder stub — full splat renderer lands later.",
+    label: "Train (Gaussian Splat)",
+    description: "Gaussian Splatting Train scene.",
   },
 ];
 
@@ -162,11 +163,12 @@ const Renderer = () => {
           <h1 className="text-5xl font-bold tracking-tight sm:text-6xl">
             <span className="text-gradient">3D Renderer</span>
           </h1>
-          <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-            Real-time 3D renderer running entirely in your browser. Built from
-            scratch in C++ with a custom rendering engine, compiled to
-            WebAssembly via Emscripten and powered by WebGL 2.
-          </p>
+          <ExpandableDescription>
+            Real-time 3D renderer running entirely in your browser — handles
+            both classic meshes (glTF / Phong-lit Sponza) and Gaussian-splat
+            scenes. Built from scratch in C++ with a custom engine, compiled
+            to WebAssembly via Emscripten and powered by WebGL 2.
+          </ExpandableDescription>
           <div className="flex items-center justify-center gap-3">
             <Tooltip>
               <TooltipTrigger asChild>
@@ -246,13 +248,11 @@ const Renderer = () => {
                   </p>
                   <div className="w-72 h-2 bg-muted rounded-full overflow-hidden">
                     {progress ? (
+                      // Solid fill at all times — the "Decoding textures..."
+                      // label beneath conveys that the prepare phase is
+                      // still doing work without the eye-strain flicker.
                       <div
-                        className={[
-                          "h-full bg-primary rounded-full transition-[width] duration-300 ease-out",
-                          // No byte-level feedback during prepare — pulse
-                          // the full-width bar so the user sees activity.
-                          phase === "prepare" ? "animate-pulse" : "",
-                        ].join(" ")}
+                        className="h-full bg-primary rounded-full transition-[width] duration-300 ease-out"
                         style={{
                           width:
                             phase === "prepare"
@@ -261,7 +261,7 @@ const Renderer = () => {
                         }}
                       />
                     ) : (
-                      <div className="h-full w-1/3 bg-primary/60 rounded-full animate-[pulse_1.4s_ease-in-out_infinite]" />
+                      <div className="h-full w-1/3 bg-primary/60 rounded-full" />
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground/70 tabular-nums">
