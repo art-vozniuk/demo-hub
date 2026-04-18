@@ -63,10 +63,22 @@ function formatBytes(n: number): string {
 
 type Progress = { loaded: number; total: number } | null;
 
+/**
+ * Which phase the renderer iframe is in. Emscripten reports two separate
+ * ranges that both match the "(N/M)" pattern:
+ *   - Downloading the .data bundle (M = total bytes, often tens of MB)
+ *   - Preparing the scene after download (M = number of run dependencies,
+ *     typically one per packaged texture; starts from 0 again)
+ * Without distinguishing them, the progress bar visually jumps back from
+ * 100% to 0% when the second range starts, which reads as "hung".
+ */
+type LoadPhase = "download" | "prepare";
+
 const Renderer = () => {
   const [sceneId, setSceneId] = useState<string>(() => readSceneFromQuery());
   const [isReady, setIsReady] = useState(false);
   const [progress, setProgress] = useState<Progress>(null);
+  const [phase, setPhase] = useState<LoadPhase>("download");
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { track } = useAnalytics();
 
@@ -95,6 +107,7 @@ const Renderer = () => {
   useEffect(() => {
     setIsReady(false);
     setProgress(null);
+    setPhase("download");
 
     const url = new URL(window.location.href);
     if (url.searchParams.get("scene") !== sceneId) {
@@ -110,7 +123,18 @@ const Renderer = () => {
       } else if (e.data?.type === "renderer-progress") {
         const loaded = Number(e.data.loaded) || 0;
         const total = Number(e.data.total) || 0;
-        if (total > 0) setProgress({ loaded: Math.min(loaded, total), total });
+        if (total <= 0) return;
+        // Once the download phase hits 100%, any further (N/M) events come
+        // from Emscripten's "Preparing..." step (run-dependencies count).
+        // Freeze the download bar at 100% and switch labels instead of
+        // letting the bar jump back.
+        setProgress((prev) => {
+          if (prev && prev.loaded >= prev.total) {
+            setPhase("prepare");
+            return prev;
+          }
+          return { loaded: Math.min(loaded, total), total };
+        });
       }
     };
     window.addEventListener("message", handleMessage);
@@ -216,24 +240,31 @@ const Renderer = () => {
               {!isReady && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-background z-10 gap-4 px-6">
                   <p className="text-sm text-muted-foreground">
-                    Loading {activeScene.label}...
+                    {phase === "prepare"
+                      ? `Preparing ${activeScene.label}...`
+                      : `Loading ${activeScene.label}...`}
                   </p>
                   <div className="w-72 h-2 bg-muted rounded-full overflow-hidden">
-                    {/* Indeterminate shimmer before the first progress event,
-                     *   real fill afterwards. */}
                     {progress ? (
                       <div
                         className="h-full bg-primary rounded-full transition-[width] duration-300 ease-out"
-                        style={{ width: `${Math.max(progressPercent, 2)}%` }}
+                        style={{
+                          width:
+                            phase === "prepare"
+                              ? "100%"
+                              : `${Math.max(progressPercent, 2)}%`,
+                        }}
                       />
                     ) : (
                       <div className="h-full w-1/3 bg-primary/60 rounded-full animate-[pulse_1.4s_ease-in-out_infinite]" />
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground/70 tabular-nums">
-                    {progress
-                      ? `${formatBytes(progress.loaded)} / ${formatBytes(progress.total)}`
-                      : "Connecting..."}
+                    {phase === "prepare"
+                      ? "Decoding textures & uploading to GPU..."
+                      : progress
+                        ? `${formatBytes(progress.loaded)} / ${formatBytes(progress.total)}`
+                        : "Connecting..."}
                   </p>
                 </div>
               )}
