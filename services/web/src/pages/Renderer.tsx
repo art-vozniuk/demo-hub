@@ -53,10 +53,20 @@ function buildIframeSrc(base: string, sceneId: string): string {
   }
 }
 
+/** Human-readable byte size, e.g. 1536000 → "1.5 MB". */
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+type Progress = { loaded: number; total: number } | null;
+
 const Renderer = () => {
   const [sceneId, setSceneId] = useState<string>(() => readSceneFromQuery());
   const [isReady, setIsReady] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [progress, setProgress] = useState<Progress>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { track } = useAnalytics();
 
@@ -84,7 +94,7 @@ const Renderer = () => {
   // browser URL in sync so deep-links / refresh land on the same scene.
   useEffect(() => {
     setIsReady(false);
-    setProgress(0);
+    setProgress(null);
 
     const url = new URL(window.location.href);
     if (url.searchParams.get("scene") !== sceneId) {
@@ -98,8 +108,9 @@ const Renderer = () => {
       if (e.data?.type === "renderer-ready") {
         setIsReady(true);
       } else if (e.data?.type === "renderer-progress") {
-        const pct = Math.round((e.data.loaded / e.data.total) * 100);
-        setProgress(Math.min(pct, 100));
+        const loaded = Number(e.data.loaded) || 0;
+        const total = Number(e.data.total) || 0;
+        if (total > 0) setProgress({ loaded: Math.min(loaded, total), total });
       }
     };
     window.addEventListener("message", handleMessage);
@@ -114,6 +125,11 @@ const Renderer = () => {
       clearTimeout(timeout);
     };
   }, [checkIfAlreadyReady, sceneId]);
+
+  // Progress bar fill never snaps to 0 mid-load; we use an unbounded-ish
+  // fallback during the initial handshake so the user sees movement.
+  const progressFraction = progress ? progress.loaded / progress.total : 0;
+  const progressPercent = Math.min(100, progressFraction * 100);
 
   return (
     <main className="container mx-auto px-6 py-16 space-y-8 min-h-[calc(100vh-8rem)]">
@@ -198,18 +214,26 @@ const Renderer = () => {
           <>
             <div className="relative w-full" style={{ height: "75vh" }}>
               {!isReady && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-background z-10 gap-4">
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-background z-10 gap-4 px-6">
                   <p className="text-sm text-muted-foreground">
                     Loading {activeScene.label}...
                   </p>
-                  <div className="w-64 h-2 bg-muted rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-primary rounded-full transition-all duration-300 ease-out"
-                      style={{ width: `${progress}%` }}
-                    />
+                  <div className="w-72 h-2 bg-muted rounded-full overflow-hidden">
+                    {/* Indeterminate shimmer before the first progress event,
+                     *   real fill afterwards. */}
+                    {progress ? (
+                      <div
+                        className="h-full bg-primary rounded-full transition-[width] duration-300 ease-out"
+                        style={{ width: `${Math.max(progressPercent, 2)}%` }}
+                      />
+                    ) : (
+                      <div className="h-full w-1/3 bg-primary/60 rounded-full animate-[pulse_1.4s_ease-in-out_infinite]" />
+                    )}
                   </div>
-                  <p className="text-xs text-muted-foreground/60">
-                    {progress > 0 ? `${progress}%` : "Connecting..."}
+                  <p className="text-xs text-muted-foreground/70 tabular-nums">
+                    {progress
+                      ? `${formatBytes(progress.loaded)} / ${formatBytes(progress.total)}`
+                      : "Connecting..."}
                   </p>
                 </div>
               )}
