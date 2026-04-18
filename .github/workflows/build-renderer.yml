@@ -30,18 +30,28 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          CURRENT=$(git rev-parse HEAD:services/external/OpenGL-Renderer)
-          echo "current_commit=$CURRENT" >> $GITHUB_OUTPUT
+          # Build signature = submodule commit + sha256 of this workflow file.
+          # Hashing the workflow itself forces a rebuild when the build
+          # pipeline changes (upload targets, build flags, dependencies)
+          # even when the renderer source is unchanged.
+          SUBMODULE=$(git rev-parse HEAD:services/external/OpenGL-Renderer)
+          WORKFLOW_SHA=$(sha256sum .github/workflows/build-renderer.yml | cut -d' ' -f1)
+          SIGNATURE="submodule=${SUBMODULE};workflow=${WORKFLOW_SHA}"
 
-          # The deployed version is stored in the release body of 'renderer-latest'.
+          echo "current_commit=$SUBMODULE" >> $GITHUB_OUTPUT
+          echo "signature=$SIGNATURE" >> $GITHUB_OUTPUT
+
+          # Deployed signature is stored in the release body of 'renderer-latest'.
           DEPLOYED=$(gh release view renderer-latest --json body -q '.body' 2>/dev/null || echo "")
 
-          if [ "$CURRENT" = "$DEPLOYED" ]; then
+          if [ "$SIGNATURE" = "$DEPLOYED" ]; then
             echo "skip=true" >> $GITHUB_OUTPUT
-            echo "Renderer up to date at commit ${CURRENT}, skipping build."
+            echo "Renderer up to date at ${SIGNATURE}, skipping build."
           else
             echo "skip=false" >> $GITHUB_OUTPUT
-            echo "Renderer changed: '${DEPLOYED}' -> '${CURRENT}', rebuilding."
+            echo "Renderer signature changed:"
+            echo "  old: '${DEPLOYED}'"
+            echo "  new: '${SIGNATURE}'"
           fi
 
       # emsdk is large — cache it between runs to avoid re-downloading LLVM each time.
@@ -63,81 +73,6 @@ jobs:
         working-directory: services/external/OpenGL-Renderer
         run: cmake --build build-web --parallel $(nproc)
 
-      # Patch the generated Sandbox.html:
-      # 1. Hide Emscripten UI, make canvas fill the iframe viewport
-      # 2. Add postMessage hook so React knows when renderer is ready
-      - name: patch Sandbox.html
-        if: steps.check.outputs.skip != 'true'
-        working-directory: services/external/OpenGL-Renderer/build-web
-        run: |
-          python3 - <<'PYEOF'
-          with open('Sandbox.html') as f:
-              html = f.read()
-
-          style_patch = """<style>
-          #emscripten_logo, .spinner, #status, #progress, #controls, #output { display: none !important; }
-          .emscripten_border { border: none !important; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; background: transparent; }
-          canvas.emscripten { max-width: 100vw !important; max-height: 100vh !important; width: auto !important; height: auto !important; display: block; object-fit: contain; outline: none !important; }
-          body { margin: 0; overflow: hidden; background: transparent; }
-          </style>"""
-
-          assert '</head>' in html, "Could not find </head> in Sandbox.html"
-          html = html.replace('</head>', style_patch + '\n</head>', 1)
-
-          patch = f"""<script>
-          (function () {{
-            // Route .data files to /renderer/data/ (served as static files from VPS)
-            function hookLocateFile() {{
-              if (typeof Module !== 'undefined') {{
-                var origLocate = Module.locateFile || function(p) {{ return p; }};
-                Module.locateFile = function(path, prefix) {{
-                  if (path.endsWith('.data')) {{
-                    return '/renderer/data/' + path;
-                  }}
-                  return origLocate(path, prefix);
-                }};
-              }} else {{
-                requestAnimationFrame(hookLocateFile);
-              }}
-            }}
-            hookLocateFile();
-
-            function hookSetStatus() {{
-              if (typeof Module !== 'undefined' && typeof Module.setStatus === 'function') {{
-                var orig = Module.setStatus;
-                Module.setStatus = function (text) {{
-                  orig.call(Module, text);
-                  if (window.parent === window) return;
-                  if (text === '') {{
-                    window.parent.postMessage({{ type: 'renderer-ready' }}, '*');
-                    Module.setStatus = orig;
-                  }} else {{
-                    var m = text.match(/\((\d+(?:\.\d+)?)\/(\d+)\)/);
-                    if (m) {{
-                      window.parent.postMessage({{
-                        type: 'renderer-progress',
-                        loaded: parseFloat(m[1]),
-                        total: parseFloat(m[2])
-                      }}, '*');
-                    }}
-                  }}
-                }};
-              }} else {{
-                requestAnimationFrame(hookSetStatus);
-              }}
-            }}
-            hookSetStatus();
-          }})();
-          </script>"""
-
-          assert '</body>' in html, "Could not find </body> in Sandbox.html"
-          html = html.replace('</body>', patch + '\n</body>', 1)
-
-          with open('Sandbox.html', 'w') as f:
-              f.write(html)
-
-          print('Patched Sandbox.html with style overrides and postMessage hook.')
-          PYEOF
 
       # Sandbox.data (~250MB) exceeds Supabase S3 upload limit — upload to GitHub Releases.
       # The release 'renderer-latest' is recreated each time so the URL stays stable.
@@ -148,13 +83,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          COMMIT="${{ steps.check.outputs.current_commit }}"
+          SIGNATURE="${{ steps.check.outputs.signature }}"
 
-          # Delete old release if exists, then recreate with current commit in body.
+          # Delete old release if exists, then recreate with current build
+          # signature (submodule sha + workflow hash) stored in the body.
           gh release delete renderer-latest --yes 2>/dev/null || true
           gh release create renderer-latest \
             --title "Renderer Build" \
-            --notes "$COMMIT" \
+            --notes "$SIGNATURE" \
             Sandbox.data
 
       # Small files (.html, .js, .wasm) go to S3 (Supabase Storage).

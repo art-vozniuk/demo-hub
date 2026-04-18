@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Github } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -6,12 +6,69 @@ import { useAnalytics } from "@/hooks/useAnalytics";
 
 const RENDERER_URL = import.meta.env.VITE_RENDERER_URL as string | undefined;
 
+/**
+ * The list of scenes the WASM renderer knows about. The `id` here must
+ * match the id passed to SCENE_REGISTER(...) on the C++ side. Adding a
+ * new scene server-side means adding a new entry here.
+ */
+type SceneOption = {
+  id: string;
+  label: string;
+  description: string;
+};
+
+const SCENES: SceneOption[] = [
+  {
+    id: "sponza",
+    label: "Sponza",
+    description: "Classic Phong-lit scene with normal maps + cubemap.",
+  },
+  {
+    id: "gsplat",
+    label: "Gaussian Splat (preview)",
+    description: "Placeholder stub — full splat renderer lands later.",
+  },
+];
+
+const DEFAULT_SCENE_ID = "sponza";
+
+/** Returns a scene id from ?scene= (if valid) or the default. */
+function readSceneFromQuery(): string {
+  if (typeof window === "undefined") return DEFAULT_SCENE_ID;
+  const param = new URLSearchParams(window.location.search).get("scene");
+  if (!param) return DEFAULT_SCENE_ID;
+  return SCENES.some((s) => s.id === param) ? param : DEFAULT_SCENE_ID;
+}
+
+/** Appends / overwrites the ?scene= query on the iframe URL. */
+function buildIframeSrc(base: string, sceneId: string): string {
+  try {
+    const url = new URL(base, window.location.origin);
+    url.searchParams.set("scene", sceneId);
+    return url.toString();
+  } catch {
+    // base wasn't absolute — do a naive concat.
+    const sep = base.includes("?") ? "&" : "?";
+    return `${base}${sep}scene=${encodeURIComponent(sceneId)}`;
+  }
+}
+
 const Renderer = () => {
+  const [sceneId, setSceneId] = useState<string>(() => readSceneFromQuery());
   const [isReady, setIsReady] = useState(false);
   const [progress, setProgress] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { track } = useAnalytics();
 
+  const iframeSrc = useMemo(
+    () => (RENDERER_URL ? buildIframeSrc(RENDERER_URL, sceneId) : undefined),
+    [sceneId],
+  );
+
+  const activeScene = SCENES.find((s) => s.id === sceneId) ?? SCENES[0];
+
+  /** Fast path: detect "already ready" if the iframe finished loading before
+   *  the message listener was installed (common on cached reloads). */
   const checkIfAlreadyReady = useCallback(() => {
     try {
       const iWin = iframeRef.current?.contentWindow as any;
@@ -22,6 +79,19 @@ const Renderer = () => {
       // cross-origin — ignore
     }
   }, []);
+
+  // Reset loading state whenever the selected scene changes, and keep the
+  // browser URL in sync so deep-links / refresh land on the same scene.
+  useEffect(() => {
+    setIsReady(false);
+    setProgress(0);
+
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("scene") !== sceneId) {
+      url.searchParams.set("scene", sceneId);
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, [sceneId]);
 
   useEffect(() => {
     const handleMessage = (e: MessageEvent) => {
@@ -34,8 +104,7 @@ const Renderer = () => {
     };
     window.addEventListener("message", handleMessage);
 
-    // If the iframe loaded before this listener was set up (race condition
-    // with fast local builds), poll briefly to detect it.
+    // Iframe may have loaded before the listener was ready on fast reloads.
     const poll = setInterval(checkIfAlreadyReady, 500);
     const timeout = setTimeout(() => clearInterval(poll), 60_000);
 
@@ -44,7 +113,7 @@ const Renderer = () => {
       clearInterval(poll);
       clearTimeout(timeout);
     };
-  }, [checkIfAlreadyReady]);
+  }, [checkIfAlreadyReady, sceneId]);
 
   return (
     <main className="container mx-auto px-6 py-16 space-y-8 min-h-[calc(100vh-8rem)]">
@@ -54,9 +123,9 @@ const Renderer = () => {
             <span className="text-gradient">3D Renderer</span>
           </h1>
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-            Real-time 3D renderer running entirely in your browser.
-            Built from scratch in C++ with a custom rendering engine,
-            compiled to WebAssembly via Emscripten and powered by WebGL 2.
+            Real-time 3D renderer running entirely in your browser. Built from
+            scratch in C++ with a custom rendering engine, compiled to
+            WebAssembly via Emscripten and powered by WebGL 2.
           </p>
           <div className="flex items-center justify-center gap-3">
             <Tooltip>
@@ -72,7 +141,9 @@ const Renderer = () => {
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label="GitHub Repository"
-                    onClick={() => track({ name: 'renderer_github_repo_clicked', params: {} })}
+                    onClick={() =>
+                      track({ name: "renderer_github_repo_clicked", params: {} })
+                    }
                   >
                     <Github className="h-5 w-5" />
                   </a>
@@ -86,21 +157,50 @@ const Renderer = () => {
         </div>
       </section>
 
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-5xl mx-auto space-y-3">
+        {/* Scene tabs — styled as pills, key by id so the iframe remounts on
+         *   change (ensures the WASM module re-reads ?scene=). */}
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {SCENES.map((s) => {
+            const active = s.id === sceneId;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => {
+                  if (s.id !== sceneId) {
+                    track({
+                      name: "renderer_scene_switched",
+                      params: { scene_id: s.id },
+                    });
+                    setSceneId(s.id);
+                  }
+                }}
+                className={[
+                  "px-3 py-1.5 rounded-full text-sm border transition-colors",
+                  active
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-muted/40 border-border text-muted-foreground hover:bg-muted",
+                ].join(" ")}
+                aria-pressed={active}
+              >
+                {s.label}
+              </button>
+            );
+          })}
+        </div>
+
         {!RENDERER_URL ? (
           <div className="flex items-center justify-center rounded-lg border border-border text-muted-foreground h-96">
             Renderer is not configured.
           </div>
         ) : (
           <>
-            <div
-              className="relative w-full"
-              style={{ height: "75vh" }}
-            >
+            <div className="relative w-full" style={{ height: "75vh" }}>
               {!isReady && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-background z-10 gap-4">
                   <p className="text-sm text-muted-foreground">
-                    Loading renderer and assets...
+                    Loading {activeScene.label}...
                   </p>
                   <div className="w-64 h-2 bg-muted rounded-full overflow-hidden">
                     <div
@@ -113,12 +213,15 @@ const Renderer = () => {
                   </p>
                 </div>
               )}
+              {/* key={sceneId} forces remount on scene switch so the WASM
+               *   module restarts cleanly with the new ?scene= param. */}
               <iframe
+                key={sceneId}
                 ref={iframeRef}
-                src={RENDERER_URL}
+                src={iframeSrc}
                 className="w-full h-full border-0 outline-none"
                 allow="fullscreen"
-                title="OpenGL Renderer"
+                title={`Renderer — ${activeScene.label}`}
               />
             </div>
 
