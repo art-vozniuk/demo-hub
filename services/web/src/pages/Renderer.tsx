@@ -124,17 +124,17 @@ const Renderer = () => {
         const loaded = Number(e.data.loaded) || 0;
         const total = Number(e.data.total) || 0;
         if (total <= 0) return;
-        // Once the download phase hits 100%, any further (N/M) events come
-        // from Emscripten's "Preparing..." step (run-dependencies count).
-        // Freeze the download bar at 100% and switch labels instead of
-        // letting the bar jump back.
+        const capped = Math.min(loaded, total);
         setProgress((prev) => {
-          if (prev && prev.loaded >= prev.total) {
-            setPhase("prepare");
-            return prev;
-          }
-          return { loaded: Math.min(loaded, total), total };
+          // Freeze display once the download has reached 100% — Emscripten
+          // stops emitting (N/M) messages during the texture-unpack +
+          // wasm-init phase (observed ~6s of silence on prod before
+          // renderer-ready fires), so we switch labels rather than let the
+          // bar appear stuck on a download counter.
+          if (prev && prev.loaded >= prev.total) return prev;
+          return { loaded: capped, total };
         });
+        if (capped >= total) setPhase("prepare");
       }
     };
     window.addEventListener("message", handleMessage);
@@ -247,7 +247,12 @@ const Renderer = () => {
                   <div className="w-72 h-2 bg-muted rounded-full overflow-hidden">
                     {progress ? (
                       <div
-                        className="h-full bg-primary rounded-full transition-[width] duration-300 ease-out"
+                        className={[
+                          "h-full bg-primary rounded-full transition-[width] duration-300 ease-out",
+                          // No byte-level feedback during prepare — pulse
+                          // the full-width bar so the user sees activity.
+                          phase === "prepare" ? "animate-pulse" : "",
+                        ].join(" ")}
                         style={{
                           width:
                             phase === "prepare"
