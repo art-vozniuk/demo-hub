@@ -71,6 +71,13 @@ jobs:
       - name: build
         if: steps.check.outputs.skip != 'true'
         working-directory: services/external/OpenGL-Renderer
+        env:
+          # Stamp a unique tag into the Sandbox.html .data URL so browsers
+          # skip stale .data cached from an older build (a new Sandbox.js
+          # reading offsets from an old .data silently returns garbage).
+          # Using the submodule commit keeps the URL stable within one
+          # deploy and changes every time the bundle is regenerated.
+          BUILD_TAG: ${{ steps.check.outputs.current_commit }}
         run: cmake --build build-web --parallel $(nproc)
 
 
