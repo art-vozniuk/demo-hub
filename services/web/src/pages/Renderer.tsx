@@ -54,6 +54,43 @@ type Progress = { loaded: number; total: number } | null;
  */
 type LoadPhase = "wasm" | "scene" | "decoding";
 
+/**
+ * Camera-control instructions, swapped at runtime depending on the
+ * primary input. Touch devices get the joystick legend; everywhere else
+ * gets the WASD/QE legend (matches the desktop FlyCamera bindings).
+ */
+const CameraHelp = () => {
+  const isCoarse =
+    typeof window !== "undefined" &&
+    window.matchMedia &&
+    window.matchMedia("(pointer: coarse)").matches;
+
+  if (isCoarse) {
+    return (
+      <p className="mt-3 text-xs text-muted-foreground text-center">
+        Drag the left stick to fly · drag the right stick to look ·{" "}
+        <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">▲</kbd>{" "}
+        <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">▼</kbd>{" "}
+        to ascend / descend
+      </p>
+    );
+  }
+
+  return (
+    <p className="mt-3 text-xs text-muted-foreground text-center">
+      Hold{" "}
+      <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">LMB</kbd>{" "}
+      and use{" "}
+      <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">
+        W A S D
+      </kbd>{" "}
+      to move,{" "}
+      <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">Q E</kbd>{" "}
+      to rise / fall
+    </p>
+  );
+};
+
 const Renderer = () => {
   const [scenes, setScenes] = useState<SplatSceneRead[]>([]);
   const [scenesError, setScenesError] = useState<string | null>(null);
@@ -330,19 +367,7 @@ const Renderer = () => {
               />
             </div>
 
-            {isReady && (
-              <p className="mt-3 text-xs text-muted-foreground text-center">
-                Hold{" "}
-                <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">
-                  LMB
-                </kbd>{" "}
-                and use{" "}
-                <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">
-                  W A S D
-                </kbd>{" "}
-                to move the camera
-              </p>
-            )}
+            {isReady && <CameraHelp />}
           </div>
         )}
       </div>
