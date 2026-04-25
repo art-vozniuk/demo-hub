@@ -113,11 +113,18 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
           GH_ACTOR: ${{ github.actor }}
           GH_REPO: ${{ github.repository }}
+          # Mirror check-changes outputs into env so the SSH script can
+          # skip pulling images for services that didn't change. Saves
+          # ~3.67 GB / ~5 minutes per deploy when only core or web moved
+          # (compute image is the heavyweight one).
+          CHANGED_CORE: ${{ needs.check-changes.outputs.core }}
+          CHANGED_WEB: ${{ needs.check-changes.outputs.web }}
+          CHANGED_COMPUTE: ${{ needs.check-changes.outputs.compute }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: RABBITMQ_USER,RABBITMQ_PASSWORD,CERTBOT_EMAIL,CERTBOT_DOMAINS,GHCR_TOKEN,GH_ACTOR,GH_REPO
+          envs: RABBITMQ_USER,RABBITMQ_PASSWORD,CERTBOT_EMAIL,CERTBOT_DOMAINS,GHCR_TOKEN,GH_ACTOR,GH_REPO,CHANGED_CORE,CHANGED_WEB,CHANGED_COMPUTE
           script: |
             set -euo pipefail
 
@@ -146,8 +153,22 @@ jobs:
             echo "Logging in to GHCR..."
             echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GH_ACTOR}" --password-stdin
 
-            echo "Pulling latest images..."
-            docker compose pull
+            # Pull only services whose source actually changed since the
+            # last deploy. The compute image is ~3.67 GB (PyTorch + ONNX
+            # + insightface + reactor-face-swap), so an unconditional
+            # `docker compose pull` adds ~5 minutes to every deploy even
+            # for a tiny core/web change. check-changes already computed
+            # which services moved — re-use those flags here.
+            services_to_pull=""
+            [ "${CHANGED_CORE:-true}"    = "true" ] && services_to_pull="$services_to_pull core"
+            [ "${CHANGED_WEB:-true}"     = "true" ] && services_to_pull="$services_to_pull web"
+            [ "${CHANGED_COMPUTE:-true}" = "true" ] && services_to_pull="$services_to_pull compute"
+            if [ -n "$services_to_pull" ]; then
+              echo "Pulling images for changed services:$services_to_pull"
+              docker compose pull $services_to_pull
+            else
+              echo "No service images changed since last deploy — skipping pull."
+            fi
 
             echo "Starting / updating services..."
             docker compose up -d --remove-orphans --scale compute=1
