@@ -78,20 +78,14 @@ def upgrade() -> None:
         # while still letting us pull the whole tuple in one column.
         sa.Column("camera_eye", ARRAY(sa.Float(), dimensions=1), nullable=False),
         sa.Column("camera_fwd", ARRAY(sa.Float(), dimensions=1), nullable=False),
-        sa.Column(
-            "sort_order", sa.Integer(), nullable=False, server_default="0"
-        ),
+        sa.Column("sort_order", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("slug", name="uq_splat_scenes_slug"),
     )
-    op.create_index(
-        op.f("ix_splat_scenes_id"), "splat_scenes", ["id"], unique=False
-    )
-    op.create_index(
-        op.f("ix_splat_scenes_slug"), "splat_scenes", ["slug"], unique=True
-    )
+    op.create_index(op.f("ix_splat_scenes_id"), "splat_scenes", ["id"], unique=False)
+    op.create_index(op.f("ix_splat_scenes_slug"), "splat_scenes", ["slug"], unique=True)
 
     # Seed 3 starter scenes. Bulk insert via op.bulk_insert reflects the
     # full table schema, so created_at / updated_at need explicit values
@@ -115,10 +109,7 @@ def upgrade() -> None:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     op.bulk_insert(
         splat_scenes,
-        [
-            {**row, "created_at": now, "updated_at": now}
-            for row in SEED_SCENES
-        ],
+        [{**row, "created_at": now, "updated_at": now} for row in SEED_SCENES],
     )
 
 
