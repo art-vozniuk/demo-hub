@@ -8,7 +8,10 @@ from alembic import context
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
+# env.py path is services/core/migrations/env.py — three parents up to
+# the repo root (was four when this file lived under
+# services/common/database/migrations/).
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 

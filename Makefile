@@ -60,7 +60,7 @@ run-latest-core:
 # Database migrations
 DB_CMD = PYTHONPATH="$(PWD)" \
 	set -a && source services/core/.env && set +a && \
-	alembic -c services/common/database/alembic.ini
+	alembic -c services/core/alembic.ini
 
 db-migrate:
 	@echo "Running migrations..."
