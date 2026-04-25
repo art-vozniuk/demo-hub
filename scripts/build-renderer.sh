@@ -16,7 +16,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-RENDERER_DIR="$ROOT_DIR/services/external/OpenGL-Renderer"
+RENDERER_DIR="$ROOT_DIR/services/external/renderer"
 BUILD_DIR="$RENDERER_DIR/build-web"
 
 # Activate emsdk

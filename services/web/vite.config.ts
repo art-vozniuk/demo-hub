@@ -10,7 +10,7 @@ export default defineConfig(({ mode }) => {
   const s3Public = env.VITE_S3_PUBLIC_BUCKETS_ENDPOINT || "";
   const rendererDataUrl = env.RENDERER_DATA_URL || "";
   const rendererLocal = env.RENDERER_LOCAL === "true";
-  const localBuildDir = path.resolve(__dirname, "../external/OpenGL-Renderer/build-web");
+  const localBuildDir = path.resolve(__dirname, "../external/renderer/build-web");
 
   return {
   server: {

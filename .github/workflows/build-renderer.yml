@@ -34,7 +34,7 @@ jobs:
           # Hashing the workflow itself forces a rebuild when the build
           # pipeline changes (upload targets, build flags, dependencies)
           # even when the renderer source is unchanged.
-          SUBMODULE=$(git rev-parse HEAD:services/external/OpenGL-Renderer)
+          SUBMODULE=$(git rev-parse HEAD:services/external/renderer)
           WORKFLOW_SHA=$(sha256sum .github/workflows/build-renderer.yml | cut -d' ' -f1)
           SIGNATURE="submodule=${SUBMODULE};workflow=${WORKFLOW_SHA}"
 
@@ -65,12 +65,12 @@ jobs:
 
       - name: configure (emcmake)
         if: steps.check.outputs.skip != 'true'
-        working-directory: services/external/OpenGL-Renderer
+        working-directory: services/external/renderer
         run: emcmake cmake -B build-web -DCMAKE_BUILD_TYPE=Release
 
       - name: build
         if: steps.check.outputs.skip != 'true'
-        working-directory: services/external/OpenGL-Renderer
+        working-directory: services/external/renderer
         env:
           # Stamp a unique tag into the Sandbox.html .data URL so browsers
           # skip stale .data cached from an older build (a new Sandbox.js
@@ -86,7 +86,7 @@ jobs:
       # nginx proxies /renderer/data/* → GitHub Releases for the browser.
       - name: upload Sandbox.data to GitHub Releases
         if: steps.check.outputs.skip != 'true'
-        working-directory: services/external/OpenGL-Renderer/build-web
+        working-directory: services/external/renderer/build-web
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -103,7 +103,7 @@ jobs:
       # Small files (.html, .js, .wasm) go to S3 (Supabase Storage).
       - name: upload small files to S3
         if: steps.check.outputs.skip != 'true'
-        working-directory: services/external/OpenGL-Renderer/build-web
+        working-directory: services/external/renderer/build-web
         run: |
           BASE="s3://${S3_BUCKET}/renderer"
           EP="--endpoint-url ${S3_ENDPOINT}"

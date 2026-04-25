@@ -179,7 +179,7 @@ const Renderer = () => {
                   asChild
                 >
                   <a
-                    href="https://github.com/art-vozniuk/OpenGL-Renderer"
+                    href="https://github.com/art-vozniuk/renderer"
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label="GitHub Repository"

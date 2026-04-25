@@ -76,7 +76,7 @@ jobs:
     secrets: inherit
 
   # Runs in parallel with other builds. Skips the Emscripten compile when the
-  # OpenGL-Renderer submodule commit hasn't changed since the last deploy.
+  # renderer submodule commit hasn't changed since the last deploy.
   build-renderer:
     uses: ./.github/workflows/build-renderer.yml
     secrets: inherit
