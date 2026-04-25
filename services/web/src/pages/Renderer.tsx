@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Github } from "lucide-react";
+import { ArrowLeft, Github, Activity } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { ExpandableDescription } from "@/components/ExpandableDescription";
@@ -55,6 +55,110 @@ type Progress = { loaded: number; total: number } | null;
 type LoadPhase = "wasm" | "scene" | "decoding";
 
 /**
+ * Perf metrics blob from the renderer iframe (see PerfMetrics::Emit on
+ * the C++ side). Each timing entry is in milliseconds; gpuValid is false
+ * when the device didn't grant the timestamp-query feature, in which
+ * case the GPU rows are zero and shouldn't be displayed.
+ */
+type PerfStat = { cur: number; avg: number; max: number };
+type PerfData = {
+  frame: PerfStat;
+  cpuEncode: PerfStat;
+  gpuSort: PerfStat;
+  gpuRender: PerfStat;
+  gpuTotal: PerfStat;
+  splats: number;
+  gpuValid: boolean;
+};
+
+/**
+ * Floating perf table laid over the iframe. Shows a 5-second rolling
+ * window of per-frame timings — current, average, max — for the four
+ * GPU phases the renderer instruments plus CPU encode + total frame
+ * interval. Honest about its limits: when the device hasn't granted
+ * the timestamp-query feature, the GPU rows are dim and explicit
+ * about being unavailable.
+ */
+const PerfOverlay = ({ perf }: { perf: PerfData | null }) => {
+  const Row = ({
+    label,
+    stat,
+    dim,
+  }: {
+    label: string;
+    stat?: PerfStat;
+    dim?: boolean;
+  }) => {
+    const v = stat ?? { cur: 0, avg: 0, max: 0 };
+    const fmt = (n: number) => n.toFixed(1).padStart(5, " ");
+    return (
+      <tr className={dim ? "text-muted-foreground/50" : ""}>
+        <td className="pr-3 py-0.5">{label}</td>
+        <td className="px-2 py-0.5 text-right tabular-nums">{fmt(v.cur)}</td>
+        <td className="px-2 py-0.5 text-right tabular-nums">{fmt(v.avg)}</td>
+        <td className="pl-2 py-0.5 text-right tabular-nums">{fmt(v.max)}</td>
+      </tr>
+    );
+  };
+
+  const fps = perf && perf.frame.cur > 0 ? 1000 / perf.frame.cur : 0;
+
+  return (
+    <div className="absolute top-3 right-3 z-20 pointer-events-none">
+      <div className="rounded-md border border-border bg-background/85 backdrop-blur px-3 py-2 text-xs font-mono shadow-md min-w-[260px]">
+        <div className="flex items-center justify-between mb-1">
+          <span className="font-semibold">Perf · 5s window</span>
+          <span className="text-muted-foreground">
+            {fps > 0 ? `${fps.toFixed(0)} fps` : "—"}
+          </span>
+        </div>
+        <table className="w-full">
+          <thead>
+            <tr className="text-muted-foreground/70">
+              <th className="text-left font-normal pr-3 pb-1"></th>
+              <th className="text-right font-normal px-2 pb-1">cur</th>
+              <th className="text-right font-normal px-2 pb-1">avg</th>
+              <th className="text-right font-normal pl-2 pb-1">max</th>
+            </tr>
+          </thead>
+          <tbody>
+            <Row label="frame ms"   stat={perf?.frame} />
+            <Row label="cpu enc ms" stat={perf?.cpuEncode} />
+            <Row
+              label="gpu sort ms"
+              stat={perf?.gpuSort}
+              dim={!perf?.gpuValid}
+            />
+            <Row
+              label="gpu render ms"
+              stat={perf?.gpuRender}
+              dim={!perf?.gpuValid}
+            />
+            <Row
+              label="gpu total ms"
+              stat={perf?.gpuTotal}
+              dim={!perf?.gpuValid}
+            />
+          </tbody>
+        </table>
+        <div className="mt-1 pt-1 border-t border-border/50 flex justify-between text-muted-foreground">
+          <span>splats</span>
+          <span className="tabular-nums">
+            {(perf?.splats ?? 0).toLocaleString()}
+          </span>
+        </div>
+        {perf && !perf.gpuValid && (
+          <div className="mt-1 text-[10px] text-muted-foreground/70 leading-tight">
+            GPU timings unavailable on this device · timestamp-query feature
+            not granted by the browser
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/**
  * Camera-control instructions, swapped at runtime depending on the
  * primary input. Touch devices get the joystick legend; everywhere else
  * gets the WASD/QE legend (matches the desktop FlyCamera bindings).
@@ -98,6 +202,11 @@ const Renderer = () => {
   const [isReady, setIsReady] = useState(false);
   const [progress, setProgress] = useState<Progress>(null);
   const [phase, setPhase] = useState<LoadPhase>("wasm");
+  const [perfOpen, setPerfOpen] = useState(false);
+  const [perf, setPerf] = useState<PerfData | null>(null);
+  // Throttle UI updates to ~10 Hz (the iframe posts ~60 Hz). Avoids
+  // unnecessary re-renders when the panel is open.
+  const lastPerfUpdateRef = useRef(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { track } = useAnalytics();
 
@@ -181,6 +290,21 @@ const Renderer = () => {
           /* cross-origin — ignore */
         }
         setIsReady(true);
+      } else if (t === "perf") {
+        // Per-frame metrics from C++. Throttle render-side updates so we
+        // don't churn React 60×/s — the panel only needs to feel "live".
+        const now = performance.now();
+        if (now - lastPerfUpdateRef.current < 100) return;
+        lastPerfUpdateRef.current = now;
+        setPerf({
+          frame:     e.data.frame,
+          cpuEncode: e.data.cpuEncode,
+          gpuSort:   e.data.gpuSort,
+          gpuRender: e.data.gpuRender,
+          gpuTotal:  e.data.gpuTotal,
+          splats:    Number(e.data.splats) || 0,
+          gpuValid:  Boolean(e.data.gpuValid),
+        });
       }
     };
     window.addEventListener("message", handleMessage);
@@ -324,10 +448,30 @@ const Renderer = () => {
                 <ArrowLeft className="h-4 w-4" />
                 Back to scenes
               </Button>
-              <div className="text-sm text-muted-foreground">{selected.title}</div>
+              <div className="flex items-center gap-2">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant={perfOpen ? "default" : "ghost"}
+                      size="sm"
+                      onClick={() => setPerfOpen((v) => !v)}
+                      className="gap-1"
+                      aria-pressed={perfOpen}
+                      aria-label="Toggle perf overlay"
+                    >
+                      <Activity className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    <p>Toggle perf overlay</p>
+                  </TooltipContent>
+                </Tooltip>
+                <div className="text-sm text-muted-foreground">{selected.title}</div>
+              </div>
             </div>
 
             <div className="relative w-full" style={{ height: "75vh" }}>
+              {perfOpen && isReady && <PerfOverlay perf={perf} /> }
               {!isReady && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-background z-10 gap-4 px-6">
                   <p className="text-sm text-muted-foreground">{phaseLabel}</p>
