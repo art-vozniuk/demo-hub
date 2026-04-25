@@ -1,7 +1,8 @@
 export { apiClient, ApiError } from "./client";
 export { recastApi } from "./core/recast";
+export { splatsApi } from "./core/splats";
 export { pipelinesApi } from "./core/pipelines";
-export type { RecastTemplateRead } from "./types/core";
+export type { RecastTemplateRead, SplatSceneRead } from "./types/core";
 export type {
   PipelineJobInput,
   QueuePipelinesRequest,

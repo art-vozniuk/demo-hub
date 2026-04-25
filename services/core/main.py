@@ -11,6 +11,7 @@ import services.common.logging.config as logging_config
 logging_config.configure()
 
 from services.core.app.recast.router import router as recast_router
+from services.core.app.splats.router import router as splats_router
 from services.core.app.pipelines.router import router as pipelines_router
 from services.core.app.auth.router import router as auth_router
 from services.common.middleware.exception import ExceptionMiddleware
@@ -94,5 +95,6 @@ app.add_middleware(DatabaseMiddleware)
 
 
 app.include_router(recast_router, prefix="/api/v1/recast", tags=["recast"])
+app.include_router(splats_router, prefix="/api/v1/splats", tags=["splats"])
 app.include_router(pipelines_router, prefix="/api/v1/pipelines", tags=["pipelines"])
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])

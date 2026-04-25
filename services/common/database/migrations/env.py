@@ -17,6 +17,7 @@ from services.common.database.core import Base  # noqa: E402
 
 # import all models here
 from services.core.app.recast.models import RecastTemplate  # noqa
+from services.core.app.splats.models import SplatScene  # noqa
 from services.core.app.pipelines.models import Pipeline  # noqa
 
 config = context.config

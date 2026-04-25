@@ -1,51 +1,33 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { Github } from "lucide-react";
+import { ArrowLeft, Github } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { ExpandableDescription } from "@/components/ExpandableDescription";
+import { splatsApi, SplatSceneRead } from "@/api";
 
 const RENDERER_URL = import.meta.env.VITE_RENDERER_URL as string | undefined;
 
 /**
- * The list of scenes the WASM renderer knows about. The `id` here must
- * match the id passed to SCENE_REGISTER(...) on the C++ side. Adding a
- * new scene server-side means adding a new entry here.
+ * Build the iframe src with the runtime params the renderer needs:
+ *   ?scene=<slug>      — telemetry / debugging label
+ *   ?scene_url=<url>   — fetched at runtime via emscripten_fetch
+ *   ?eye=x,y,z         — initial camera position
+ *   ?fwd=x,y,z         — initial camera forward (look direction)
  */
-type SceneOption = {
-  id: string;
-  label: string;
-  description: string;
-};
-
-const SCENES: SceneOption[] = [
-  {
-    id: "gsplat",
-    label: "Train (Gaussian Splat)",
-    description: "Gaussian Splatting Train scene.",
-  },
-];
-
-const DEFAULT_SCENE_ID = "gsplat";
-
-/** Returns a scene id from ?scene= (if valid) or the default. */
-function readSceneFromQuery(): string {
-  if (typeof window === "undefined") return DEFAULT_SCENE_ID;
-  const param = new URLSearchParams(window.location.search).get("scene");
-  if (!param) return DEFAULT_SCENE_ID;
-  return SCENES.some((s) => s.id === param) ? param : DEFAULT_SCENE_ID;
-}
-
-/** Appends / overwrites the ?scene= query on the iframe URL. */
-function buildIframeSrc(base: string, sceneId: string): string {
+function buildIframeSrc(base: string, scene: SplatSceneRead): string {
+  const params = new URLSearchParams();
+  params.set("scene", scene.slug);
+  params.set("scene_url", scene.scene_url);
+  params.set("eye", scene.camera_eye.join(","));
+  params.set("fwd", scene.camera_fwd.join(","));
   try {
     const url = new URL(base, window.location.origin);
-    url.searchParams.set("scene", sceneId);
+    params.forEach((v, k) => url.searchParams.set(k, v));
     return url.toString();
   } catch {
-    // base wasn't absolute — do a naive concat.
     const sep = base.includes("?") ? "&" : "?";
-    return `${base}${sep}scene=${encodeURIComponent(sceneId)}`;
+    return `${base}${sep}${params.toString()}`;
   }
 }
 
@@ -60,82 +42,112 @@ function formatBytes(n: number): string {
 type Progress = { loaded: number; total: number } | null;
 
 /**
- * Which phase the renderer iframe is in. Emscripten reports two separate
- * ranges that both match the "(N/M)" pattern:
- *   - Downloading the .data bundle (M = total bytes, often tens of MB)
- *   - Preparing the scene after download (M = number of run dependencies,
- *     typically one per packaged texture; starts from 0 again)
- * Without distinguishing them, the progress bar visually jumps back from
- * 100% to 0% when the second range starts, which reads as "hung".
+ * The viewer goes through three serial loading phases that all surface
+ * progress through the same overlay:
+ *   - "wasm"      — Emscripten preloads Sandbox.data + boots the WASM
+ *                   module. After moving train.splat to S3 this is small.
+ *   - "scene"     — emscripten_fetch downloads the .splat blob from S3.
+ *                   This is the dominant phase for large scenes (~30 MB).
+ *   - "decoding"  — splat is in memory, being parsed and uploaded to GPU
+ *                   buffers. No byte-level progress here — fixed label.
+ * `splat-ready` from the C++ side flips the gate to render-mode.
  */
-type LoadPhase = "download" | "prepare";
+type LoadPhase = "wasm" | "scene" | "decoding";
 
 const Renderer = () => {
-  const [sceneId, setSceneId] = useState<string>(() => readSceneFromQuery());
+  const [scenes, setScenes] = useState<SplatSceneRead[]>([]);
+  const [scenesError, setScenesError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<SplatSceneRead | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [progress, setProgress] = useState<Progress>(null);
-  const [phase, setPhase] = useState<LoadPhase>("download");
+  const [phase, setPhase] = useState<LoadPhase>("wasm");
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { track } = useAnalytics();
 
-  const iframeSrc = useMemo(
-    () => (RENDERER_URL ? buildIframeSrc(RENDERER_URL, sceneId) : undefined),
-    [sceneId],
-  );
+  // Initial scene list fetch.
+  useEffect(() => {
+    let alive = true;
+    splatsApi
+      .getScenes()
+      .then((list) => {
+        if (alive) setScenes(list);
+      })
+      .catch((err) => {
+        if (alive) setScenesError(err?.message ?? "Failed to load scenes");
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
-  const activeScene = SCENES.find((s) => s.id === sceneId) ?? SCENES[0];
+  const iframeSrc = useMemo(
+    () =>
+      RENDERER_URL && selected
+        ? buildIframeSrc(RENDERER_URL, selected)
+        : undefined,
+    [selected],
+  );
 
   /** Fast path: detect "already ready" if the iframe finished loading before
    *  the message listener was installed (common on cached reloads). */
   const checkIfAlreadyReady = useCallback(() => {
     try {
       const iWin = iframeRef.current?.contentWindow as any;
-      if (iWin?.Module?.setStatus && iWin?.document?.title === "Engine") {
-        setIsReady(true);
-      }
+      // We can only assume readiness when both the WASM runtime AND the
+      // splat fetch are done. The latter signals via `__splatReady` flag
+      // (set when the iframe posts splat-ready — see below).
+      if (iWin?.Module?.setStatus && iWin?.__splatReady) setIsReady(true);
     } catch {
       // cross-origin — ignore
     }
   }, []);
 
-  // Reset loading state whenever the selected scene changes, and keep the
-  // browser URL in sync so deep-links / refresh land on the same scene.
+  // Reset loading state when the user picks a (different) scene.
   useEffect(() => {
     setIsReady(false);
     setProgress(null);
-    setPhase("download");
-
-    const url = new URL(window.location.href);
-    if (url.searchParams.get("scene") !== sceneId) {
-      url.searchParams.set("scene", sceneId);
-      window.history.replaceState({}, "", url.toString());
-    }
-  }, [sceneId]);
+    setPhase("wasm");
+  }, [selected?.slug]);
 
   useEffect(() => {
+    if (!selected) return;
     const handleMessage = (e: MessageEvent) => {
-      if (e.data?.type === "renderer-ready") {
-        setIsReady(true);
-      } else if (e.data?.type === "renderer-progress") {
+      const t = e.data?.type;
+      if (t === "renderer-ready") {
+        // WASM module booted; splat is still downloading. Move into the
+        // scene phase but keep the overlay up.
+        setPhase((p) => (p === "wasm" ? "scene" : p));
+      } else if (t === "renderer-progress") {
+        // Sandbox.data preload (small now). Drives the bar in "wasm" phase.
         const loaded = Number(e.data.loaded) || 0;
         const total = Number(e.data.total) || 0;
         if (total <= 0) return;
-        const capped = Math.min(loaded, total);
         setProgress((prev) => {
-          // Freeze display once the download has reached 100% — Emscripten
-          // stops emitting (N/M) messages during the texture-unpack +
-          // wasm-init phase (observed ~6s of silence on prod before
-          // renderer-ready fires), so we switch labels rather than let the
-          // bar appear stuck on a download counter.
           if (prev && prev.loaded >= prev.total) return prev;
-          return { loaded: capped, total };
+          return { loaded: Math.min(loaded, total), total };
         });
-        if (capped >= total) setPhase("prepare");
+      } else if (t === "splat-progress") {
+        const loaded = Number(e.data.loaded) || 0;
+        const total = Number(e.data.total) || 0;
+        if (total <= 0) return;
+        setPhase("scene");
+        setProgress({ loaded: Math.min(loaded, total), total });
+      } else if (t === "splat-decoding") {
+        setPhase("decoding");
+      } else if (t === "splat-ready") {
+        // Stamp a flag inside the iframe so the cached-reload poll in
+        // checkIfAlreadyReady can recognise an already-finished session.
+        try {
+          const iWin = iframeRef.current?.contentWindow as any;
+          if (iWin) iWin.__splatReady = true;
+        } catch {
+          /* cross-origin — ignore */
+        }
+        setIsReady(true);
       }
     };
     window.addEventListener("message", handleMessage);
 
-    // Iframe may have loaded before the listener was ready on fast reloads.
     const poll = setInterval(checkIfAlreadyReady, 500);
     const timeout = setTimeout(() => clearInterval(poll), 60_000);
 
@@ -144,12 +156,17 @@ const Renderer = () => {
       clearInterval(poll);
       clearTimeout(timeout);
     };
-  }, [checkIfAlreadyReady, sceneId]);
+  }, [checkIfAlreadyReady, selected?.slug]);
 
-  // Progress bar fill never snaps to 0 mid-load; we use an unbounded-ish
-  // fallback during the initial handshake so the user sees movement.
   const progressFraction = progress ? progress.loaded / progress.total : 0;
   const progressPercent = Math.min(100, progressFraction * 100);
+
+  const phaseLabel =
+    phase === "decoding"
+      ? "Decoding splats & uploading to GPU..."
+      : phase === "scene"
+        ? `Downloading ${selected?.title ?? "scene"}...`
+        : `Loading renderer...`;
 
   return (
     <main className="container mx-auto px-6 py-16 space-y-8 min-h-[calc(100vh-8rem)]">
@@ -194,62 +211,96 @@ const Renderer = () => {
       </section>
 
       <div className="max-w-5xl mx-auto space-y-3">
-        {/* Scene tabs — styled as pills, key by id so the iframe remounts on
-         *   change (ensures the WASM module re-reads ?scene=). */}
-        <div className="flex flex-wrap items-center justify-center gap-2">
-          {SCENES.map((s) => {
-            const active = s.id === sceneId;
-            return (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => {
-                  if (s.id !== sceneId) {
-                    track({
-                      name: "renderer_scene_switched",
-                      params: { scene_id: s.id },
-                    });
-                    setSceneId(s.id);
-                  }
-                }}
-                className={[
-                  "px-3 py-1.5 rounded-full text-sm border transition-colors",
-                  active
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-muted/40 border-border text-muted-foreground hover:bg-muted",
-                ].join(" ")}
-                aria-pressed={active}
-              >
-                {s.label}
-              </button>
-            );
-          })}
-        </div>
-
         {!RENDERER_URL ? (
           <div className="flex items-center justify-center rounded-lg border border-border text-muted-foreground h-96">
             Renderer is not configured.
           </div>
+        ) : !selected ? (
+          // ----- Grid view -----
+          <div className="space-y-4">
+            {scenesError && (
+              <div className="text-sm text-destructive text-center">
+                {scenesError}
+              </div>
+            )}
+            {scenes.length === 0 && !scenesError ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {[0, 1, 2].map((i) => (
+                  <div
+                    key={i}
+                    className="aspect-video rounded-lg bg-muted/40 animate-pulse"
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {scenes.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => {
+                      track({
+                        name: "renderer_scene_opened",
+                        params: { scene_slug: s.slug },
+                      });
+                      setSelected(s);
+                    }}
+                    className="group text-left rounded-lg overflow-hidden border border-border bg-muted/20 hover:bg-muted/40 transition-colors focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <div className="aspect-video w-full overflow-hidden bg-black">
+                      <img
+                        src={s.image_url}
+                        alt={s.title}
+                        loading="lazy"
+                        className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                      />
+                    </div>
+                    <div className="p-3 space-y-1">
+                      <h3 className="font-semibold tracking-tight">{s.title}</h3>
+                      {s.description && (
+                        <p className="text-xs text-muted-foreground line-clamp-2">
+                          {s.description}
+                        </p>
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         ) : (
-          <>
+          // ----- Render view -----
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  track({
+                    name: "renderer_scene_back",
+                    params: { scene_slug: selected.slug },
+                  });
+                  setSelected(null);
+                }}
+                className="gap-1"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Back to scenes
+              </Button>
+              <div className="text-sm text-muted-foreground">{selected.title}</div>
+            </div>
+
             <div className="relative w-full" style={{ height: "75vh" }}>
               {!isReady && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-background z-10 gap-4 px-6">
-                  <p className="text-sm text-muted-foreground">
-                    {phase === "prepare"
-                      ? `Preparing ${activeScene.label}...`
-                      : `Loading ${activeScene.label}...`}
-                  </p>
+                  <p className="text-sm text-muted-foreground">{phaseLabel}</p>
                   <div className="w-72 h-2 bg-muted rounded-full overflow-hidden">
                     {progress ? (
-                      // Solid fill at all times — the "Decoding textures..."
-                      // label beneath conveys that the prepare phase is
-                      // still doing work without the eye-strain flicker.
                       <div
                         className="h-full bg-primary rounded-full transition-[width] duration-300 ease-out"
                         style={{
                           width:
-                            phase === "prepare"
+                            phase === "decoding"
                               ? "100%"
                               : `${Math.max(progressPercent, 2)}%`,
                         }}
@@ -259,23 +310,23 @@ const Renderer = () => {
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground/70 tabular-nums">
-                    {phase === "prepare"
-                      ? "Decoding textures & uploading to GPU..."
+                    {phase === "decoding"
+                      ? "Almost there…"
                       : progress
                         ? `${formatBytes(progress.loaded)} / ${formatBytes(progress.total)}`
                         : "Connecting..."}
                   </p>
                 </div>
               )}
-              {/* key={sceneId} forces remount on scene switch so the WASM
-               *   module restarts cleanly with the new ?scene= param. */}
+              {/* key={selected.slug} forces remount on scene switch so the
+               *   WASM module restarts cleanly with the new ?scene_url=. */}
               <iframe
-                key={sceneId}
+                key={selected.slug}
                 ref={iframeRef}
                 src={iframeSrc}
                 className="w-full h-full border-0 outline-none"
                 allow="fullscreen"
-                title={`Renderer — ${activeScene.label}`}
+                title={`Renderer — ${selected.title}`}
               />
             </div>
 
@@ -292,7 +343,7 @@ const Renderer = () => {
                 to move the camera
               </p>
             )}
-          </>
+          </div>
         )}
       </div>
     </main>
