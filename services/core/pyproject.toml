@@ -27,5 +27,13 @@ dev = [
 [tool.uv.sources]
 common = { path = "../common", editable = true }
 
+# After moving alembic migrations into services/core/migrations/, the
+# setuptools flat-layout auto-discovery sees both `app` and `migrations`
+# as candidate packages and bails. Pin the package set explicitly: only
+# `app` (and its subpackages) is real Python code we ship — migrations
+# are runtime scripts, not an importable package.
+[tool.setuptools.packages.find]
+include = ["app*"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
