@@ -1,6 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text
-from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.types import Float
+from sqlalchemy import JSON, Column, Integer, String, Text
 
 from services.common.database import Base, TimeStampMixin
 
@@ -24,6 +22,10 @@ class SplatScene(Base, TimeStampMixin):
     description = Column(Text, nullable=True)
     image_url = Column(String, nullable=False)
     scene_url = Column(String, nullable=False)
-    camera_eye = Column(ARRAY(Float, dimensions=1), nullable=False)
-    camera_fwd = Column(ARRAY(Float, dimensions=1), nullable=False)
+    # vec3 stored as JSON array — generic SQLAlchemy JSON type so the
+    # tests' SQLite engine can round-trip it (PostgreSQL dialect compiles
+    # this to native JSON; SQLite stores it as TEXT with automatic
+    # serialisation).
+    camera_eye = Column(JSON, nullable=False)
+    camera_fwd = Column(JSON, nullable=False)
     sort_order = Column(Integer, nullable=False, default=0)

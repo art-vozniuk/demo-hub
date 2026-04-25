@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import ARRAY
 
 revision = "003"
 down_revision = "002"
@@ -74,10 +73,11 @@ def upgrade() -> None:
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("image_url", sa.String(), nullable=False),
         sa.Column("scene_url", sa.String(), nullable=False),
-        # vec3 stored as ARRAY[3] FLOAT — easier to read in SQL than JSONB
-        # while still letting us pull the whole tuple in one column.
-        sa.Column("camera_eye", ARRAY(sa.Float(), dimensions=1), nullable=False),
-        sa.Column("camera_fwd", ARRAY(sa.Float(), dimensions=1), nullable=False),
+        # vec3 stored as JSON array — generic JSON type round-trips on
+        # both Postgres (real JSON column) and the SQLite engine the
+        # test suite spins up (TEXT column with auto-serialisation).
+        sa.Column("camera_eye", sa.JSON(), nullable=False),
+        sa.Column("camera_fwd", sa.JSON(), nullable=False),
         sa.Column("sort_order", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
@@ -97,8 +97,8 @@ def upgrade() -> None:
         sa.column("description", sa.Text),
         sa.column("image_url", sa.String),
         sa.column("scene_url", sa.String),
-        sa.column("camera_eye", ARRAY(sa.Float(), dimensions=1)),
-        sa.column("camera_fwd", ARRAY(sa.Float(), dimensions=1)),
+        sa.column("camera_eye", sa.JSON()),
+        sa.column("camera_fwd", sa.JSON()),
         sa.column("sort_order", sa.Integer),
         sa.column("created_at", sa.DateTime),
         sa.column("updated_at", sa.DateTime),
