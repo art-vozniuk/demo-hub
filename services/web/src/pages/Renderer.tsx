@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Github, Activity } from "lucide-react";
+import { ArrowLeft, Github, Activity, Download } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { ExpandableDescription } from "@/components/ExpandableDescription";
@@ -67,9 +67,202 @@ type PerfData = {
   gpuSort: PerfStat;
   gpuRender: PerfStat;
   gpuTotal: PerfStat;
+  // Camera eye in world space, streamed each frame so the perf log can
+  // correlate stutters with where the user was looking. May be missing
+  // on older renderer builds — overlay handles the absence.
+  camEye?: [number, number, number];
   splats: number;
   gpuValid: boolean;
 };
+
+
+/**
+ * Bounded session-perf recorder — collects rolling samples while the
+ * perf overlay is open, produces a small text dump on demand. Three
+ * data shapes inside, all bounded to keep the eventual file < ~10 KB:
+ *
+ *   - raw samples (per metric, ring of N=5000)  → percentiles on dump
+ *   - 1 Hz time-series snapshot                 → ring of N=600 entries
+ *   - frame spikes (frame > 2× session avg)     → ring of N=50
+ *
+ * Reset on overlay re-open so each "open → fly around → click download"
+ * is a clean session.
+ */
+type TimeSeriesEntry = {
+  t: number; // seconds since session start
+  fps: number;
+  frame: number;
+  sort: number;
+  render: number;
+  total: number;
+  cam: [number, number, number] | null;
+};
+type SpikeEntry = {
+  t: number;
+  frame: number;
+  sort: number;
+  render: number;
+  total: number;
+  cam: [number, number, number] | null;
+};
+
+class PerfRecorder {
+  static SAMPLE_CAP = 5000;
+  static TS_CAP = 600;
+  static SPIKE_CAP = 50;
+  static TS_INTERVAL_MS = 1000;
+
+  startedAtWall: Date = new Date();
+  startedAtPerf: number = performance.now();
+
+  scene: { slug: string; title: string; sceneUrl: string } | null = null;
+  splatCount = 0;
+  gpuValid = false;
+  framesSeen = 0;
+
+  // Bounded sample arrays. Push uses Array#shift() once cap is hit —
+  // O(N) but rare (every ~500ms at 10 Hz throttle), fine for this scale.
+  private frameSamples: number[] = [];
+  private cpuEncSamples: number[] = [];
+  private gpuSortSamples: number[] = [];
+  private gpuRenderSamples: number[] = [];
+  private gpuTotalSamples: number[] = [];
+
+  private timeSeries: TimeSeriesEntry[] = [];
+  private lastTsAt = -Infinity;
+
+  private spikes: SpikeEntry[] = [];
+
+  setScene(scene: { slug: string; title: string; sceneUrl: string }) {
+    this.scene = scene;
+  }
+
+  add(perf: PerfData) {
+    this.framesSeen++;
+    this.splatCount = perf.splats;
+    this.gpuValid = perf.gpuValid;
+
+    const pushBounded = (arr: number[], v: number) => {
+      arr.push(v);
+      if (arr.length > PerfRecorder.SAMPLE_CAP) arr.shift();
+    };
+    pushBounded(this.frameSamples, perf.frame.cur);
+    pushBounded(this.cpuEncSamples, perf.cpuEncode.cur);
+    if (perf.gpuValid) {
+      pushBounded(this.gpuSortSamples, perf.gpuSort.cur);
+      pushBounded(this.gpuRenderSamples, perf.gpuRender.cur);
+      pushBounded(this.gpuTotalSamples, perf.gpuTotal.cur);
+    }
+
+    const now = performance.now();
+    const t = (now - this.startedAtPerf) / 1000;
+
+    if (now - this.lastTsAt >= PerfRecorder.TS_INTERVAL_MS) {
+      this.lastTsAt = now;
+      this.timeSeries.push({
+        t,
+        fps: perf.frame.cur > 0 ? 1000 / perf.frame.cur : 0,
+        frame: perf.frame.cur,
+        sort: perf.gpuSort.cur,
+        render: perf.gpuRender.cur,
+        total: perf.gpuTotal.cur,
+        cam: perf.camEye ?? null,
+      });
+      if (this.timeSeries.length > PerfRecorder.TS_CAP) this.timeSeries.shift();
+    }
+
+    // Spike: this frame's interval exceeded 2× the renderer's own 5s
+    // average. perf.frame.avg is fresh per frame, so the threshold
+    // adapts to whatever the user was doing recently.
+    if (perf.frame.avg > 0 && perf.frame.cur > 2 * perf.frame.avg) {
+      this.spikes.push({
+        t,
+        frame: perf.frame.cur,
+        sort: perf.gpuSort.cur,
+        render: perf.gpuRender.cur,
+        total: perf.gpuTotal.cur,
+        cam: perf.camEye ?? null,
+      });
+      if (this.spikes.length > PerfRecorder.SPIKE_CAP) this.spikes.shift();
+    }
+  }
+
+  build(): string {
+    const dur = (performance.now() - this.startedAtPerf) / 1000;
+    const fmt = (n: number, w = 6, p = 2) =>
+      n.toFixed(p).padStart(w, " ");
+    const fmtCam = (c: [number, number, number] | null) =>
+      c ? `(${c[0].toFixed(2)},${c[1].toFixed(2)},${c[2].toFixed(2)})` : "—";
+
+    const pct = (arr: number[], q: number): number => {
+      if (arr.length === 0) return 0;
+      const s = [...arr].sort((a, b) => a - b);
+      const i = Math.min(s.length - 1, Math.floor(q * s.length));
+      return s[i];
+    };
+    const stats = (arr: number[]) => ({
+      p50: pct(arr, 0.5),
+      p90: pct(arr, 0.9),
+      p99: pct(arr, 0.99),
+      min: arr.length ? Math.min(...arr) : 0,
+      max: arr.length ? Math.max(...arr) : 0,
+      mean: arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : 0,
+    });
+
+    const fr = stats(this.frameSamples);
+    const ce = stats(this.cpuEncSamples);
+    const gs = stats(this.gpuSortSamples);
+    const gr = stats(this.gpuRenderSamples);
+    const gt = stats(this.gpuTotalSamples);
+
+    let out = "";
+    out += "=== gsplat perf log ===\n";
+    out += `session: ${this.startedAtWall.toISOString()} (${dur.toFixed(1)}s · ${this.framesSeen} frames)\n`;
+    out += `scene:   ${this.scene?.slug ?? "?"} — ${this.scene?.title ?? "?"}\n`;
+    out += `splats:  ${this.splatCount.toLocaleString()}\n`;
+    out += `gpu timestamp-query: ${this.gpuValid ? "granted" : "unavailable"}\n`;
+    if (typeof navigator !== "undefined") {
+      out += `ua:      ${navigator.userAgent}\n`;
+    }
+    if (typeof window !== "undefined") {
+      out += `viewport: ${window.innerWidth}×${window.innerHeight} @ DPR ${window.devicePixelRatio}\n`;
+    }
+
+    out += "\n=== summary (entire session) ===\n";
+    out += "metric             p50    p90    p99    min    max   mean\n";
+    const row = (label: string, s: ReturnType<typeof stats>) =>
+      `${label.padEnd(15)}${fmt(s.p50)}${fmt(s.p90)}${fmt(s.p99)}${fmt(s.min)}${fmt(s.max)}${fmt(s.mean)}\n`;
+    out += row("frame ms",  fr);
+    out += row("cpu enc ms", ce);
+    if (this.gpuValid) {
+      out += row("gpu sort ms",   gs);
+      out += row("gpu render ms", gr);
+      out += row("gpu total ms",  gt);
+    } else {
+      out += "(gpu rows omitted — timestamp-query unavailable)\n";
+    }
+
+    out += `\n=== time-series (1 Hz, ${this.timeSeries.length} entries) ===\n`;
+    for (const e of this.timeSeries) {
+      out +=
+        `t=${fmt(e.t, 5, 1)}  fps=${fmt(e.fps, 5, 1)}  ` +
+        `frame=${fmt(e.frame, 5, 1)}  sort=${fmt(e.sort, 5, 1)}  ` +
+        `render=${fmt(e.render, 5, 1)}  total=${fmt(e.total, 5, 1)}  ` +
+        `cam=${fmtCam(e.cam)}\n`;
+    }
+
+    out += `\n=== spikes (frame > 2× rolling avg, ${this.spikes.length} entries) ===\n`;
+    for (const e of this.spikes) {
+      out +=
+        `@${fmt(e.t, 6, 1)}s  frame=${fmt(e.frame, 6, 1)}  ` +
+        `sort=${fmt(e.sort, 5, 1)}  render=${fmt(e.render, 5, 1)}  ` +
+        `total=${fmt(e.total, 5, 1)}  cam=${fmtCam(e.cam)}\n`;
+    }
+    if (this.spikes.length === 0) out += "(none)\n";
+
+    return out;
+  }
+}
 
 /**
  * Floating perf table laid over the iframe. Shows a 5-second rolling
@@ -79,7 +272,32 @@ type PerfData = {
  * the timestamp-query feature, the GPU rows are dim and explicit
  * about being unavailable.
  */
-const PerfOverlay = ({ perf }: { perf: PerfData | null }) => {
+const PerfOverlay = ({
+  perf,
+  recorderRef,
+}: {
+  perf: PerfData | null;
+  recorderRef: React.MutableRefObject<PerfRecorder | null>;
+}) => {
+  const downloadLog = () => {
+    const r = recorderRef.current;
+    if (!r) return;
+    const text = r.build();
+    const blob = new Blob([text], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[:T]/g, "-")
+      .replace(/\..+$/, "");
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `gsplat-perf-${stamp}.log`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const Row = ({
     label,
     stat,
@@ -153,6 +371,17 @@ const PerfOverlay = ({ perf }: { perf: PerfData | null }) => {
             not granted by the browser
           </div>
         )}
+        <div className="mt-2 pt-1 border-t border-border/50 flex justify-end pointer-events-auto">
+          <button
+            type="button"
+            onClick={downloadLog}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+            title="Download perf log for this session"
+          >
+            <Download className="h-3 w-3" />
+            Download log
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -207,6 +436,11 @@ const Renderer = () => {
   // Throttle UI updates to ~10 Hz (the iframe posts ~60 Hz). Avoids
   // unnecessary re-renders when the panel is open.
   const lastPerfUpdateRef = useRef(0);
+  // Recorder is non-null only while the overlay is open — so opening
+  // the panel = "start a fresh debug session", closing = "discard".
+  // Lives in a ref so the message handler closure always sees the
+  // current instance without re-binding.
+  const recorderRef = useRef<PerfRecorder | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { track } = useAnalytics();
 
@@ -255,6 +489,23 @@ const Renderer = () => {
     setPhase("wasm");
   }, [selected?.slug]);
 
+  // Recorder lifecycle — opening the perf overlay starts a fresh
+  // debug session; closing it (or switching scene) drops the recorder
+  // and any half-collected data.
+  useEffect(() => {
+    if (perfOpen && selected) {
+      const r = new PerfRecorder();
+      r.setScene({
+        slug:     selected.slug,
+        title:    selected.title,
+        sceneUrl: selected.scene_url,
+      });
+      recorderRef.current = r;
+    } else {
+      recorderRef.current = null;
+    }
+  }, [perfOpen, selected?.slug]);
+
   useEffect(() => {
     if (!selected) return;
     const handleMessage = (e: MessageEvent) => {
@@ -291,20 +542,25 @@ const Renderer = () => {
         }
         setIsReady(true);
       } else if (t === "perf") {
-        // Per-frame metrics from C++. Throttle render-side updates so we
-        // don't churn React 60×/s — the panel only needs to feel "live".
-        const now = performance.now();
-        if (now - lastPerfUpdateRef.current < 100) return;
-        lastPerfUpdateRef.current = now;
-        setPerf({
+        const data: PerfData = {
           frame:     e.data.frame,
           cpuEncode: e.data.cpuEncode,
           gpuSort:   e.data.gpuSort,
           gpuRender: e.data.gpuRender,
           gpuTotal:  e.data.gpuTotal,
+          camEye:    Array.isArray(e.data.camEye) && e.data.camEye.length === 3
+                       ? (e.data.camEye as [number, number, number])
+                       : undefined,
           splats:    Number(e.data.splats) || 0,
           gpuValid:  Boolean(e.data.gpuValid),
-        });
+        };
+        // Recorder gets EVERY frame so percentiles + spikes are honest.
+        // setPerf for the UI is throttled separately to ~10 Hz.
+        recorderRef.current?.add(data);
+        const now = performance.now();
+        if (now - lastPerfUpdateRef.current < 100) return;
+        lastPerfUpdateRef.current = now;
+        setPerf(data);
       }
     };
     window.addEventListener("message", handleMessage);
@@ -471,7 +727,9 @@ const Renderer = () => {
             </div>
 
             <div className="relative w-full" style={{ height: "75vh" }}>
-              {perfOpen && isReady && <PerfOverlay perf={perf} /> }
+              {perfOpen && isReady && (
+                <PerfOverlay perf={perf} recorderRef={recorderRef} />
+              )}
               {!isReady && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-background z-10 gap-4 px-6">
                   <p className="text-sm text-muted-foreground">{phaseLabel}</p>
