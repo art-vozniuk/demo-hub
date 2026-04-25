@@ -20,18 +20,13 @@ type SceneOption = {
 
 const SCENES: SceneOption[] = [
   {
-    id: "sponza",
-    label: "Sponza",
-    description: "Classic Phong-lit scene with normal maps + cubemap.",
-  },
-  {
     id: "gsplat",
     label: "Train (Gaussian Splat)",
     description: "Gaussian Splatting Train scene.",
   },
 ];
 
-const DEFAULT_SCENE_ID = "sponza";
+const DEFAULT_SCENE_ID = "gsplat";
 
 /** Returns a scene id from ?scene= (if valid) or the default. */
 function readSceneFromQuery(): string {
@@ -164,10 +159,9 @@ const Renderer = () => {
             <span className="text-gradient">3D Renderer</span>
           </h1>
           <ExpandableDescription>
-            Real-time 3D renderer running entirely in your browser — handles
-            both classic meshes (glTF / Phong-lit Sponza) and Gaussian-splat
-            scenes. Built from scratch in C++ with a custom engine, compiled
-            to WebAssembly via Emscripten and powered by WebGL 2.
+            Real-time Gaussian Splatting renderer. Custom C++ engine on
+            WebGPU with per-frame GPU radix sort and EWA splat projection
+            in WGSL. Compiled to WebAssembly via Emscripten.
           </ExpandableDescription>
           <div className="flex items-center justify-center gap-3">
             <Tooltip>

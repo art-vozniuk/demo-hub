@@ -16,9 +16,11 @@ Upload a portrait and apply it to various style templates using a GAN-based imag
 
 ### 3D Renderer
 
-Real-time 3D renderer running in the browser. Built from scratch in C++ with a custom engine, compiled to WebAssembly via Emscripten and powered by WebGL 2.
+Gaussian Splatting renderer running entirely in the browser. Custom C++
+WebGPU engine, every-frame GPU radix sort + EWA splat projection in WGSL.
+Same code path runs natively on macOS via Dawn → Metal.
 
-Source: [OpenGL-Renderer](https://github.com/art-vozniuk/OpenGL-Renderer)
+Source: [renderer](https://github.com/art-vozniuk/renderer)
 
 ## Tech Stack
 
@@ -26,7 +28,7 @@ Source: [OpenGL-Renderer](https://github.com/art-vozniuk/OpenGL-Renderer)
 
 **ML/AI** — PyTorch, ONNX Runtime, custom GAN pipeline
 
-**3D Renderer** — C++, OpenGL, Emscripten, WebAssembly, WebGL 2
+**Renderer** — C++, WebGPU, WGSL, Dawn / emdawnwebgpu, Emscripten, WebAssembly
 
 **Frontend** — React, TypeScript, Vite, TailwindCSS
 
@@ -48,7 +50,7 @@ demo-hub/
 │   ├── core/            # API gateway
 │   ├── compute/         # ML workers
 │   ├── web/             # React frontend
-│   └── external/        # OpenGL-Renderer submodule, face_swap
+│   └── external/        # renderer + face_swap submodules
 ├── nginx/               # Reverse proxy config
 ├── scripts/             # Build scripts (renderer, etc.)
 ├── docker-compose.yml
