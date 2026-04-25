@@ -61,8 +61,13 @@ type LoadPhase = "wasm" | "scene" | "decoding";
  * case the GPU rows are zero and shouldn't be displayed.
  */
 type PerfStat = { cur: number; avg: number; max: number };
+// `frame` carries one extra field — avg1s, the rolling 1-second
+// average frame interval, used for the "fast" FPS readout in the
+// overlay header. The 5-second `avg` is too laggy when the user is
+// hunting a perf regression, the per-frame `cur` is too jumpy.
+type PerfFrameStat = PerfStat & { avg1s: number };
 type PerfData = {
-  frame: PerfStat;
+  frame: PerfFrameStat;
   cpuEncode: PerfStat;
   gpuSort: PerfStat;
   gpuRender: PerfStat;
@@ -101,15 +106,18 @@ const PerfOverlay = ({ perf }: { perf: PerfData | null }) => {
     );
   };
 
-  const fps = perf && perf.frame.cur > 0 ? 1000 / perf.frame.cur : 0;
+  const fpsCur = perf && perf.frame.cur   > 0 ? 1000 / perf.frame.cur   : 0;
+  const fps1s  = perf && perf.frame.avg1s > 0 ? 1000 / perf.frame.avg1s : 0;
 
   return (
     <div className="absolute top-3 right-3 z-20 pointer-events-none">
       <div className="rounded-md border border-border bg-background/85 backdrop-blur px-3 py-2 text-xs font-mono shadow-md min-w-[260px]">
         <div className="flex items-center justify-between mb-1">
           <span className="font-semibold">Perf · 5s window</span>
-          <span className="text-muted-foreground">
-            {fps > 0 ? `${fps.toFixed(0)} fps` : "—"}
+          <span className="text-muted-foreground tabular-nums">
+            {fpsCur > 0
+              ? `${fpsCur.toFixed(0)} fps · 1s ${fps1s.toFixed(0)}`
+              : "—"}
           </span>
         </div>
         <table className="w-full">
