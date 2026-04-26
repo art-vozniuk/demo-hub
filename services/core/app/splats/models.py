@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, Column, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Column, Integer, String, Text
 
 from services.common.database import Base, TimeStampMixin
 
@@ -29,3 +29,8 @@ class SplatScene(Base, TimeStampMixin):
     camera_eye = Column(JSON, nullable=False)
     camera_fwd = Column(JSON, nullable=False)
     sort_order = Column(Integer, nullable=False, default=0)
+    # Editor toggle. When false, the scene stays in the table but the
+    # splats endpoint hides it from the catalog response, so the
+    # renderer grid won't show it. Lets us soft-disable a scene without
+    # deleting its row + S3 assets.
+    enabled = Column(Boolean, nullable=False, default=True, server_default="true")
