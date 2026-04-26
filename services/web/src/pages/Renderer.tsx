@@ -73,6 +73,9 @@ type PerfData = {
   camEye?: [number, number, number];
   splats: number;
   gpuValid: boolean;
+  // Renderer git short-sha baked at build time. Lets us tell at a
+  // glance which prod build a downloaded log came from.
+  version?: string;
 };
 
 
@@ -119,6 +122,12 @@ class PerfRecorder {
   splatCount = 0;
   gpuValid = false;
   framesSeen = 0;
+  version = "unknown";
+  // The DPR effective inside the iframe, measured once at first
+  // sample. Useful to verify the touch-device DPR cap actually applied
+  // (parent window's DPR is the device default; we want the after-cap
+  // value the renderer is rasterising at).
+  iframeDpr: number | null = null;
 
   // Bounded sample arrays. Push uses Array#shift() once cap is hit —
   // O(N) but rare (every ~500ms at 10 Hz throttle), fine for this scale.
@@ -141,6 +150,7 @@ class PerfRecorder {
     this.framesSeen++;
     this.splatCount = perf.splats;
     this.gpuValid = perf.gpuValid;
+    if (perf.version) this.version = perf.version;
 
     const pushBounded = (arr: number[], v: number) => {
       arr.push(v);
@@ -218,6 +228,7 @@ class PerfRecorder {
     let out = "";
     out += "=== gsplat perf log ===\n";
     out += `session: ${this.startedAtWall.toISOString()} (${dur.toFixed(1)}s · ${this.framesSeen} frames)\n`;
+    out += `renderer: ${this.version}\n`;
     out += `scene:   ${this.scene?.slug ?? "?"} — ${this.scene?.title ?? "?"}\n`;
     out += `splats:  ${this.splatCount.toLocaleString()}\n`;
     out += `gpu timestamp-query: ${this.gpuValid ? "granted" : "unavailable"}\n`;
@@ -225,7 +236,13 @@ class PerfRecorder {
       out += `ua:      ${navigator.userAgent}\n`;
     }
     if (typeof window !== "undefined") {
-      out += `viewport: ${window.innerWidth}×${window.innerHeight} @ DPR ${window.devicePixelRatio}\n`;
+      const parentDpr = window.devicePixelRatio;
+      const iframeDpr = this.iframeDpr;
+      const dprStr =
+        iframeDpr !== null && iframeDpr !== parentDpr
+          ? `parent DPR ${parentDpr}, iframe DPR ${iframeDpr}`
+          : `DPR ${parentDpr}`;
+      out += `viewport: ${window.innerWidth}×${window.innerHeight} @ ${dprStr}\n`;
     }
 
     out += "\n=== summary (entire session) ===\n";
@@ -364,6 +381,10 @@ const PerfOverlay = ({
           <span className="tabular-nums">
             {(perf?.splats ?? 0).toLocaleString()}
           </span>
+        </div>
+        <div className="flex justify-between text-muted-foreground">
+          <span>build</span>
+          <span className="tabular-nums">{perf?.version ?? "—"}</span>
         </div>
         {perf && !perf.gpuValid && (
           <div className="mt-1 text-[10px] text-muted-foreground/70 leading-tight">
@@ -553,10 +574,23 @@ const Renderer = () => {
                        : undefined,
           splats:    Number(e.data.splats) || 0,
           gpuValid:  Boolean(e.data.gpuValid),
+          version:   typeof e.data.version === "string" ? e.data.version : undefined,
         };
+        // Capture the iframe-side DPR once; it's the post-cap value the
+        // renderer actually rasterises at (parent's window.devicePixelRatio
+        // is the device default before our override).
+        const r = recorderRef.current;
+        if (r && r.iframeDpr === null) {
+          try {
+            const w = iframeRef.current?.contentWindow as Window | null;
+            if (w) r.iframeDpr = w.devicePixelRatio;
+          } catch {
+            /* cross-origin — leave as null */
+          }
+        }
         // Recorder gets EVERY frame so percentiles + spikes are honest.
         // setPerf for the UI is throttled separately to ~10 Hz.
-        recorderRef.current?.add(data);
+        r?.add(data);
         const now = performance.now();
         if (now - lastPerfUpdateRef.current < 100) return;
         lastPerfUpdateRef.current = now;
