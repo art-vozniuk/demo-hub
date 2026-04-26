@@ -11,7 +11,7 @@ const Navbar = () => {
   const navLinks = [
     { to: "/", label: "Home" },
     { to: "/face-fusion", label: "Try Style" },
-    { to: "/renderer", label: "3D Renderer" }, // temporarily hidden
+    { to: "/renderer", label: "Gaussian Splatting" },
   ];
 
   const handleSignOut = async () => {

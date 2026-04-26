@@ -41,27 +41,24 @@ const Home = () => {
 
         <div className="space-y-4">
           <h1 className="text-4xl font-bold tracking-tight sm:text-5xl leading-tight">
-            Senior Software Engineer<br/>
-            <span className="text-gradient">AI Infrastructure & R&D</span>
+            Research Engineer<br/>
+            <span className="text-gradient">AI Systems & Scalable Infrastructure</span>
           </h1>
 
           <p className="mx-auto max-w-xl text-lg leading-relaxed text-muted-foreground">
-            I’m a software engineer with over a decade of experience building high-performance systems and
-            end-to-end infrastructure for Generative AI.
-            My background in C++ and applied mathematics helps me bridge low-level performance engineering with
-            modern AI infrastructure.
+            Focused on high-performance systems, real-time AI, and turning complex ideas into working products.
             Feel free to explore my{" "}
-            <Link to="/face-fusion" className="text-cyan-500 hover:underline">
+            <Link to="/renderer" className="text-cyan-500 hover:underline">
               demos
             </Link>{" "}
             or reach out on{" "}
             <Link
-              to="https://www.linkedin.com/in/artem-vozniuk-6036b290/"
-              className="text-cyan-500 hover:underline"
+                to="https://www.linkedin.com/in/artem-vozniuk-ai/"
+                className="text-cyan-500 hover:underline"
             >
-              LinkedIn
+              LinkedIn.
             </Link>
-            — I’m always open to collaboration and new ideas.
+             I’m always open to collaboration and new ideas.
           </p>
         </div>
 
