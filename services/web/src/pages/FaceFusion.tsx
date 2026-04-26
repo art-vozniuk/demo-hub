@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import Masonry from "react-masonry-css";
 import { Button } from "@/components/ui/button";
-import {Sparkles, Loader2, Github, Linkedin} from "lucide-react";
+import {Sparkles, Github, Linkedin} from "lucide-react";
 import { recastApi, type RecastTemplateRead } from "@/api";
 import TemplateCard from "@/components/TemplateCard";
 import { useAnalytics } from "@/hooks/useAnalytics";
@@ -134,17 +134,6 @@ const FaceFusion = () => {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
-  if (isInitialLoading) {
-    return (
-      <main className="container mx-auto px-6 py-16 flex items-center justify-center min-h-[calc(100vh-8rem)]">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="h-12 w-12 animate-spin text-primary" />
-          <p className="text-lg text-muted-foreground">Loading templates...</p>
-        </div>
-      </main>
-    );
-  }
-
   if (error) {
     return (
       <main className="container mx-auto px-6 py-16 flex items-center justify-center min-h-[calc(100vh-8rem)]">
@@ -234,7 +223,26 @@ const FaceFusion = () => {
       )}
 
       <section className="max-w-7xl mx-auto">
-        {loadedTemplates.length > 0 ? (
+        {isInitialLoading ? (
+          // Skeleton placeholders mimic the masonry layout so the page
+          // doesn't shift when real templates land. Heights are varied
+          // to evoke the natural masonry irregularity.
+          <Masonry
+            breakpointCols={breakpointColumns}
+            className="masonry-grid"
+            columnClassName="masonry-grid-column"
+          >
+            {[280, 360, 240, 320, 400, 260, 340, 300, 380, 280, 320, 360].map(
+              (h, i) => (
+                <div
+                  key={i}
+                  className="rounded-lg bg-muted/40 animate-pulse mb-4"
+                  style={{ height: h }}
+                />
+              )
+            )}
+          </Masonry>
+        ) : loadedTemplates.length > 0 ? (
           <Masonry
             breakpointCols={breakpointColumns}
             className="masonry-grid"
