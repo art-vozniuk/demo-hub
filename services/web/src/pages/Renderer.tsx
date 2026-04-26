@@ -624,7 +624,7 @@ const Renderer = () => {
       <section className="max-w-4xl mx-auto space-y-6 text-center animate-fade-in">
         <div className="space-y-4">
           <h1 className="text-5xl font-bold tracking-tight sm:text-6xl">
-            <span className="text-gradient">3D Renderer</span>
+            <span className="text-gradient">Gaussian Splatting</span>
           </h1>
           <ExpandableDescription>
             Real-time Gaussian Splatting renderer. Custom C++ engine on
