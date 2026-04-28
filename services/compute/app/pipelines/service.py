@@ -33,6 +33,12 @@ class Service:
         relative_path: str,
         check_exists: bool = False,
     ) -> str:
+        # Downloads a model into the container FS. Writes to a `.partial`
+        # sibling and only atomically renames on full success, so a network
+        # blip / OOM / restart mid-stream cannot leave a corrupted file at
+        # the final path that future starts would reuse via check_exists=True.
+        # Verifies Content-Length when the server provides it; mismatches
+        # abort the download and clean up the partial.
         import os
         import aiohttp
         from services.compute.app.config import config
@@ -45,15 +51,42 @@ class Service:
 
         name = os.path.basename(relative_path)
         url = f"{config.MODELS_BASE_URL}/{name}"
+        partial_path = absolute_path + ".partial"
+
+        # Stale partial from a previous failed run — nuke it before retrying.
+        if os.path.exists(partial_path):
+            log.warning(f"Removing stale partial download: {partial_path}")
+            os.remove(partial_path)
 
         log.info(f"Downloading model: {url}")
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
-                resp.raise_for_status()
-                with open(absolute_path, "wb") as f:
-                    async for chunk in resp.content.iter_chunked(8 * 1024 * 1024):
-                        f.write(chunk)
-        log.info(f"Downloaded {name} to {absolute_path}")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    resp.raise_for_status()
+                    expected_size = resp.content_length  # may be None
+                    written = 0
+                    with open(partial_path, "wb") as f:
+                        async for chunk in resp.content.iter_chunked(8 * 1024 * 1024):
+                            f.write(chunk)
+                            written += len(chunk)
+
+            if expected_size is not None and written != expected_size:
+                raise IOError(
+                    f"Download size mismatch for {name}: "
+                    f"got {written} bytes, expected {expected_size}"
+                )
+
+            os.replace(partial_path, absolute_path)
+            log.info(f"Downloaded {name} to {absolute_path} ({written} bytes)")
+        except BaseException:
+            # Best-effort cleanup so check_exists doesn't latch onto a half-file
+            # on the next start. BaseException catches CancelledError too.
+            if os.path.exists(partial_path):
+                try:
+                    os.remove(partial_path)
+                except OSError:
+                    pass
+            raise
 
         return absolute_path
 
