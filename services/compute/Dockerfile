@@ -5,14 +5,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 
 RUN retry() { n=0; until "$@"; do n=$((n+1)); [ $n -ge 5 ] && return 1; sleep $((n*5)); done; }; \
-    retry apt-get update && \
+    retry apt-get -o Acquire::Retries=3 update && \
     apt-get install -y --no-install-recommends \
     tzdata software-properties-common wget git curl build-essential g++ \
     libssl-dev zlib1g-dev libffi-dev libgl1 libglib2.0-0 libsm6 gpg gpg-agent && \
     ln -fs /usr/share/zoneinfo/$TZ /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \
     retry add-apt-repository -y ppa:deadsnakes/ppa && \
-    retry apt-get update && \
+    retry apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update && \
     apt-get install -y --no-install-recommends \
     python3.13 python3.13-venv python3.13-dev && \
     rm -rf /var/lib/apt/lists/*
