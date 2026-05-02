@@ -51,14 +51,12 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: services/compute/Dockerfile
+          file: services/compute/Dockerfile.cpu
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/compute-cpu:latest
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          build-args: |
-            BASE_IMAGE=ubuntu:22.04
           secret-files: |
             env=/tmp/compute.env
 
