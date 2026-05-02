@@ -79,17 +79,20 @@ const Home = () => {
             "ONNX Runtime",
             "FastAPI",
             "Kubernetes",
-            "Docker Compose",
+            "Docker",
             "AWS",
             "PostgreSQL",
             "Terraform",
+            "Supabase",
             "Comfy UI",
             "Redis",
             "RabbitMQ",
             "Sentry",
             "Prometheus",
             "Grafana",
+            "React",
             "Unreal Engine",
+            "WebGPU",
           ].map((tag) => (
             <span
               key={tag}
