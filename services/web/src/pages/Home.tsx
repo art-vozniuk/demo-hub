@@ -90,6 +90,7 @@ const Home = () => {
             "Prometheus",
             "Grafana",
             "Unreal Engine",
+            "WebGPU",
           ].map((tag) => (
             <span
               key={tag}
