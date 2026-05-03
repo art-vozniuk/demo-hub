@@ -29,6 +29,9 @@ jobs:
           VITE_SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
           VITE_GA_MEASUREMENT_ID=${{ secrets.VITE_GA_MEASUREMENT_ID }}
           VITE_RENDERER_URL=/renderer/Sandbox.html
+          VITE_SENTRY_DSN=${{ secrets.SENTRY_DSN }}
+          VITE_SENTRY_ENV=${{ secrets.ENV }}
+          VITE_BUILD_TAG=${{ github.sha }}
           EOF
 
       - name: login to GHCR

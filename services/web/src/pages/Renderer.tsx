@@ -4,9 +4,34 @@ import { ArrowLeft, Github, Activity, Download } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { ExpandableDescription } from "@/components/ExpandableDescription";
+import { RendererUnsupported } from "@/components/RendererUnsupported";
+import { RendererCrashed } from "@/components/RendererCrashed";
 import { splatsApi, SplatSceneRead } from "@/api";
+import { checkWebGpu, type WebGpuStatus } from "@/lib/webgpu";
+import {
+  captureEngineError,
+  rendererBreadcrumb,
+  setWebGpuContext,
+} from "@/lib/sentry";
 
 const RENDERER_URL = import.meta.env.VITE_RENDERER_URL as string | undefined;
+
+/** If we don't see progress nor splat-ready within this window, assume the
+ *  engine is stuck (e.g. WGPU device crash post-init) and surface a crash UI. */
+const STALL_TIMEOUT_MS = 90_000;
+/** Cap on engine log lines kept for crash reports. Bounded so reports fit
+ *  inside Sentry's tag/context size limits without truncation surprises. */
+const ENGINE_LOG_CAP = 200;
+
+type CrashState = {
+  reason: "abort" | "window-error" | "stall" | "unknown";
+  message?: string;
+  engineLogTail?: string[];
+} | null;
+
+type WebGpuState =
+  | { kind: "checking" }
+  | WebGpuStatus;
 
 /**
  * Build the iframe src with the runtime params the renderer needs:
@@ -454,6 +479,10 @@ const Renderer = () => {
   const [phase, setPhase] = useState<LoadPhase>("wasm");
   const [perfOpen, setPerfOpen] = useState(false);
   const [perf, setPerf] = useState<PerfData | null>(null);
+  const [webGpu, setWebGpu] = useState<WebGpuState>({ kind: "checking" });
+  const [crash, setCrash] = useState<CrashState>(null);
+  // Bumped to force a fresh iframe mount on retry without losing scene state.
+  const [retryNonce, setRetryNonce] = useState(0);
   // Throttle UI updates to ~10 Hz (the iframe posts ~60 Hz). Avoids
   // unnecessary re-renders when the panel is open.
   const lastPerfUpdateRef = useRef(0);
@@ -463,7 +492,52 @@ const Renderer = () => {
   // current instance without re-binding.
   const recorderRef = useRef<PerfRecorder | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  // Bounded ring buffer of engine log lines; attached to crash reports.
+  const engineLogRef = useRef<string[]>([]);
+  // Watchdog timer reset on every progress event. Fires if the engine goes
+  // silent — caught here instead of leaving the user staring at a loader.
+  const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { track } = useAnalytics();
+
+  const pushEngineLog = useCallback((line: string) => {
+    const buf = engineLogRef.current;
+    buf.push(line);
+    if (buf.length > ENGINE_LOG_CAP) buf.shift();
+  }, []);
+
+  const armStallTimer = useCallback(() => {
+    if (stallTimerRef.current) clearTimeout(stallTimerRef.current);
+    stallTimerRef.current = setTimeout(() => {
+      setCrash((c) => c ?? {
+        reason: "stall",
+        message: `No engine activity for ${STALL_TIMEOUT_MS / 1000}s`,
+        engineLogTail: [...engineLogRef.current],
+      });
+    }, STALL_TIMEOUT_MS);
+  }, []);
+
+  // Pre-flight WebGPU check. Runs once on page mount, well before we touch
+  // the heavy WASM module — catches the iOS-without-WebGPU and old-Android
+  // cases with a friendly message instead of a mid-boot WASM trap.
+  useEffect(() => {
+    let alive = true;
+    rendererBreadcrumb("webgpu preflight start");
+    checkWebGpu().then((status) => {
+      if (!alive) return;
+      setWebGpu(status);
+      setWebGpuContext(status);
+      rendererBreadcrumb("webgpu preflight result", { kind: status.kind });
+      if (status.kind !== "supported") {
+        captureEngineError({
+          reason: status.kind === "no-api" ? "no-webgpu-api" : status.kind === "no-adapter" ? "no-adapter" : "unknown",
+          message: `webgpu preflight: ${status.kind}`,
+        });
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // Initial scene list fetch.
   useEffect(() => {
@@ -508,7 +582,152 @@ const Renderer = () => {
     setIsReady(false);
     setProgress(null);
     setPhase("wasm");
-  }, [selected?.slug]);
+    setCrash(null);
+    engineLogRef.current = [];
+    if (stallTimerRef.current) {
+      clearTimeout(stallTimerRef.current);
+      stallTimerRef.current = null;
+    }
+    if (selected) {
+      rendererBreadcrumb("scene selected", { slug: selected.slug, title: selected.title });
+      armStallTimer();
+    }
+  }, [selected?.slug, retryNonce, armStallTimer]);
+
+  // Report crashes to Sentry exactly once when they occur.
+  useEffect(() => {
+    if (!crash) return;
+    captureEngineError({
+      reason: crash.reason,
+      message: crash.message,
+      scene: selected ? { slug: selected.slug, title: selected.title } : null,
+      engineLogTail: crash.engineLogTail,
+    });
+    if (stallTimerRef.current) {
+      clearTimeout(stallTimerRef.current);
+      stallTimerRef.current = null;
+    }
+  }, [crash, selected]);
+
+  // Hook into the iframe's runtime: capture engine stderr as breadcrumbs,
+  // catch WASM aborts and unhandled errors. Same-origin (renderer is served
+  // from /renderer/Sandbox.html under the SPA's origin), so direct DOM access
+  // works — wrapped in try/catch in case that ever changes.
+  useEffect(() => {
+    if (!selected) return;
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+
+    let pollHandle: ReturnType<typeof setInterval> | null = null;
+    let cleanups: Array<() => void> = [];
+
+    const onLoad = () => {
+      try {
+        const win = iframe.contentWindow as (Window & { Module?: any }) | null;
+        if (!win) return;
+
+        const onWinError = (e: ErrorEvent) => {
+          pushEngineLog(`window error: ${e.message}`);
+          setCrash((c) => c ?? {
+            reason: "window-error",
+            message: e.message,
+            engineLogTail: [...engineLogRef.current],
+          });
+        };
+        const onRejection = (e: PromiseRejectionEvent) => {
+          const reason = e.reason as { message?: string } | string | undefined;
+          const msg = typeof reason === "string"
+            ? reason
+            : reason?.message ?? String(reason ?? "unhandled rejection");
+          pushEngineLog(`unhandled rejection: ${msg}`);
+          // The classic "RuntimeError: unreachable" lands here when the WASM
+          // assertion fires inside an async callback (matches the iOS report).
+          setCrash((c) => c ?? {
+            reason: "abort",
+            message: msg,
+            engineLogTail: [...engineLogRef.current],
+          });
+        };
+        win.addEventListener("error", onWinError);
+        win.addEventListener("unhandledrejection", onRejection);
+        cleanups.push(() => {
+          try { win.removeEventListener("error", onWinError); } catch { /* gone */ }
+          try { win.removeEventListener("unhandledrejection", onRejection); } catch { /* gone */ }
+        });
+
+        // Poll for Emscripten's Module to appear so we can wrap onAbort and
+        // printErr. Module is set up asynchronously during WASM boot, so it's
+        // not there at iframe-load time.
+        pollHandle = setInterval(() => {
+          const M = win.Module as undefined | {
+            __sentryHooked?: boolean;
+            onAbort?: (msg: string) => void;
+            printErr?: (msg: string) => void;
+            print?: (msg: string) => void;
+          };
+          if (!M || M.__sentryHooked) return;
+          M.__sentryHooked = true;
+
+          const origAbort = M.onAbort;
+          M.onAbort = (msg: string) => {
+            origAbort?.(msg);
+            pushEngineLog(`abort: ${msg}`);
+            setCrash((c) => c ?? {
+              reason: "abort",
+              message: String(msg),
+              engineLogTail: [...engineLogRef.current],
+            });
+          };
+
+          const origPrintErr = M.printErr;
+          M.printErr = (msg: string) => {
+            origPrintErr?.call(M, msg);
+            pushEngineLog(msg);
+            // Engine pre-emptively logs these before the eventual abort/throw.
+            // Catching them here shortens the failure-to-UI delay considerably.
+            if (/wgpuRequestAdapter failed|No available adapters|Assertion Failed:/i.test(msg)) {
+              setCrash((c) => c ?? {
+                reason: "abort",
+                message: msg,
+                engineLogTail: [...engineLogRef.current],
+              });
+            }
+          };
+
+          const origPrint = M.print;
+          M.print = (msg: string) => {
+            origPrint?.call(M, msg);
+            pushEngineLog(msg);
+          };
+
+          if (pollHandle) {
+            clearInterval(pollHandle);
+            pollHandle = null;
+          }
+        }, 100);
+        cleanups.push(() => {
+          if (pollHandle) {
+            clearInterval(pollHandle);
+            pollHandle = null;
+          }
+        });
+      } catch (err) {
+        // Likely cross-origin — the postMessage path still works for normal
+        // events, we just lose engine log breadcrumbs. Log once and move on.
+        rendererBreadcrumb("iframe contentWindow access failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    };
+
+    iframe.addEventListener("load", onLoad);
+    cleanups.push(() => iframe.removeEventListener("load", onLoad));
+
+    return () => {
+      cleanups.forEach((fn) => fn());
+      cleanups = [];
+    };
+  }, [selected?.slug, retryNonce, pushEngineLog]);
 
   // Recorder lifecycle — opening the perf overlay starts a fresh
   // debug session; closing it (or switching scene) drops the recorder
@@ -531,6 +750,17 @@ const Renderer = () => {
     if (!selected) return;
     const handleMessage = (e: MessageEvent) => {
       const t = e.data?.type;
+      // Any signal of life from the engine resets the stall watchdog;
+      // splat-ready means we've crossed the finish line — disarm entirely.
+      if (t === "splat-ready") {
+        if (stallTimerRef.current) {
+          clearTimeout(stallTimerRef.current);
+          stallTimerRef.current = null;
+        }
+      } else if (t === "renderer-ready" || t === "renderer-progress" ||
+                 t === "splat-progress" || t === "splat-decoding") {
+        armStallTimer();
+      }
       if (t === "renderer-ready") {
         // WASM module booted; splat is still downloading. Move into the
         // scene phase but keep the overlay up.
@@ -607,7 +837,7 @@ const Renderer = () => {
       clearInterval(poll);
       clearTimeout(timeout);
     };
-  }, [checkIfAlreadyReady, selected?.slug]);
+  }, [checkIfAlreadyReady, selected?.slug, armStallTimer]);
 
   const progressFraction = progress ? progress.loaded / progress.total : 0;
   const progressPercent = Math.min(100, progressFraction * 100);
@@ -662,7 +892,13 @@ const Renderer = () => {
       </section>
 
       <div className="max-w-5xl mx-auto space-y-3">
-        {!RENDERER_URL ? (
+        {webGpu.kind === "checking" ? (
+          <div className="flex items-center justify-center rounded-lg border border-border text-muted-foreground h-96">
+            Checking your browser's WebGPU support…
+          </div>
+        ) : webGpu.kind !== "supported" ? (
+          <RendererUnsupported status={webGpu} />
+        ) : !RENDERER_URL ? (
           <div className="flex items-center justify-center rounded-lg border border-border text-muted-foreground h-96">
             Renderer is not configured.
           </div>
@@ -760,50 +996,64 @@ const Renderer = () => {
               </div>
             </div>
 
-            <div className="relative w-full" style={{ height: "75vh" }}>
-              {perfOpen && isReady && (
-                <PerfOverlay perf={perf} recorderRef={recorderRef} />
-              )}
-              {!isReady && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-background z-10 gap-4 px-6">
-                  <p className="text-sm text-muted-foreground">{phaseLabel}</p>
-                  <div className="w-72 h-2 bg-muted rounded-full overflow-hidden">
-                    {progress ? (
-                      <div
-                        className="h-full bg-primary rounded-full transition-[width] duration-300 ease-out"
-                        style={{
-                          width:
-                            phase === "decoding"
-                              ? "100%"
-                              : `${Math.max(progressPercent, 2)}%`,
-                        }}
-                      />
-                    ) : (
-                      <div className="h-full w-1/3 bg-primary/60 rounded-full" />
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground/70 tabular-nums">
-                    {phase === "decoding"
-                      ? "Almost there…"
-                      : progress
-                        ? `${formatBytes(progress.loaded)} / ${formatBytes(progress.total)}`
-                        : "Connecting..."}
-                  </p>
-                </div>
-              )}
-              {/* key={selected.slug} forces remount on scene switch so the
-               *   WASM module restarts cleanly with the new ?scene_url=. */}
-              <iframe
-                key={selected.slug}
-                ref={iframeRef}
-                src={iframeSrc}
-                className="w-full h-full border-0 outline-none"
-                allow="fullscreen"
-                title={`Renderer — ${selected.title}`}
+            {crash ? (
+              <RendererCrashed
+                reason={crash.reason}
+                message={crash.message}
+                engineLogTail={crash.engineLogTail}
+                onRetry={() => {
+                  setCrash(null);
+                  setIsReady(false);
+                  engineLogRef.current = [];
+                  setRetryNonce((n) => n + 1);
+                }}
               />
-            </div>
+            ) : (
+              <div className="relative w-full" style={{ height: "75vh" }}>
+                {perfOpen && isReady && (
+                  <PerfOverlay perf={perf} recorderRef={recorderRef} />
+                )}
+                {!isReady && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-background z-10 gap-4 px-6">
+                    <p className="text-sm text-muted-foreground">{phaseLabel}</p>
+                    <div className="w-72 h-2 bg-muted rounded-full overflow-hidden">
+                      {progress ? (
+                        <div
+                          className="h-full bg-primary rounded-full transition-[width] duration-300 ease-out"
+                          style={{
+                            width:
+                              phase === "decoding"
+                                ? "100%"
+                                : `${Math.max(progressPercent, 2)}%`,
+                          }}
+                        />
+                      ) : (
+                        <div className="h-full w-1/3 bg-primary/60 rounded-full" />
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground/70 tabular-nums">
+                      {phase === "decoding"
+                        ? "Almost there…"
+                        : progress
+                          ? `${formatBytes(progress.loaded)} / ${formatBytes(progress.total)}`
+                          : "Connecting..."}
+                    </p>
+                  </div>
+                )}
+                {/* key forces remount on scene switch or retry so the WASM module
+                 *   restarts cleanly with the current ?scene_url=. */}
+                <iframe
+                  key={`${selected.slug}-${retryNonce}`}
+                  ref={iframeRef}
+                  src={iframeSrc}
+                  className="w-full h-full border-0 outline-none"
+                  allow="fullscreen"
+                  title={`Renderer — ${selected.title}`}
+                />
+              </div>
+            )}
 
-            {isReady && <CameraHelp />}
+            {isReady && !crash && <CameraHelp />}
           </div>
         )}
       </div>
