@@ -1,0 +1,7 @@
+.venv/
+.bin/
+.build/
+__pycache__/
+*.pyc
+.pytest_cache/
+scenes/

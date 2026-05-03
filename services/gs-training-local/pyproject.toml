@@ -1,0 +1,31 @@
+[project]
+name = "gs-training-local"
+version = "0.1.0"
+description = "Local Mac pipeline: video → GS scene (frames → SfM → training → compressed .splat)"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "plyfile>=1.0.3",
+    "numpy>=1.26",
+    "pydantic>=2.0.0",
+    "click>=8.1.7",
+    "rich>=13.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-mock>=3.12.0",
+]
+
+[project.scripts]
+gs-train = "pipeline.cli:main"
+
+[build-system]
+requires = ["setuptools>=68.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["pipeline*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
