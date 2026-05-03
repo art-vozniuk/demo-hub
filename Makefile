@@ -15,15 +15,19 @@ CORE_IMAGE_LATEST := $(REGISTRY)/$(GITHUB_USER)/$(CORE_IMAGE_NAME):latest
 IMAGE_REPO := $(REGISTRY)/$(GITHUB_USER)/$(COMPUTE_IMAGE_NAME)
 
 # Compute service
+# Default targets build the GPU image. Use `*-cpu` variants for the lighter CPU image.
 build-compute:
-	docker build --platform $(PLATFORM) -f services/compute/Dockerfile -t $(COMPUTE_IMAGE) --build-arg BUILD_TAG=$(TAG) .
+	docker build --platform $(PLATFORM) -f services/compute/Dockerfile.gpu -t $(COMPUTE_IMAGE) --build-arg BUILD_TAG=$(TAG) .
 
 build-compute-debug:
-	docker buildx build --no-cache --progress=plain --platform $(PLATFORM) -f services/compute/Dockerfile -t $(COMPUTE_IMAGE) .
+	docker buildx build --no-cache --progress=plain --platform $(PLATFORM) -f services/compute/Dockerfile.gpu -t $(COMPUTE_IMAGE) .
 
 build-compute-with-env:
 	@if [ ! -f services/compute/.env ]; then echo "Error: services/compute/.env not found"; exit 1; fi
-	docker build --platform $(PLATFORM) -f services/compute/Dockerfile -t $(COMPUTE_IMAGE) --build-arg BUILD_TAG=$(TAG) --secret id=env,src=services/compute/.env .
+	docker build --platform $(PLATFORM) -f services/compute/Dockerfile.gpu -t $(COMPUTE_IMAGE) --build-arg BUILD_TAG=$(TAG) --secret id=env,src=services/compute/.env .
+
+build-compute-cpu:
+	docker build --platform $(PLATFORM) -f services/compute/Dockerfile.cpu -t $(COMPUTE_IMAGE) --build-arg BUILD_TAG=$(TAG) .
 
 login-ghcr:
 	echo "$(GHCR_TOKEN)" | docker login $(REGISTRY) -u "$(GITHUB_USER)" --password-stdin

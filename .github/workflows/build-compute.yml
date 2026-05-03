@@ -51,7 +51,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: services/compute/Dockerfile
+          file: services/compute/Dockerfile.gpu
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/compute:latest
           platforms: linux/amd64

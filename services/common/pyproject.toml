@@ -3,7 +3,7 @@ name = "common"
 version = "0.1.0"
 description = "common"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "aio-pika>=9.5.7",
     "aioboto3>=15.1.0",
