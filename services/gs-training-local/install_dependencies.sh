@@ -94,32 +94,53 @@ BRUSH_BIN="$SCRIPT_DIR/.bin/brush_app"
 if [[ -x "$BRUSH_BIN" ]]; then
   log "brush already present at $BRUSH_BIN"
 else
-  log "downloading brush prebuilt binary"
+  log "installing brush"
   mkdir -p "$(dirname "$BRUSH_BIN")"
   case "$ARCH" in
-    arm64)  BRUSH_ASSET="brush_app-aarch64-apple-darwin" ;;
-    x86_64) BRUSH_ASSET="brush_app-x86_64-apple-darwin"  ;;
+    arm64)  BRUSH_ASSET="brush-app-aarch64-apple-darwin" ;;
+    x86_64) BRUSH_ASSET="brush-app-x86_64-apple-darwin"  ;;
     *) err "unsupported arch: $ARCH"; exit 1 ;;
   esac
-  # Latest release tarball (versioned releases live on GitHub Releases)
-  LATEST_URL="https://github.com/ArthurBrussee/brush/releases/latest/download/${BRUSH_ASSET}.tar.gz"
+  # Brush ships .tar.xz from GitHub Releases (asset name is brush-app-* with
+  # a hyphen; the binary INSIDE may be either brush_app or brush-app).
+  LATEST_URL="https://github.com/ArthurBrussee/brush/releases/latest/download/${BRUSH_ASSET}.tar.xz"
   TMPDIR="$(mktemp -d)"
-  curl -fSL -o "$TMPDIR/brush.tar.gz" "$LATEST_URL" || {
-    warn "couldn't download $LATEST_URL — fall back to building from source via cargo"
-    if ! command -v cargo >/dev/null 2>&1; then
-      err "cargo not found; install Rust toolchain via 'brew install rustup-init && rustup-init -y'"
+  trap 'rm -rf "$TMPDIR"' EXIT
+
+  if curl -fSL -o "$TMPDIR/brush.tar.xz" "$LATEST_URL"; then
+    log "downloaded prebuilt brush release"
+    tar -xJf "$TMPDIR/brush.tar.xz" -C "$TMPDIR"
+    # Find the actual binary — could be at top level or inside a subdir,
+    # named brush_app (Rust default) or brush-app (Cargo crate name).
+    FOUND="$(find "$TMPDIR" -type f \( -name "brush_app" -o -name "brush-app" \) | head -n1)"
+    if [[ -z "$FOUND" ]]; then
+      err "brush archive did not contain a brush_app/brush-app executable; contents:"
+      find "$TMPDIR" -maxdepth 3 -print
       exit 1
     fi
-    cargo install --git https://github.com/ArthurBrussee/brush --root "$SCRIPT_DIR" brush_app
-    [[ -x "$BRUSH_BIN" ]] || ln -sf "$SCRIPT_DIR/bin/brush_app" "$BRUSH_BIN"
+    install -m 0755 "$FOUND" "$BRUSH_BIN"
+    log "brush installed at $BRUSH_BIN"
+  else
+    warn "couldn't download $LATEST_URL — building from source via cargo"
+    if ! command -v cargo >/dev/null 2>&1; then
+      log "cargo not found; bootstrapping rust toolchain via brew rustup-init"
+      brew install rustup
+      rustup-init -y --no-modify-path --default-toolchain stable
+      # Make cargo visible for the rest of this run without forcing the user
+      # to source ~/.cargo/env or restart their shell.
+      export PATH="$HOME/.cargo/bin:$PATH"
+    fi
+    cargo install --git https://github.com/ArthurBrussee/brush \
+        --root "$SCRIPT_DIR" \
+        --bin brush_app
+    SRC="$(find "$SCRIPT_DIR/bin" -maxdepth 1 -type f -name "brush*" | head -n1)"
+    if [[ -z "$SRC" ]]; then
+      err "cargo install did not produce a brush binary under $SCRIPT_DIR/bin"
+      exit 1
+    fi
+    install -m 0755 "$SRC" "$BRUSH_BIN"
     log "brush built via cargo at $BRUSH_BIN"
-    exit 0
-  }
-  tar -xzf "$TMPDIR/brush.tar.gz" -C "$TMPDIR"
-  install -m 0755 "$TMPDIR/${BRUSH_ASSET}/brush_app" "$BRUSH_BIN" 2>/dev/null \
-    || install -m 0755 "$TMPDIR/brush_app" "$BRUSH_BIN"
-  rm -rf "$TMPDIR"
-  log "brush installed at $BRUSH_BIN"
+  fi
 fi
 
 # 5. Python env via uv -----------------------------------------------------
