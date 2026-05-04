@@ -44,6 +44,7 @@ BREW_PACKAGES=(
   freeimage
   metis
   suite-sparse
+  libomp
   colmap
   uv
 )
@@ -62,9 +63,27 @@ else
     git clone --depth=1 https://github.com/colmap/glomap.git "$GLOMAP_SRC"
   fi
   pushd "$GLOMAP_SRC" >/dev/null
-  cmake -B build -GNinja \
+
+  # AppleClang doesn't ship with OpenMP. CMake's FindOpenMP can't locate the
+  # Homebrew libomp on its own — we have to spell out where it lives.
+  # Without these flags configure fails with:
+  #   "Could NOT find OpenMP_C (missing: OpenMP_C_FLAGS OpenMP_C_LIB_NAMES)"
+  LIBOMP_PREFIX="$(brew --prefix libomp)"
+  if [[ ! -d "$LIBOMP_PREFIX" ]]; then
+    err "libomp not found at expected brew prefix; reinstall via 'brew install libomp'"
+    exit 1
+  fi
+
+  # --fresh forces a clean configure even if a previous failed run left a
+  # stale CMakeCache.txt (otherwise cmake reuses the cached missing-OpenMP).
+  cmake -B build -GNinja --fresh \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX="$(brew --prefix)"
+    -DCMAKE_INSTALL_PREFIX="$(brew --prefix)" \
+    -DOpenMP_C_FLAGS="-Xpreprocessor -fopenmp -I${LIBOMP_PREFIX}/include" \
+    -DOpenMP_CXX_FLAGS="-Xpreprocessor -fopenmp -I${LIBOMP_PREFIX}/include" \
+    -DOpenMP_C_LIB_NAMES=omp \
+    -DOpenMP_CXX_LIB_NAMES=omp \
+    -DOpenMP_omp_LIBRARY="${LIBOMP_PREFIX}/lib/libomp.dylib"
   cmake --build build --target install
   popd >/dev/null
   log "glomap installed at $(command -v glomap)"
