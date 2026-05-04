@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Github, Activity, Download } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -473,7 +474,31 @@ const CameraHelp = () => {
 const Renderer = () => {
   const [scenes, setScenes] = useState<SplatSceneRead[]>([]);
   const [scenesError, setScenesError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<SplatSceneRead | null>(null);
+  // The selected scene is driven by the `?scene=<slug>` URL parameter so the
+  // current scene is shareable and survives reloads / browser back-forward.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const sceneSlugFromUrl = searchParams.get("scene");
+  const selected = useMemo<SplatSceneRead | null>(
+    () =>
+      sceneSlugFromUrl
+        ? scenes.find((s) => s.slug === sceneSlugFromUrl) ?? null
+        : null,
+    [scenes, sceneSlugFromUrl],
+  );
+  const selectScene = useCallback(
+    (slug: string | null) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (slug) next.set("scene", slug);
+          else next.delete("scene");
+          return next;
+        },
+        { replace: false },
+      );
+    },
+    [setSearchParams],
+  );
   const [isReady, setIsReady] = useState(false);
   const [progress, setProgress] = useState<Progress>(null);
   const [phase, setPhase] = useState<LoadPhase>("wasm");
@@ -959,7 +984,7 @@ const Renderer = () => {
                         name: "renderer_scene_opened",
                         params: { scene_slug: s.slug },
                       });
-                      setSelected(s);
+                      selectScene(s.slug);
                     }}
                     className="group text-left rounded-lg overflow-hidden border border-border bg-muted/20 hover:bg-muted/40 transition-colors focus:outline-none focus:ring-2 focus:ring-primary"
                   >
@@ -996,7 +1021,7 @@ const Renderer = () => {
                     name: "renderer_scene_back",
                     params: { scene_slug: selected.slug },
                   });
-                  setSelected(null);
+                  selectScene(null);
                 }}
                 className="gap-1"
               >
