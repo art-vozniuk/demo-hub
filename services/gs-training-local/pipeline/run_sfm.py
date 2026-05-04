@@ -35,6 +35,10 @@ def run_sfm(
     sparse_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. feature extraction
+    # NB: --SiftExtraction.use_gpu / --SiftMatching.use_gpu are CUDA-only
+    # flags in COLMAP's CLI. Homebrew's colmap is built without CUDA (no
+    # CUDA on Apple Silicon), so passing them aborts with "unrecognised
+    # option". CPU SIFT is the default and is what we want here.
     log.info("colmap feature_extractor")
     subprocess.run(
         [
@@ -43,7 +47,6 @@ def run_sfm(
             "--image_path", str(images_dir),
             "--ImageReader.single_camera", "1",
             "--ImageReader.camera_model", "OPENCV",
-            "--SiftExtraction.use_gpu", "1",
         ],
         check=True,
     )
@@ -55,7 +58,6 @@ def run_sfm(
         [
             "colmap", matcher_cmd,
             "--database_path", str(db_path),
-            "--SiftMatching.use_gpu", "1",
         ],
         check=True,
     )
