@@ -12,18 +12,24 @@ def run_sfm(
     backend: str,
     matcher: str,
 ) -> Path:
-    """Run COLMAP feature extraction + matching, then either GLOMAP or COLMAP mapper.
+    """Run COLMAP feature extraction + matching, then a mapper to produce the sparse model.
 
-    Returns the path to the sparse model directory (containing cameras.bin, images.bin, points3D.bin).
+    Returns the path to the sparse model directory (containing cameras.bin,
+    images.bin, points3D.bin).
 
-    GLOMAP only replaces the *mapper* step (the slow incremental SfM solver) with a
-    global optimizer that's 10–50× faster. Feature extraction and matching still go
-    through COLMAP.
+    Backends:
+      - "glomap"  → uses `colmap global_mapper` (the GLOMAP global SfM
+                    solver, integrated into COLMAP 4.x as a built-in
+                    subcommand). Falls back to incremental if the running
+                    colmap binary doesn't expose global_mapper.
+      - "colmap"  → uses `colmap mapper` (incremental SfM). Slower but
+                    guaranteed to exist on every COLMAP build.
+
+    Feature extraction and matching always go through `colmap`; only the
+    mapper step differs.
     """
     if shutil.which("colmap") is None:
         raise RuntimeError("colmap not found; run install_dependencies.sh")
-    if backend == "glomap" and shutil.which("glomap") is None:
-        raise RuntimeError("glomap not found; run install_dependencies.sh or fall back to backend='colmap'")
     if backend not in {"glomap", "colmap"}:
         raise ValueError(f"unknown sfm backend: {backend!r}")
     if matcher not in {"sequential", "exhaustive"}:
@@ -62,12 +68,20 @@ def run_sfm(
         check=True,
     )
 
-    # 3. mapper (GLOMAP or COLMAP)
-    if backend == "glomap":
-        log.info("glomap mapper (global SfM)")
+    # 3. mapper
+    use_global = backend == "glomap" and _colmap_has_global_mapper()
+    if backend == "glomap" and not use_global:
+        log.warning(
+            "colmap on this system doesn't expose `global_mapper`; falling back "
+            "to the incremental mapper. Upgrade colmap (brew upgrade colmap) for "
+            "the faster global SfM."
+        )
+
+    if use_global:
+        log.info("colmap global_mapper (built-in GLOMAP)")
         subprocess.run(
             [
-                "glomap", "mapper",
+                "colmap", "global_mapper",
                 "--database_path", str(db_path),
                 "--image_path", str(images_dir),
                 "--output_path", str(sparse_dir),
@@ -86,10 +100,29 @@ def run_sfm(
             check=True,
         )
 
-    # GLOMAP/COLMAP both write into a numbered subdir (0/, 1/, ...). Pick the largest.
+    # Both mappers write into a numbered subdir (0/, 1/, ...). Pick the largest.
     model_dirs = [d for d in sparse_dir.iterdir() if d.is_dir()]
     if not model_dirs:
         raise RuntimeError(f"SfM produced no model under {sparse_dir}")
     model_dir = max(model_dirs, key=lambda d: sum(f.stat().st_size for f in d.iterdir()))
     log.info("SfM model: %s", model_dir)
     return model_dir
+
+
+def _colmap_has_global_mapper() -> bool:
+    """Return True if `colmap global_mapper` is a recognised subcommand.
+
+    Older COLMAP releases (pre-4.x) don't expose this — `-h` returns a
+    nonzero exit code with a "command not recognised" error. We rely on
+    the exit code rather than parsing stderr so the check is robust to
+    locale/format changes.
+    """
+    try:
+        result = subprocess.run(
+            ["colmap", "global_mapper", "-h"],
+            capture_output=True,
+            timeout=10,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False

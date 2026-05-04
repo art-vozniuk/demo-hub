@@ -52,56 +52,24 @@ BREW_PACKAGES=(
 log "Installing/updating brew packages: ${BREW_PACKAGES[*]}"
 brew install "${BREW_PACKAGES[@]}"
 
-# 3. GLOMAP (no brew formula — build from source if missing) ---------------
-# We pin the build to the *system* colmap and poselib (both from brew) via
-# FETCH_COLMAP/FETCH_POSELIB=OFF, otherwise GLOMAP bundles its own COLMAP
-# via FetchContent and the resulting glomap binary speaks a slightly
-# different SQLite schema than the brew `colmap` binary that wrote the
-# database — which crashes with "SQLite error: SQL logic error" at the
-# very start of `glomap mapper`.
+# 3. GLOMAP — no longer a separate build step. -----------------------------
+# As of COLMAP 4.x, the GLOMAP global SfM pipeline ships as a first-class
+# subcommand `colmap global_mapper`. We invoke it directly from
+# pipeline/run_sfm.py and don't need to compile the standalone glomap repo.
+# (Previous versions of this script built it from source against bundled
+# COLMAP, which produced binaries that crashed on a SQLite schema mismatch
+# when reading the database written by brew's colmap.)
+#
+# Clean up any artefacts from prior runs of those older scripts so a re-run
+# doesn't leave a stale, broken binary on PATH:
 GLOMAP_BIN="$(brew --prefix)/bin/glomap"
-GLOMAP_MARKER="$SCRIPT_DIR/.build/glomap/.installed-against-system-colmap"
-if [[ -x "$GLOMAP_BIN" && -f "$GLOMAP_MARKER" ]]; then
-  log "glomap already installed at $GLOMAP_BIN"
-else
-  if [[ -x "$GLOMAP_BIN" ]]; then
-    warn "removing previous glomap install (missing system-colmap marker)"
-    rm -f "$GLOMAP_BIN"
-  fi
-  log "building glomap from source"
-  GLOMAP_SRC="$SCRIPT_DIR/.build/glomap"
-  mkdir -p "$(dirname "$GLOMAP_SRC")"
-  if [[ ! -d "$GLOMAP_SRC" ]]; then
-    git clone --depth=1 https://github.com/colmap/glomap.git "$GLOMAP_SRC"
-  fi
-  pushd "$GLOMAP_SRC" >/dev/null
-
-  # AppleClang doesn't ship with OpenMP. CMake's FindOpenMP can't locate the
-  # Homebrew libomp on its own — we have to spell out where it lives.
-  # Without these flags configure fails with:
-  #   "Could NOT find OpenMP_C (missing: OpenMP_C_FLAGS OpenMP_C_LIB_NAMES)"
-  LIBOMP_PREFIX="$(brew --prefix libomp)"
-  if [[ ! -d "$LIBOMP_PREFIX" ]]; then
-    err "libomp not found at expected brew prefix; reinstall via 'brew install libomp'"
-    exit 1
-  fi
-
-  # --fresh forces a clean configure even if a previous failed (or
-  # successfully-but-with-bundled-colmap) run left a stale CMakeCache.txt.
-  cmake -B build -GNinja --fresh \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX="$(brew --prefix)" \
-    -DFETCH_COLMAP=OFF \
-    -DFETCH_POSELIB=OFF \
-    -DOpenMP_C_FLAGS="-Xpreprocessor -fopenmp -I${LIBOMP_PREFIX}/include" \
-    -DOpenMP_CXX_FLAGS="-Xpreprocessor -fopenmp -I${LIBOMP_PREFIX}/include" \
-    -DOpenMP_C_LIB_NAMES=omp \
-    -DOpenMP_CXX_LIB_NAMES=omp \
-    -DOpenMP_omp_LIBRARY="${LIBOMP_PREFIX}/lib/libomp.dylib"
-  cmake --build build --target install
-  popd >/dev/null
-  touch "$GLOMAP_MARKER"
-  log "glomap installed at $GLOMAP_BIN (linked against system colmap)"
+if [[ -x "$GLOMAP_BIN" ]]; then
+  warn "removing legacy standalone glomap install at $GLOMAP_BIN (now using colmap global_mapper instead)"
+  rm -f "$GLOMAP_BIN"
+fi
+if [[ -d "$SCRIPT_DIR/.build/glomap" ]]; then
+  warn "removing legacy glomap source tree at $SCRIPT_DIR/.build/glomap"
+  rm -rf "$SCRIPT_DIR/.build/glomap"
 fi
 
 # 4. Brush (Rust GS trainer; download prebuilt release) --------------------
