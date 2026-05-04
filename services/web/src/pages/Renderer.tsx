@@ -658,18 +658,39 @@ const Renderer = () => {
         // Poll for Emscripten's Module to appear so we can wrap onAbort and
         // printErr. Module is set up asynchronously during WASM boot, so it's
         // not there at iframe-load time.
+        //
+        // Property access on Module is guarded in -sASSERTIONS builds: reading
+        // or assigning a method that wasn't in EXPORTED_RUNTIME_METHODS throws
+        // (e.g. "'printErr' was not exported. add it to EXPORTED_RUNTIME_METHODS").
+        // Hook each method best-effort so a guarded build doesn't abort the
+        // engine — we just lose those breadcrumbs.
+        const safeHook = <K extends "onAbort" | "printErr" | "print">(
+          M: Record<string, unknown>,
+          key: K,
+          wrap: (orig: ((msg: string) => void) | undefined) => (msg: string) => void,
+        ) => {
+          let orig: ((msg: string) => void) | undefined;
+          try {
+            orig = M[key] as ((msg: string) => void) | undefined;
+          } catch {
+            rendererBreadcrumb("module hook skipped (read guarded)", { key });
+            return;
+          }
+          try {
+            (M as Record<string, unknown>)[key] = wrap(orig);
+          } catch {
+            rendererBreadcrumb("module hook skipped (write guarded)", { key });
+          }
+        };
+
         pollHandle = setInterval(() => {
-          const M = win.Module as undefined | {
+          const M = win.Module as undefined | (Record<string, unknown> & {
             __sentryHooked?: boolean;
-            onAbort?: (msg: string) => void;
-            printErr?: (msg: string) => void;
-            print?: (msg: string) => void;
-          };
+          });
           if (!M || M.__sentryHooked) return;
           M.__sentryHooked = true;
 
-          const origAbort = M.onAbort;
-          M.onAbort = (msg: string) => {
+          safeHook(M, "onAbort", (origAbort) => (msg) => {
             origAbort?.(msg);
             pushEngineLog(`abort: ${msg}`);
             setCrash((c) => c ?? {
@@ -677,11 +698,10 @@ const Renderer = () => {
               message: String(msg),
               engineLogTail: [...engineLogRef.current],
             });
-          };
+          });
 
-          const origPrintErr = M.printErr;
-          M.printErr = (msg: string) => {
-            origPrintErr?.call(M, msg);
+          safeHook(M, "printErr", (origPrintErr) => (msg) => {
+            origPrintErr?.(msg);
             pushEngineLog(msg);
             // Engine pre-emptively logs these before the eventual abort/throw.
             // Catching them here shortens the failure-to-UI delay considerably.
@@ -692,13 +712,12 @@ const Renderer = () => {
                 engineLogTail: [...engineLogRef.current],
               });
             }
-          };
+          });
 
-          const origPrint = M.print;
-          M.print = (msg: string) => {
-            origPrint?.call(M, msg);
+          safeHook(M, "print", (origPrint) => (msg) => {
+            origPrint?.(msg);
             pushEngineLog(msg);
-          };
+          });
 
           if (pollHandle) {
             clearInterval(pollHandle);
