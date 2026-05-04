@@ -53,9 +53,21 @@ log "Installing/updating brew packages: ${BREW_PACKAGES[*]}"
 brew install "${BREW_PACKAGES[@]}"
 
 # 3. GLOMAP (no brew formula — build from source if missing) ---------------
-if command -v glomap >/dev/null 2>&1; then
-  log "glomap already installed at $(command -v glomap)"
+# We pin the build to the *system* colmap and poselib (both from brew) via
+# FETCH_COLMAP/FETCH_POSELIB=OFF, otherwise GLOMAP bundles its own COLMAP
+# via FetchContent and the resulting glomap binary speaks a slightly
+# different SQLite schema than the brew `colmap` binary that wrote the
+# database — which crashes with "SQLite error: SQL logic error" at the
+# very start of `glomap mapper`.
+GLOMAP_BIN="$(brew --prefix)/bin/glomap"
+GLOMAP_MARKER="$SCRIPT_DIR/.build/glomap/.installed-against-system-colmap"
+if [[ -x "$GLOMAP_BIN" && -f "$GLOMAP_MARKER" ]]; then
+  log "glomap already installed at $GLOMAP_BIN"
 else
+  if [[ -x "$GLOMAP_BIN" ]]; then
+    warn "removing previous glomap install (missing system-colmap marker)"
+    rm -f "$GLOMAP_BIN"
+  fi
   log "building glomap from source"
   GLOMAP_SRC="$SCRIPT_DIR/.build/glomap"
   mkdir -p "$(dirname "$GLOMAP_SRC")"
@@ -74,11 +86,13 @@ else
     exit 1
   fi
 
-  # --fresh forces a clean configure even if a previous failed run left a
-  # stale CMakeCache.txt (otherwise cmake reuses the cached missing-OpenMP).
+  # --fresh forces a clean configure even if a previous failed (or
+  # successfully-but-with-bundled-colmap) run left a stale CMakeCache.txt.
   cmake -B build -GNinja --fresh \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$(brew --prefix)" \
+    -DFETCH_COLMAP=OFF \
+    -DFETCH_POSELIB=OFF \
     -DOpenMP_C_FLAGS="-Xpreprocessor -fopenmp -I${LIBOMP_PREFIX}/include" \
     -DOpenMP_CXX_FLAGS="-Xpreprocessor -fopenmp -I${LIBOMP_PREFIX}/include" \
     -DOpenMP_C_LIB_NAMES=omp \
@@ -86,7 +100,8 @@ else
     -DOpenMP_omp_LIBRARY="${LIBOMP_PREFIX}/lib/libomp.dylib"
   cmake --build build --target install
   popd >/dev/null
-  log "glomap installed at $(command -v glomap)"
+  touch "$GLOMAP_MARKER"
+  log "glomap installed at $GLOMAP_BIN (linked against system colmap)"
 fi
 
 # 4. Brush (Rust GS trainer; download prebuilt release) --------------------
