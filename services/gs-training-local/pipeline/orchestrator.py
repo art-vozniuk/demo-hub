@@ -8,6 +8,7 @@ from pipeline.config import PipelineConfig
 from pipeline.extract_frames import extract_frames
 from pipeline.run_sfm import run_sfm
 from pipeline.run_training import run_training
+from pipeline.select_frames import filter_frames
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +38,21 @@ def run_pipeline(video: Path, output: Path, config: PipelineConfig) -> Path:
     timings["extract_frames"] = time.time() - t
     if not frames:
         raise RuntimeError(f"no frames extracted from {video}")
+
+    # 1b. Quality filter — drop blur/finger/overexposed frames before SfM
+    if config.filter_frames:
+        t = time.time()
+        frames = filter_frames(
+            frames,
+            min_sharpness_abs=config.filter_min_sharpness,
+            drop_below_pct=config.filter_drop_below_pct,
+        )
+        timings["filter_frames"] = time.time() - t
+        if len(frames) < 10:
+            raise RuntimeError(
+                f"too few frames survived quality filter: {len(frames)}. "
+                "Loosen filter_min_sharpness / filter_drop_below_pct or re-shoot."
+            )
 
     # 2. SfM
     t = time.time()

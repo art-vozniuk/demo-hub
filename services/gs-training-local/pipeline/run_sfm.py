@@ -68,6 +68,20 @@ def run_sfm(
         check=True,
     )
 
+    # 2b. view_graph_calibrator — estimates per-camera focal length from
+    # matches and writes the result back to the database. Without this step
+    # the global_mapper warns "Less than 50% of cameras have prior focal
+    # lengths" because ffmpeg-extracted JPGs lack EXIF, and the
+    # reconstruction is noticeably worse without good intrinsic priors.
+    log.info("colmap view_graph_calibrator (focal length priors)")
+    subprocess.run(
+        [
+            "colmap", "view_graph_calibrator",
+            "--database_path", str(db_path),
+        ],
+        check=False,  # informational; if it fails, mapper still runs
+    )
+
     # 3. mapper
     use_global = backend == "glomap" and _colmap_has_global_mapper()
     if backend == "glomap" and not use_global:
