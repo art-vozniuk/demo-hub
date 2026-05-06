@@ -82,14 +82,43 @@ function extractAdapterInfo(adapter: MinimalAdapter): AdapterInfo {
   return EMPTY_INFO;
 }
 
+// All iOS browsers (Safari, Chrome, Edge, Firefox) are forced to use WebKit,
+// so the WebGPU feature-flag toggle is shared across them — worth telling the
+// user explicitly, since "switch to Chrome" is the wrong instinct on iPhone.
+function isIOS(): boolean {
+  if (typeof navigator === "undefined") return false;
+  if (/iPad|iPhone|iPod/.test(navigator.userAgent)) return true;
+  // iPadOS 13+ reports as desktop Safari; the touch-points heuristic is
+  // Apple's own recommended workaround.
+  return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+}
+
 /** Friendly user-facing description of why the renderer can't start. */
 export function describeUnsupported(status: WebGpuStatus): {
   title: string;
   body:  string;
   hint:  string;
+  steps?: string[];
 } {
   switch (status.kind) {
     case "no-api":
+      if (isIOS()) {
+        return {
+          title: "WebGPU isn't enabled in this browser",
+          body:
+            "On iPhone and iPad, every browser (Safari, Chrome, Edge, Firefox) " +
+            "shares Apple's WebKit engine — so the same fix applies whichever one " +
+            "you're using. WebGPU ships on iOS 18, but it's behind a feature flag " +
+            "that's off by default.",
+          hint: "Turn on the WebGPU feature flag in iOS Settings, then reload this page:",
+          steps: [
+            "Open the Settings app on your iPhone or iPad",
+            "Go to Apps → Safari → Advanced → Feature Flags (on iOS 17 or earlier: Settings → Safari → Advanced → Feature Flags)",
+            "Toggle WebGPU on",
+            "Come back to this tab and reload the page",
+          ],
+        };
+      }
       return {
         title: "Your browser doesn't support WebGPU",
         body:
@@ -97,8 +126,7 @@ export function describeUnsupported(status: WebGpuStatus): {
           "in this browser.",
         hint:
           "On desktop, use the latest Chrome, Edge, or Safari 18+. " +
-          "On iOS, update to iOS 18 or newer. On Android, use Chrome 121+ " +
-          "(some devices still need to enable the flag chrome://flags/#enable-unsafe-webgpu).",
+          "On Android, use Chrome 121+ (some devices still need to enable the flag chrome://flags/#enable-unsafe-webgpu).",
       };
     case "no-adapter":
       return {
