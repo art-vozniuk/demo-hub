@@ -8,7 +8,7 @@ interface Props {
 }
 
 export const RendererUnsupported = ({ status }: Props) => {
-  const { title, body, hint } = describeUnsupported(status);
+  const { title, body, hint, steps } = describeUnsupported(status);
 
   const ua = typeof navigator !== "undefined" ? navigator.userAgent : "unknown";
 
@@ -18,6 +18,13 @@ export const RendererUnsupported = ({ status }: Props) => {
       <h2 className="text-2xl font-semibold tracking-tight">{title}</h2>
       <p className="max-w-lg text-sm text-muted-foreground">{body}</p>
       <p className="max-w-lg text-xs text-muted-foreground/80">{hint}</p>
+      {steps && steps.length > 0 && (
+        <ol className="max-w-lg w-full text-left text-xs text-muted-foreground/90 list-decimal list-inside space-y-1 marker:text-muted-foreground/60">
+          {steps.map((step, i) => (
+            <li key={i}>{step}</li>
+          ))}
+        </ol>
+      )}
       <details className="max-w-lg w-full text-left mt-4">
         <summary className="cursor-pointer text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors">
           Technical details
