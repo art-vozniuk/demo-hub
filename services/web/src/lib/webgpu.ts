@@ -117,31 +117,26 @@ export function describeUnsupported(status: WebGpuStatus): {
       if (isIOS()) {
         if (isIOSSafari()) {
           return {
-            title: "WebGPU isn't enabled in Safari yet",
-            body:
-              "iOS 18 ships WebGPU, but it's behind a Safari feature flag that's " +
-              "off by default. Flip it once and the renderer will work.",
-            hint: "Turn on the WebGPU feature flag in iOS Settings, then reload this page:",
+            title: "WebGPU is not enabled",
+            body: "Turn it on in iOS Settings to run the renderer.",
+            hint: "Steps:",
             steps: [
-              "Open the Settings app on your iPhone or iPad",
-              "Go to Apps → Safari → Advanced → Feature Flags (on iOS 17 or earlier: Settings → Safari → Advanced → Feature Flags)",
+              "Open the Settings app",
+              "Go to Apps → Safari → Advanced → Feature Flags",
               "Toggle WebGPU on",
-              "Come back to this tab and reload the page",
+              "Reload this page",
             ],
           };
         }
         return {
-          title: "WebGPU isn't available in this iOS browser",
-          body:
-            "On iPhone and iPad, only Safari can run WebGPU. Chrome, Firefox, Edge " +
-            "and other iOS browsers all share Apple's WebKit engine, but Apple gates " +
-            "the WebGPU feature flag to Safari itself — so it can't be enabled here.",
-          hint: "Open this page in Safari, then turn on the WebGPU flag:",
+          title: "WebGPU is not available in this browser",
+          body: "On iOS it's only available in Safari.",
+          hint: "To enable it:",
           steps: [
-            "Copy this page's URL and open it in Safari",
-            "In iOS Settings: Apps → Safari → Advanced → Feature Flags (on iOS 17 or earlier: Settings → Safari → Advanced → Feature Flags)",
+            "Open this page in Safari",
+            "Open Settings → Apps → Safari → Advanced → Feature Flags",
             "Toggle WebGPU on",
-            "Reload the page in Safari",
+            "Reload the page",
           ],
         };
       }
