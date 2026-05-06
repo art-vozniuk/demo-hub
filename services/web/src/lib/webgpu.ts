@@ -82,15 +82,27 @@ function extractAdapterInfo(adapter: MinimalAdapter): AdapterInfo {
   return EMPTY_INFO;
 }
 
-// All iOS browsers (Safari, Chrome, Edge, Firefox) are forced to use WebKit,
-// so the WebGPU feature-flag toggle is shared across them — worth telling the
-// user explicitly, since "switch to Chrome" is the wrong instinct on iPhone.
+// All iOS browsers are forced to use WebKit, but Apple gates the WebGPU
+// feature flag to Safari.app — third-party iOS browsers (Chrome via CriOS,
+// Firefox via FxiOS, Edge via EdgiOS) sit on WKWebView and don't get the
+// toggle. So we have to tell the two cases apart and give different advice.
 function isIOS(): boolean {
   if (typeof navigator === "undefined") return false;
   if (/iPad|iPhone|iPod/.test(navigator.userAgent)) return true;
   // iPadOS 13+ reports as desktop Safari; the touch-points heuristic is
   // Apple's own recommended workaround.
   return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+}
+
+function isIOSSafari(): boolean {
+  if (!isIOS() || typeof navigator === "undefined") return false;
+  // Any of these tokens means we're inside a non-Safari WKWebView wrapper.
+  // Keep the list narrow on purpose: future browsers without their own
+  // token would (correctly) fall through to the Safari branch.
+  if (/CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser|DuckDuckGo|GSA/.test(navigator.userAgent)) {
+    return false;
+  }
+  return /Safari\//.test(navigator.userAgent);
 }
 
 /** Friendly user-facing description of why the renderer can't start. */
@@ -103,19 +115,33 @@ export function describeUnsupported(status: WebGpuStatus): {
   switch (status.kind) {
     case "no-api":
       if (isIOS()) {
+        if (isIOSSafari()) {
+          return {
+            title: "WebGPU isn't enabled in Safari yet",
+            body:
+              "iOS 18 ships WebGPU, but it's behind a Safari feature flag that's " +
+              "off by default. Flip it once and the renderer will work.",
+            hint: "Turn on the WebGPU feature flag in iOS Settings, then reload this page:",
+            steps: [
+              "Open the Settings app on your iPhone or iPad",
+              "Go to Apps → Safari → Advanced → Feature Flags (on iOS 17 or earlier: Settings → Safari → Advanced → Feature Flags)",
+              "Toggle WebGPU on",
+              "Come back to this tab and reload the page",
+            ],
+          };
+        }
         return {
-          title: "WebGPU isn't enabled in this browser",
+          title: "WebGPU isn't available in this iOS browser",
           body:
-            "On iPhone and iPad, every browser (Safari, Chrome, Edge, Firefox) " +
-            "shares Apple's WebKit engine — so the same fix applies whichever one " +
-            "you're using. WebGPU ships on iOS 18, but it's behind a feature flag " +
-            "that's off by default.",
-          hint: "Turn on the WebGPU feature flag in iOS Settings, then reload this page:",
+            "On iPhone and iPad, only Safari can run WebGPU. Chrome, Firefox, Edge " +
+            "and other iOS browsers all share Apple's WebKit engine, but Apple gates " +
+            "the WebGPU feature flag to Safari itself — so it can't be enabled here.",
+          hint: "Open this page in Safari, then turn on the WebGPU flag:",
           steps: [
-            "Open the Settings app on your iPhone or iPad",
-            "Go to Apps → Safari → Advanced → Feature Flags (on iOS 17 or earlier: Settings → Safari → Advanced → Feature Flags)",
+            "Copy this page's URL and open it in Safari",
+            "In iOS Settings: Apps → Safari → Advanced → Feature Flags (on iOS 17 or earlier: Settings → Safari → Advanced → Feature Flags)",
             "Toggle WebGPU on",
-            "Come back to this tab and reload the page",
+            "Reload the page in Safari",
           ],
         };
       }
