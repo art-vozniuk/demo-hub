@@ -3,211 +3,358 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Sparkles, ArrowLeft } from "lucide-react";
 import type { RecastTemplateRead } from "@/api";
-import { pipelinesApi, type PipelineStatusItem, ApiError } from "@/api";
+import { pipelinesApi, type PipelineStatusItem } from "@/api";
 import { uploadToS3, parseS3Url, getFileExtension } from "@/lib/s3";
 import UploadDropzone from "@/components/UploadDropzone";
 import GenerationCard from "@/components/GenerationCard";
+import FaceSelectionOverlay from "@/components/FaceSelectionOverlay";
+import { useFaceRecognition } from "@/hooks/useFaceRecognition";
 import { toast } from "sonner";
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from "uuid";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAnalytics } from "@/hooks/useAnalytics";
 
-interface GenerationState {
-  selectedTemplates: RecastTemplateRead[];
-  selectedFile: File | null;
-  uploadedImageS3?: { bucket: string; key: string } | null;
-  autoGenerate?: boolean;
+interface S3Ref {
+  bucket: string;
+  key: string;
 }
 
-const saveGenerationState = async (state: GenerationState): Promise<void> => {
-  if (state.selectedFile) {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const dataToSave = {
-          selectedTemplates: state.selectedTemplates,
-          fileDataUrl: reader.result,
-          fileName: state.selectedFile?.name,
-          fileType: state.selectedFile?.type,
-          uploadedImageS3: state.uploadedImageS3,
-        };
-        sessionStorage.setItem('generation-state', JSON.stringify(dataToSave));
-        console.log("Saved generation state to sessionStorage:", state.selectedTemplates.length, "templates");
-        resolve();
-      };
-      reader.readAsDataURL(state.selectedFile);
-    });
-  }
+interface SerializedFile {
+  fileDataUrl: string;
+  fileName: string;
+  fileType: string;
+}
+
+interface PersistedState {
+  isCustom: boolean;
+  selectedTemplates: RecastTemplateRead[];
+  selfie?: SerializedFile;
+  selfieS3?: S3Ref;
+  template?: SerializedFile;
+  templateS3?: S3Ref;
+}
+
+const STORAGE_KEY = "generation-state";
+
+const fileToDataUrl = (file: File): Promise<SerializedFile> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () =>
+      resolve({
+        fileDataUrl: reader.result as string,
+        fileName: file.name,
+        fileType: file.type,
+      });
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+
+const dataUrlToFile = (s: SerializedFile): File => {
+  const byteString = atob(s.fileDataUrl.split(",")[1]);
+  const mimeString = s.fileDataUrl.split(",")[0].split(":")[1].split(";")[0];
+  const ab = new ArrayBuffer(byteString.length);
+  const ia = new Uint8Array(ab);
+  for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+  const blob = new Blob([ab], { type: mimeString });
+  return new File([blob], s.fileName, { type: s.fileType });
 };
 
-const loadGenerationState = (): GenerationState | null => {
-  const saved = sessionStorage.getItem('generation-state');
+const loadPersisted = (): {
+  isCustom: boolean;
+  selectedTemplates: RecastTemplateRead[];
+  selfieFile: File | null;
+  selfieS3: S3Ref | null;
+  templateFile: File | null;
+  templateS3: S3Ref | null;
+} | null => {
+  const saved = sessionStorage.getItem(STORAGE_KEY);
   if (!saved) return null;
-
   try {
-    const data = JSON.parse(saved);
-    
-    if (data.fileDataUrl) {
-      const byteString = atob(data.fileDataUrl.split(',')[1]);
-      const mimeString = data.fileDataUrl.split(',')[0].split(':')[1].split(';')[0];
-      const ab = new ArrayBuffer(byteString.length);
-      const ia = new Uint8Array(ab);
-      for (let i = 0; i < byteString.length; i++) {
-        ia[i] = byteString.charCodeAt(i);
-      }
-      const blob = new Blob([ab], { type: mimeString });
-      const file = new File([blob], data.fileName, { type: data.fileType });
-      
-      return {
-        selectedTemplates: data.selectedTemplates,
-        selectedFile: file,
-        uploadedImageS3: data.uploadedImageS3 || null,
-      };
-    }
-    
-    return null;
+    const data = JSON.parse(saved) as PersistedState;
+    return {
+      isCustom: data.isCustom,
+      selectedTemplates: data.selectedTemplates ?? [],
+      selfieFile: data.selfie ? dataUrlToFile(data.selfie) : null,
+      selfieS3: data.selfieS3 ?? null,
+      templateFile: data.template ? dataUrlToFile(data.template) : null,
+      templateS3: data.templateS3 ?? null,
+    };
   } catch (error) {
-    console.error('Failed to restore generation state:', error);
+    console.error("Failed to restore generation state:", error);
     toast.error("Failed to restore generation state: " + error);
     return null;
   }
 };
 
-const clearGenerationState = () => {
-  sessionStorage.removeItem('generation-state');
+const persist = async (
+  state: PersistedState & {
+    selfieFile?: File | null;
+    templateFile?: File | null;
+  }
+) => {
+  const payload: PersistedState = {
+    isCustom: state.isCustom,
+    selectedTemplates: state.selectedTemplates,
+    selfieS3: state.selfieS3,
+    templateS3: state.templateS3,
+  };
+  if (state.selfieFile) payload.selfie = await fileToDataUrl(state.selfieFile);
+  if (state.templateFile)
+    payload.template = await fileToDataUrl(state.templateFile);
+  sessionStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
 };
+
+const clearPersisted = () => sessionStorage.removeItem(STORAGE_KEY);
 
 const FaceFusionGenerate = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
   const { track } = useAnalytics();
-  
+
   const [initialState] = useState(() => {
-    const savedState = loadGenerationState();
-    const templates = location.state?.selectedTemplates || savedState?.selectedTemplates || [];
-    
-    if (location.state?.selectedTemplates) {
-      console.log("Loading templates from location.state");
-    } else if (savedState?.selectedTemplates) {
-      console.log("Loading templates from sessionStorage:", savedState.selectedTemplates.length);
-    } else {
-      console.log("No templates found");
-    }
-    
+    const persisted = loadPersisted();
+    const fromState = location.state as
+      | {
+          selectedTemplates?: RecastTemplateRead[];
+          customTemplate?: boolean;
+        }
+      | null;
+
     return {
-      templates,
-      file: savedState?.selectedFile || null,
-      s3Upload: savedState?.uploadedImageS3 || null,
+      isCustom: Boolean(fromState?.customTemplate || persisted?.isCustom),
+      templates:
+        fromState?.selectedTemplates || persisted?.selectedTemplates || [],
+      selfieFile: persisted?.selfieFile || null,
+      selfieS3: persisted?.selfieS3 || null,
+      templateFile: persisted?.templateFile || null,
+      templateS3: persisted?.templateS3 || null,
     };
   });
 
-  const [selectedTemplates] = useState<RecastTemplateRead[]>(initialState.templates);
-  const [selectedFile, setSelectedFile] = useState<File | null>(initialState.file);
-  const [uploadedImageS3, setUploadedImageS3] = useState<{ bucket: string; key: string } | null>(initialState.s3Upload);
-  const [isUploading, setIsUploading] = useState(false);
+  const isCustom = initialState.isCustom;
+  const [selectedTemplates] = useState<RecastTemplateRead[]>(
+    initialState.templates
+  );
+
+  const [selfieFile, setSelfieFile] = useState<File | null>(
+    initialState.selfieFile
+  );
+  const [selfieS3, setSelfieS3] = useState<S3Ref | null>(initialState.selfieS3);
+  const [isUploadingSelfie, setIsUploadingSelfie] = useState(false);
+
+  const [templateFile, setTemplateFile] = useState<File | null>(
+    initialState.templateFile
+  );
+  const [templateS3, setTemplateS3] = useState<S3Ref | null>(
+    initialState.templateS3
+  );
+  const [isUploadingTemplate, setIsUploadingTemplate] = useState(false);
+
+  const selfieRecognition = useFaceRecognition();
+  const templateRecognition = useFaceRecognition();
+
   const [isProcessing, setIsProcessing] = useState(false);
-  const [pipelineStatuses, setPipelineStatuses] = useState<Map<string, PipelineStatusItem>>(new Map());
+  const [pipelineStatuses, setPipelineStatuses] = useState<
+    Map<string, PipelineStatusItem>
+  >(new Map());
   const [pipelineIds, setPipelineIds] = useState<string[]>([]);
-  const [completedAnimations, setCompletedAnimations] = useState<Set<string>>(new Set());
+  const [completedAnimations, setCompletedAnimations] = useState<Set<string>>(
+    new Set()
+  );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [totalGenerationDuration, setTotalGenerationDuration] = useState<number | null>(null);
+  const [totalGenerationDuration, setTotalGenerationDuration] = useState<
+    number | null
+  >(null);
+
   const pollingIntervalRef = useRef<number | null>(null);
   const pollingTimeoutRef = useRef<number | null>(null);
   const hasTriggeredAutoGenerate = useRef(false);
   const generationStartTime = useRef<number | null>(null);
   const isMountedRef = useRef(true);
 
+  const objectUrlsRef = useRef<Map<File, string>>(new Map());
+  const previewUrl = useCallback((file: File) => {
+    const cache = objectUrlsRef.current;
+    const cached = cache.get(file);
+    if (cached) return cached;
+    const url = URL.createObjectURL(file);
+    cache.set(file, url);
+    return url;
+  }, []);
+
+  useEffect(() => {
+    const cache = objectUrlsRef.current;
+    return () => {
+      cache.forEach((url) => URL.revokeObjectURL(url));
+      cache.clear();
+    };
+  }, []);
+
   const clearPolling = useCallback(() => {
     if (pollingIntervalRef.current) {
       clearInterval(pollingIntervalRef.current);
       pollingIntervalRef.current = null;
-      console.log("Cleared polling interval");
     }
     if (pollingTimeoutRef.current) {
       clearTimeout(pollingTimeoutRef.current);
       pollingTimeoutRef.current = null;
-      console.log("Cleared polling timeout");
     }
   }, []);
 
-  const pollPipelineStatuses = useCallback(async (ids: string[]) => {
-    if (!isMountedRef.current) return;
-    
-    try {
-      const response = await pipelinesApi.getStatus(ids);
-      
-      if (!isMountedRef.current) return;
-      
-      const statusMap = new Map<string, PipelineStatusItem>();
-      
-      let allCompleted = true;
-      let hasFailures = false;
-      let failureMessages: string[] = [];
-      
-      for (const pipeline of response.pipelines) {
-        statusMap.set(pipeline.id, pipeline);
-        if (pipeline.status !== "COMPLETED" && pipeline.status !== "FAILED") {
-          allCompleted = false;
-        }
-        if (pipeline.status === "FAILED") {
-          hasFailures = true;
-          const errorMsg = pipeline.message || "Unknown error";
-          console.error(`Pipeline ${pipeline.id} failed:`, errorMsg);
-          failureMessages.push(errorMsg);
-        }
-      }
-      
-      setPipelineStatuses(statusMap);
-      
-      if (allCompleted && generationStartTime.current && totalGenerationDuration === null) {
-        const duration = (Date.now() - generationStartTime.current) / 1000;
-        setTotalGenerationDuration(duration);
-        
-        response.pipelines.forEach(pipeline => {
-          if (pipeline.status === "COMPLETED") {
-            track({ 
-              name: 'generation_completed', 
-              params: { 
-                pipeline_id: pipeline.id, 
-                duration_seconds: duration 
-              } 
-            });
-          } else if (pipeline.status === "FAILED") {
-            track({ 
-              name: 'generation_failed', 
-              params: { 
-                pipeline_id: pipeline.id, 
-                error: pipeline.message || "Unknown error" 
-              } 
-            });
-          }
+  // Selfie upload → S3 → kick face_recognition.
+  useEffect(() => {
+    const upload = async (file: File) => {
+      setIsUploadingSelfie(true);
+      setErrorMessage(null);
+      try {
+        const id = uuidv4();
+        const ext = getFileExtension(file.name);
+        const result = await uploadToS3(file, "media", `user/${id}.${ext}`);
+        setSelfieS3(result);
+        track({
+          name: "image_uploaded",
+          params: {
+            file_size_kb: Math.round(file.size / 1024),
+            file_type: file.type,
+          },
         });
-        
-        if (hasFailures) {
-          toast.error("Some pipelines failed. Check individual results for details.");
-        }
+      } catch (error) {
+        console.error("Failed to upload selfie:", error);
+        toast.error("Failed to upload selfie: " + error);
+        setSelfieFile(null);
+      } finally {
+        setIsUploadingSelfie(false);
       }
-      
-      if (allCompleted) {
-        console.log("All pipelines completed, clearing polling");
-        setIsProcessing(false);
-        clearPolling();
-        return;
-      }
-    } catch (error) {
-      if (!isMountedRef.current) return;
-      
-      console.error("Failed to poll pipeline statuses:", error);
-      toast.error("Failed to poll pipeline statuses: " + error);
-      clearPolling();
-      setIsProcessing(false);
-    }
-  }, [totalGenerationDuration, clearPolling]);
+    };
 
-  const handleGenerateWithFile = useCallback(async (s3Result: { bucket: string; key: string }) => {
+    if (selfieFile && !selfieS3) {
+      upload(selfieFile);
+    }
+  }, [selfieFile, selfieS3, track]);
+
+  useEffect(() => {
+    if (selfieS3 && selfieRecognition.status === "idle") {
+      selfieRecognition.run({ bucket: selfieS3.bucket, key: selfieS3.key });
+    }
+  }, [selfieS3, selfieRecognition]);
+
+  // Template upload → S3 → kick face_recognition (custom mode only).
+  useEffect(() => {
+    const upload = async (file: File) => {
+      setIsUploadingTemplate(true);
+      setErrorMessage(null);
+      try {
+        const id = uuidv4();
+        const ext = getFileExtension(file.name);
+        const result = await uploadToS3(file, "media", `templates/${id}.${ext}`);
+        setTemplateS3(result);
+      } catch (error) {
+        console.error("Failed to upload template:", error);
+        toast.error("Failed to upload template: " + error);
+        setTemplateFile(null);
+      } finally {
+        setIsUploadingTemplate(false);
+      }
+    };
+
+    if (isCustom && templateFile && !templateS3) {
+      upload(templateFile);
+    }
+  }, [isCustom, templateFile, templateS3]);
+
+  useEffect(() => {
+    if (isCustom && templateS3 && templateRecognition.status === "idle") {
+      templateRecognition.run({
+        bucket: templateS3.bucket,
+        key: templateS3.key,
+      });
+    }
+  }, [isCustom, templateS3, templateRecognition]);
+
+  const pollPipelineStatuses = useCallback(
+    async (ids: string[]) => {
+      if (!isMountedRef.current) return;
+
+      try {
+        const response = await pipelinesApi.getStatus(ids);
+        if (!isMountedRef.current) return;
+
+        const statusMap = new Map<string, PipelineStatusItem>();
+        let allCompleted = true;
+        let hasFailures = false;
+
+        for (const pipeline of response.pipelines) {
+          statusMap.set(pipeline.id, pipeline);
+          if (pipeline.status !== "COMPLETED" && pipeline.status !== "FAILED") {
+            allCompleted = false;
+          }
+          if (pipeline.status === "FAILED") hasFailures = true;
+        }
+
+        setPipelineStatuses(statusMap);
+
+        if (
+          allCompleted &&
+          generationStartTime.current &&
+          totalGenerationDuration === null
+        ) {
+          const duration = (Date.now() - generationStartTime.current) / 1000;
+          setTotalGenerationDuration(duration);
+
+          response.pipelines.forEach((pipeline) => {
+            if (pipeline.status === "COMPLETED") {
+              track({
+                name: "generation_completed",
+                params: {
+                  pipeline_id: pipeline.id,
+                  duration_seconds: duration,
+                },
+              });
+            } else if (pipeline.status === "FAILED") {
+              track({
+                name: "generation_failed",
+                params: {
+                  pipeline_id: pipeline.id,
+                  error: pipeline.message || "Unknown error",
+                },
+              });
+            }
+          });
+
+          if (hasFailures) {
+            toast.error(
+              "Some pipelines failed. Check individual results for details."
+            );
+          }
+        }
+
+        if (allCompleted) {
+          setIsProcessing(false);
+          clearPolling();
+        }
+      } catch (error) {
+        if (!isMountedRef.current) return;
+        console.error("Failed to poll pipeline statuses:", error);
+        toast.error("Failed to poll pipeline statuses: " + error);
+        clearPolling();
+        setIsProcessing(false);
+      }
+    },
+    [totalGenerationDuration, clearPolling, track]
+  );
+
+  const startGeneration = useCallback(async () => {
+    if (!selfieS3) return;
+    const sourceBbox = selfieRecognition.selectedBbox;
+    if (!sourceBbox) return;
+
+    if (isCustom) {
+      if (!templateS3) return;
+      if (!templateRecognition.selectedBbox) return;
+    }
+
     generationStartTime.current = Date.now();
-    
     setIsProcessing(true);
     setPipelineStatuses(new Map());
     setCompletedAnimations(new Set());
@@ -216,86 +363,101 @@ const FaceFusionGenerate = () => {
 
     try {
       const traceId = uuidv4();
-      const jobs = selectedTemplates.map((template) => {
-        const templateS3 = parseS3Url(template.url);
-        
-        return {
-          pipeline_id: uuidv4(),
-          pipeline_name: "recast",
-          input: {
-            source_image_bucket: s3Result.bucket,
-            source_image_key: s3Result.key,
-            template_image_bucket: templateS3.bucket,
-            template_image_key: templateS3.key,
-          },
-        };
+
+      const jobs = isCustom
+        ? [
+            {
+              pipeline_id: uuidv4(),
+              pipeline_name: "face_swap",
+              input: {
+                source_image_bucket: selfieS3.bucket,
+                source_image_key: selfieS3.key,
+                template_image_bucket: templateS3!.bucket,
+                template_image_key: templateS3!.key,
+                source_face_bbox: sourceBbox,
+                target_face_bbox: templateRecognition.selectedBbox,
+              },
+            },
+          ]
+        : selectedTemplates.map((template) => {
+            const tplS3 = parseS3Url(template.url);
+            return {
+              pipeline_id: uuidv4(),
+              pipeline_name: "face_swap",
+              input: {
+                source_image_bucket: selfieS3.bucket,
+                source_image_key: selfieS3.key,
+                template_image_bucket: tplS3.bucket,
+                template_image_key: tplS3.key,
+                source_face_bbox: sourceBbox,
+              },
+            };
+          });
+
+      const ids = jobs.map((j) => j.pipeline_id);
+      setPipelineIds(ids);
+
+      await pipelinesApi.queuePipelines({ trace_id: traceId, jobs });
+
+      track({
+        name: "generation_started",
+        params: { pipeline_count: jobs.length, trace_id: traceId },
       });
 
-      const generatedPipelineIds = jobs.map(job => job.pipeline_id);
-      setPipelineIds(generatedPipelineIds);
-
-      const response = await pipelinesApi.queuePipelines({
-        trace_id: traceId,
-        jobs,
-      });
-
-      track({ 
-        name: 'generation_started', 
-        params: { 
-          pipeline_count: jobs.length, 
-          trace_id: traceId 
-        } 
-      });
-
-      toast.success(
-          `Your generation pipelines are queued.`,
-          { duration: 5000 }
-        );
+      toast.success("Your generation pipelines are queued.", { duration: 5000 });
 
       clearPolling();
-
-      await pollPipelineStatuses(generatedPipelineIds);
+      await pollPipelineStatuses(ids);
 
       pollingIntervalRef.current = window.setInterval(() => {
         if (!isMountedRef.current) {
           clearPolling();
           return;
         }
-        pollPipelineStatuses(generatedPipelineIds);
+        pollPipelineStatuses(ids);
       }, 1000);
 
       pollingTimeoutRef.current = window.setTimeout(() => {
         clearPolling();
         setIsProcessing(false);
-        setErrorMessage("Generation timeout. Sorry, GPUs might be currently offline. Please try again later.");
+        setErrorMessage(
+          "Generation timeout. Sorry, GPUs might be currently offline. Please try again later."
+        );
         toast.error("Generation timeout. GPUs might be offline.");
       }, 90000);
     } catch (error) {
       console.error("Failed to queue pipelines:", error);
       toast.error("Failed to queue pipelines: " + error);
-
       clearPolling();
       setIsProcessing(false);
       setPipelineIds([]);
     }
-  }, [selectedTemplates, pollPipelineStatuses, clearPolling]);
+  }, [
+    isCustom,
+    selectedTemplates,
+    selfieS3,
+    selfieRecognition.selectedBbox,
+    templateS3,
+    templateRecognition.selectedBbox,
+    pollPipelineStatuses,
+    clearPolling,
+    track,
+  ]);
 
-  const handleGenerate = async () => {
-    if (!selectedFile || !uploadedImageS3) return;
-
+  const handleGenerate = useCallback(async () => {
     setErrorMessage(null);
-
     if (!user) {
-      track({ name: 'auth_required', params: { redirect_from: 'generate_page' } });
+      track({ name: "auth_required", params: { redirect_from: "generate_page" } });
       try {
-        await saveGenerationState({
+        await persist({
+          isCustom,
           selectedTemplates,
-          selectedFile,
-          uploadedImageS3,
+          selfieFile,
+          selfieS3: selfieS3 ?? undefined,
+          templateFile: isCustom ? templateFile : null,
+          templateS3: isCustom ? templateS3 ?? undefined : undefined,
         });
-        
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
+        await new Promise((resolve) => setTimeout(resolve, 100));
         navigate("/auth", {
           state: {
             returnPath: "/face-fusion/generate",
@@ -310,79 +472,74 @@ const FaceFusionGenerate = () => {
       return;
     }
 
-    track({ 
-      name: 'generate_initiated', 
-      params: { 
-        template_count: selectedTemplates.length, 
-        has_auth: true 
-      } 
+    track({
+      name: "generate_initiated",
+      params: {
+        template_count: isCustom ? 1 : selectedTemplates.length,
+        has_auth: true,
+      },
     });
 
-    await handleGenerateWithFile(uploadedImageS3);
-  };
+    await startGeneration();
+  }, [
+    user,
+    isCustom,
+    selectedTemplates,
+    selfieFile,
+    selfieS3,
+    templateFile,
+    templateS3,
+    track,
+    navigate,
+    startGeneration,
+  ]);
 
+  // Auto-generate after returning from /auth — only fire once everything
+  // (uploads + face recognition + selected face) is ready, otherwise the
+  // generation would race the recognition pipeline.
   useEffect(() => {
-    const uploadFileToS3 = async (file: File) => {
-      setIsUploading(true);
-      setErrorMessage(null);
-      try {
-        const userImageId = uuidv4();
-        const extension = getFileExtension(file.name);
-        const userImageKey = `user/${userImageId}.${extension}`;
-
-        const uploadResult = await uploadToS3(file, "media", userImageKey);
-        setUploadedImageS3(uploadResult);
-        track({ 
-          name: 'image_uploaded', 
-          params: { 
-            file_size_kb: Math.round(file.size / 1024), 
-            file_type: file.type 
-          } 
-        });
-      } catch (error) {
-        console.error("Failed to upload image:", error);
-        toast.error("Failed to upload image: " + error);
-        setSelectedFile(null);
-      } finally {
-        setIsUploading(false);
-      }
-    };
-
-    if (selectedFile && !uploadedImageS3) {
-      uploadFileToS3(selectedFile);
-    }
-  }, [selectedFile, uploadedImageS3]);
-
-  useEffect(() => {
-    const searchParams = new URLSearchParams(location.search);
-    const shouldAutoGenerate = searchParams.get('autoGenerate') === 'true';
-    
-    if (shouldAutoGenerate && !authLoading && user && !hasTriggeredAutoGenerate.current && uploadedImageS3) {
+    const params = new URLSearchParams(location.search);
+    const shouldAutoGenerate = params.get("autoGenerate") === "true";
+    if (
+      shouldAutoGenerate &&
+      !authLoading &&
+      user &&
+      !hasTriggeredAutoGenerate.current &&
+      selfieS3 &&
+      selfieRecognition.selectedBbox &&
+      (!isCustom || (templateS3 && templateRecognition.selectedBbox))
+    ) {
       hasTriggeredAutoGenerate.current = true;
-      
       setTimeout(() => {
-        handleGenerateWithFile(uploadedImageS3);
+        startGeneration();
       }, 500);
     }
-  }, [location.search, authLoading, user, uploadedImageS3, handleGenerateWithFile]);
+  }, [
+    location.search,
+    authLoading,
+    user,
+    selfieS3,
+    templateS3,
+    isCustom,
+    selfieRecognition.selectedBbox,
+    templateRecognition.selectedBbox,
+    startGeneration,
+  ]);
 
   useEffect(() => {
     isMountedRef.current = true;
-    
-    const handleBeforeUnload = () => {
-      clearGenerationState();
-    };
-    
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    
+    const handleBeforeUnload = () => clearPersisted();
+    window.addEventListener("beforeunload", handleBeforeUnload);
     return () => {
       isMountedRef.current = false;
       clearPolling();
-      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, [clearPolling]);
 
-  if (selectedTemplates.length === 0) {
+  // Empty-state guard: someone landed on /generate without picking
+  // anything (and not via custom flow). Send them back.
+  if (!isCustom && selectedTemplates.length === 0) {
     return (
       <main className="container mx-auto px-6 py-16 flex items-center justify-center min-h-[calc(100vh-8rem)]">
         <div className="text-center space-y-6">
@@ -390,11 +547,14 @@ const FaceFusionGenerate = () => {
           <p className="text-muted-foreground">
             Please go back and select up to 3 templates first.
           </p>
-          <Button onClick={() => {
-            track({ name: 'back_to_templates', params: { source: 'no_templates_page' } });
-            clearGenerationState();
-            navigate("/face-fusion");
-          }} variant="outline">
+          <Button
+            onClick={() => {
+              track({ name: "back_to_templates", params: { source: "no_templates_page" } });
+              clearPersisted();
+              navigate("/face-fusion");
+            }}
+            variant="outline"
+          >
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back to Templates
           </Button>
@@ -418,96 +578,309 @@ const FaceFusionGenerate = () => {
     return count;
   };
 
-  const allAnimationsComplete = pipelineIds.length > 0 && 
-    (completedAnimations.size === selectedTemplates.length || 
-     countCompletedOrFailed() === selectedTemplates.length);
+  const generationCount = isCustom ? 1 : selectedTemplates.length;
+  const allAnimationsComplete =
+    pipelineIds.length > 0 &&
+    (completedAnimations.size === generationCount ||
+      countCompletedOrFailed() === generationCount);
+
+  // Generate button is enabled only when every prerequisite is satisfied
+  // for the current mode.
+  const selfieReady =
+    selfieRecognition.status === "complete" &&
+    selfieRecognition.selectedBbox !== null;
+  const templateReady =
+    !isCustom ||
+    (templateRecognition.status === "complete" &&
+      templateRecognition.selectedBbox !== null);
+  const canGenerate =
+    !isProcessing &&
+    pipelineIds.length === 0 &&
+    !!selfieS3 &&
+    !isUploadingSelfie &&
+    selfieReady &&
+    (!isCustom || (!!templateS3 && !isUploadingTemplate)) &&
+    templateReady;
+
+  const handleResetSelfie = () => {
+    setSelfieFile(null);
+    setSelfieS3(null);
+    selfieRecognition.reset();
+  };
+
+  const handleResetTemplate = () => {
+    setTemplateFile(null);
+    setTemplateS3(null);
+    templateRecognition.reset();
+  };
 
   return (
     <main className="container mx-auto px-6 py-16 space-y-12 min-h-[calc(100vh-8rem)]">
       <section className="max-w-4xl mx-auto space-y-6 text-center animate-fade-in">
-          <Button
-            onClick={() => {
-              track({ name: 'back_to_templates', params: { source: 'generate_page' } });
-              clearGenerationState();
-              navigate("/face-fusion");
-            }}
-            variant="ghost"
-            className="mb-4"
-          >
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Templates
-          </Button>
+        <Button
+          onClick={() => {
+            track({ name: "back_to_templates", params: { source: "generate_page" } });
+            clearPersisted();
+            navigate("/face-fusion");
+          }}
+          variant="ghost"
+          className="mb-4"
+        >
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back to Templates
+        </Button>
 
         <div className="space-y-4">
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-            Upload a clear portrait to apply {selectedTemplates.length} selected style
-            {selectedTemplates.length !== 1 ? "s" : ""}
+            {isCustom
+              ? "Upload a template and a portrait, choose which face to swap."
+              : `Upload a clear portrait to apply ${selectedTemplates.length} selected style${selectedTemplates.length !== 1 ? "s" : ""}`}
           </p>
         </div>
 
-        {!selectedFile ? (
-          <UploadDropzone
-            onFileSelect={setSelectedFile}
-            selectedFile={selectedFile}
-          />
-        ) : (
-          <div className="max-w-md mx-auto">
-            <div className="relative group">
-              <img
-                src={URL.createObjectURL(selectedFile)}
-                alt="Your selfie"
-                className="w-full rounded-xl shadow-2xl border border-border"
-              />
-              {isUploading && (
-                <div className="absolute inset-0 flex items-center justify-center bg-background/80 rounded-xl">
-                  <div className="text-center">
-                    <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-primary border-r-transparent mb-2"></div>
-                    <p className="text-sm text-muted-foreground">Uploading...</p>
+        {/* Custom flow: dual upload — template first, then selfie. */}
+        {isCustom && (
+          <div className="grid gap-8 md:grid-cols-2 max-w-3xl mx-auto">
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                1. Template
+              </h3>
+              {!templateFile ? (
+                <UploadDropzone
+                  onFileSelect={setTemplateFile}
+                  selectedFile={templateFile}
+                />
+              ) : !templateS3 || isUploadingTemplate ? (
+                <div className="max-w-md mx-auto">
+                  <div className="relative">
+                    <img
+                      src={previewUrl(templateFile)}
+                      alt="Template"
+                      className="w-full rounded-xl shadow-2xl border border-border"
+                    />
+                    <div className="absolute inset-0 flex items-center justify-center bg-background/80 rounded-xl">
+                      <div className="text-center">
+                        <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-primary border-r-transparent mb-2" />
+                        <p className="text-sm text-muted-foreground">Uploading…</p>
+                      </div>
+                    </div>
                   </div>
                 </div>
+              ) : (
+                <FaceSelectionOverlay
+                  imageUrl={previewUrl(templateFile)}
+                  faces={templateRecognition.payload?.faces ?? []}
+                  imageWidth={templateRecognition.payload?.image_width ?? 1}
+                  imageHeight={templateRecognition.payload?.image_height ?? 1}
+                  selectedFaceId={templateRecognition.selectedFaceId}
+                  onFaceSelect={templateRecognition.selectFace}
+                  isAnalyzing={templateRecognition.status === "running"}
+                  errorMessage={templateRecognition.errorMessage}
+                />
+              )}
+              {templateFile && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleResetTemplate}
+                  className="text-xs"
+                >
+                  Replace template
+                </Button>
+              )}
+            </div>
+
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                2. Your photo
+              </h3>
+              {!selfieFile ? (
+                <UploadDropzone
+                  onFileSelect={setSelfieFile}
+                  selectedFile={selfieFile}
+                />
+              ) : !selfieS3 || isUploadingSelfie ? (
+                <div className="max-w-md mx-auto">
+                  <div className="relative">
+                    <img
+                      src={previewUrl(selfieFile)}
+                      alt="Your selfie"
+                      className="w-full rounded-xl shadow-2xl border border-border"
+                    />
+                    <div className="absolute inset-0 flex items-center justify-center bg-background/80 rounded-xl">
+                      <div className="text-center">
+                        <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-primary border-r-transparent mb-2" />
+                        <p className="text-sm text-muted-foreground">Uploading…</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <FaceSelectionOverlay
+                  imageUrl={previewUrl(selfieFile)}
+                  faces={selfieRecognition.payload?.faces ?? []}
+                  imageWidth={selfieRecognition.payload?.image_width ?? 1}
+                  imageHeight={selfieRecognition.payload?.image_height ?? 1}
+                  selectedFaceId={selfieRecognition.selectedFaceId}
+                  onFaceSelect={selfieRecognition.selectFace}
+                  isAnalyzing={selfieRecognition.status === "running"}
+                  errorMessage={selfieRecognition.errorMessage}
+                />
+              )}
+              {selfieFile && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleResetSelfie}
+                  className="text-xs"
+                >
+                  Replace photo
+                </Button>
               )}
             </div>
           </div>
         )}
+
+        {/* Standard flow: only selfie upload. Templates are already chosen. */}
+        {!isCustom && (
+          <>
+            {!selfieFile ? (
+              <UploadDropzone
+                onFileSelect={setSelfieFile}
+                selectedFile={selfieFile}
+              />
+            ) : !selfieS3 || isUploadingSelfie ? (
+              <div className="max-w-md mx-auto">
+                <div className="relative group">
+                  <img
+                    src={previewUrl(selfieFile)}
+                    alt="Your selfie"
+                    className="w-full rounded-xl shadow-2xl border border-border"
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center bg-background/80 rounded-xl">
+                    <div className="text-center">
+                      <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-primary border-r-transparent mb-2" />
+                      <p className="text-sm text-muted-foreground">Uploading…</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <FaceSelectionOverlay
+                imageUrl={previewUrl(selfieFile)}
+                faces={selfieRecognition.payload?.faces ?? []}
+                imageWidth={selfieRecognition.payload?.image_width ?? 1}
+                imageHeight={selfieRecognition.payload?.image_height ?? 1}
+                selectedFaceId={selfieRecognition.selectedFaceId}
+                onFaceSelect={selfieRecognition.selectFace}
+                isAnalyzing={selfieRecognition.status === "running"}
+                errorMessage={selfieRecognition.errorMessage}
+              />
+            )}
+            {selfieFile && !isProcessing && pipelineIds.length === 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleResetSelfie}
+                className="text-xs"
+              >
+                Replace photo
+              </Button>
+            )}
+          </>
+        )}
       </section>
 
-      {selectedFile && (
+      {((isCustom && templateFile && selfieFile) ||
+        (!isCustom && selfieFile)) && (
         <>
-          <section className="max-w-4xl mx-auto">
-            <h2 className="text-2xl font-bold text-center mb-8">
-              Selected Templates
-            </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-              {selectedTemplates.map((template, index) => {
-                const pipelineId = pipelineIds[index];
-                const status = pipelineId ? pipelineStatuses.get(pipelineId) : null;
-                const isCardProcessing = pipelineId ? (!status || status.status === "RUNNING" || status.status === "PENDING") : false;
-                const generatedImage = status?.status === "COMPLETED" ? status.result_url : null;
-                const cardErrorMessage = status?.status === "FAILED" ? status.message : null;
+          {!isCustom && (
+            <section className="max-w-4xl mx-auto">
+              <h2 className="text-2xl font-bold text-center mb-8">
+                Selected Templates
+              </h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                {selectedTemplates.map((template, index) => {
+                  const pipelineId = pipelineIds[index];
+                  const status = pipelineId
+                    ? pipelineStatuses.get(pipelineId)
+                    : null;
+                  const isCardProcessing = pipelineId
+                    ? !status ||
+                      status.status === "RUNNING" ||
+                      status.status === "PENDING"
+                    : false;
+                  const generatedImage =
+                    status?.status === "COMPLETED" ? status.result_url : null;
+                  const cardErrorMessage =
+                    status?.status === "FAILED" ? status.message : null;
 
-                return (
-                  <GenerationCard
-                    key={template.id}
-                    imageUrl={template.url}
-                    isProcessing={isCardProcessing}
-                    generatedImage={generatedImage || undefined}
-                    errorMessage={cardErrorMessage || undefined}
-                    templateName={template.name}
-                    pipelineId={pipelineId || null}
-                    onAnimationComplete={() => handleAnimationComplete(index)}
-                  />
-                );
-              })}
-            </div>
-            
-            {allAnimationsComplete && totalGenerationDuration !== null && (
-              <div className="text-center mt-6 animate-fade-in">
-                <p className="text-muted-foreground text-sm">
-                  Done in {totalGenerationDuration.toFixed(1)} seconds
-                </p>
+                  return (
+                    <GenerationCard
+                      key={template.id}
+                      imageUrl={template.url}
+                      isProcessing={isCardProcessing}
+                      generatedImage={generatedImage || undefined}
+                      errorMessage={cardErrorMessage || undefined}
+                      templateName={template.name}
+                      pipelineId={pipelineId || null}
+                      onAnimationComplete={() => handleAnimationComplete(index)}
+                    />
+                  );
+                })}
               </div>
-            )}
-          </section>
+
+              {allAnimationsComplete && totalGenerationDuration !== null && (
+                <div className="text-center mt-6 animate-fade-in">
+                  <p className="text-muted-foreground text-sm">
+                    Done in {totalGenerationDuration.toFixed(1)} seconds
+                  </p>
+                </div>
+              )}
+            </section>
+          )}
+
+          {isCustom && pipelineIds.length > 0 && (
+            <section className="max-w-md mx-auto">
+              <div className="grid grid-cols-1 gap-6">
+                {pipelineIds.map((pipelineId, index) => {
+                  const status = pipelineStatuses.get(pipelineId);
+                  const isCardProcessing =
+                    !status ||
+                    status.status === "RUNNING" ||
+                    status.status === "PENDING";
+                  const generatedImage =
+                    status?.status === "COMPLETED" ? status.result_url : null;
+                  const cardErrorMessage =
+                    status?.status === "FAILED" ? status.message : null;
+                  const previewSource = templateFile
+                    ? previewUrl(templateFile)
+                    : "";
+
+                  return (
+                    <GenerationCard
+                      key={pipelineId}
+                      imageUrl={previewSource}
+                      isProcessing={isCardProcessing}
+                      generatedImage={generatedImage || undefined}
+                      errorMessage={cardErrorMessage || undefined}
+                      templateName="Custom"
+                      pipelineId={pipelineId}
+                      onAnimationComplete={() => handleAnimationComplete(index)}
+                    />
+                  );
+                })}
+              </div>
+
+              {allAnimationsComplete && totalGenerationDuration !== null && (
+                <div className="text-center mt-6 animate-fade-in">
+                  <p className="text-muted-foreground text-sm">
+                    Done in {totalGenerationDuration.toFixed(1)} seconds
+                  </p>
+                </div>
+              )}
+            </section>
+          )}
 
           {errorMessage && (
             <div className="max-w-2xl mx-auto animate-fade-in">
@@ -523,10 +896,15 @@ const FaceFusionGenerate = () => {
                 onClick={handleGenerate}
                 size="lg"
                 className="hover-glow text-lg font-semibold px-12 py-6 shadow-elegant"
-                disabled={isUploading || !uploadedImageS3}
+                disabled={!canGenerate}
               >
                 <Sparkles className="mr-2 h-5 w-5" />
-                {isUploading ? "Uploading..." : "Generate"}
+                {isUploadingSelfie || isUploadingTemplate
+                  ? "Uploading…"
+                  : selfieRecognition.status === "running" ||
+                      templateRecognition.status === "running"
+                    ? "Detecting faces…"
+                    : "Generate"}
               </Button>
             </div>
           )}
@@ -535,12 +913,14 @@ const FaceFusionGenerate = () => {
             <div className="flex justify-center gap-4 animate-fade-in">
               <Button
                 onClick={() => {
-                  const hasErrors = Array.from(pipelineStatuses.values()).some(s => s.status === "FAILED");
-                  track({ 
-                    name: 'try_other_templates_clicked', 
-                    params: { from_status: hasErrors ? 'error' : 'success' } 
+                  const hasErrors = Array.from(pipelineStatuses.values()).some(
+                    (s) => s.status === "FAILED"
+                  );
+                  track({
+                    name: "try_other_templates_clicked",
+                    params: { from_status: hasErrors ? "error" : "success" },
                   });
-                  clearGenerationState();
+                  clearPersisted();
                   navigate("/face-fusion");
                 }}
                 size="lg"

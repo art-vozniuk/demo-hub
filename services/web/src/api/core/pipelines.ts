@@ -17,11 +17,26 @@ export interface QueuePipelinesResponse {
   queue_length: number;
 }
 
+export interface DetectedFace {
+  id: string;
+  bbox: [number, number, number, number];
+  det_score: number | null;
+}
+
+export interface FaceRecognitionPayload {
+  image_width: number;
+  image_height: number;
+  faces: DetectedFace[];
+}
+
 export interface PipelineStatusItem {
   id: string;
   status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
   result_url?: string | null;
   message?: string | null;
+  // Structured pipeline output. Currently only the face_recognition
+  // pipeline writes here; face_swap leaves it null.
+  payload?: FaceRecognitionPayload | null;
 }
 
 export interface PipelineStatusResponse {

@@ -89,3 +89,90 @@ async def test_get_pipelines_by_ids_empty(db_session):
     )
 
     assert len(pipelines) == 0
+
+
+@pytest.mark.asyncio
+async def test_update_pipeline_status_inserts_payload(db_session):
+    pipeline_id = uuid4()
+    trace_id = uuid4()
+
+    await service.create_pipeline(
+        db=db_session,
+        pipeline_id=pipeline_id,
+        trace_id=trace_id,
+        pipeline_name="face_recognition",
+    )
+
+    payload = {
+        "image_width": 800,
+        "image_height": 600,
+        "faces": [{"id": "f0", "bbox": [10, 20, 30, 40], "det_score": 0.99}],
+    }
+
+    await service.update_pipeline_status(
+        db=db_session,
+        pipeline_id=pipeline_id,
+        status=PipelineStatus.COMPLETED,
+        message="success",
+        payload=payload,
+    )
+
+    stored = await service.get_pipeline_payload(db_session, pipeline_id)
+    assert stored is not None
+    assert stored.payload == payload
+
+
+@pytest.mark.asyncio
+async def test_update_pipeline_status_upserts_payload(db_session):
+    pipeline_id = uuid4()
+    trace_id = uuid4()
+
+    await service.create_pipeline(
+        db=db_session,
+        pipeline_id=pipeline_id,
+        trace_id=trace_id,
+        pipeline_name="face_recognition",
+    )
+
+    await service.update_pipeline_status(
+        db=db_session,
+        pipeline_id=pipeline_id,
+        status=PipelineStatus.RUNNING,
+        payload={"faces": []},
+    )
+
+    await service.update_pipeline_status(
+        db=db_session,
+        pipeline_id=pipeline_id,
+        status=PipelineStatus.COMPLETED,
+        payload={"faces": [{"id": "f0", "bbox": [1, 2, 3, 4]}]},
+    )
+
+    stored = await service.get_pipeline_payload(db_session, pipeline_id)
+    assert stored is not None
+    assert stored.payload == {"faces": [{"id": "f0", "bbox": [1, 2, 3, 4]}]}
+
+
+@pytest.mark.asyncio
+async def test_get_pipelines_by_ids_loads_payload(db_session):
+    pipeline_id = uuid4()
+    trace_id = uuid4()
+
+    await service.create_pipeline(
+        db=db_session, pipeline_id=pipeline_id, trace_id=trace_id, pipeline_name="x"
+    )
+
+    payload = {"faces": [{"id": "f0", "bbox": [0, 0, 1, 1]}]}
+    await service.update_pipeline_status(
+        db=db_session,
+        pipeline_id=pipeline_id,
+        status=PipelineStatus.COMPLETED,
+        payload=payload,
+    )
+
+    pipelines = await service.get_pipelines_by_ids(
+        db=db_session, pipeline_ids=[pipeline_id]
+    )
+    assert len(pipelines) == 1
+    assert pipelines[0].payload is not None
+    assert pipelines[0].payload.payload == payload

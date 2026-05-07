@@ -6,7 +6,7 @@ from sqlalchemy.pool import StaticPool
 
 from services.common.database.core import Base
 from services.common.auth.models import User
-from services.core.app.pipelines.models import Pipeline
+from services.core.app.pipelines.models import Pipeline, PipelinePayload
 from services.core.app.recast.models import RecastTemplate
 
 
@@ -18,7 +18,7 @@ TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:?cache=shared"
 async def engine():
     # Ensure models are loaded by referencing them
     # This ensures they're registered with Base.metadata
-    _ = [Pipeline, RecastTemplate]
+    _ = [Pipeline, PipelinePayload, RecastTemplate]
 
     engine = create_async_engine(
         TEST_DATABASE_URL,

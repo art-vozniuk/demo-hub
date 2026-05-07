@@ -9,5 +9,7 @@ export type {
   QueuePipelinesResponse,
   PipelineStatusItem,
   PipelineStatusResponse,
+  DetectedFace,
+  FaceRecognitionPayload,
 } from "./core/pipelines";
 

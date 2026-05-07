@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import {Sparkles, Github, Linkedin} from "lucide-react";
 import { recastApi, type RecastTemplateRead } from "@/api";
 import TemplateCard from "@/components/TemplateCard";
+import CustomTemplateCard from "@/components/CustomTemplateCard";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import type { AnalyticsEvent } from "@/types/analytics";
 import "./masonry.css";
@@ -113,11 +114,19 @@ const FaceFusion = () => {
   };
 
   const handleGenerate = () => {
-    track({ 
-      name: 'generate_clicked', 
-      params: { template_count: selectedTemplates.length, source: 'face_fusion' } 
+    track({
+      name: 'generate_clicked',
+      params: { template_count: selectedTemplates.length, source: 'face_fusion' }
     });
     navigate("/face-fusion/generate", { state: { selectedTemplates } });
+  };
+
+  const handleCustomTemplate = () => {
+    track({
+      name: 'generate_clicked',
+      params: { template_count: 0, source: 'face_fusion_custom' },
+    });
+    navigate("/face-fusion/generate", { state: { customTemplate: true } });
   };
 
   useEffect(() => {
@@ -248,6 +257,11 @@ const FaceFusion = () => {
             className="masonry-grid"
             columnClassName="masonry-grid-column"
           >
+            <CustomTemplateCard
+              key="__custom__"
+              onSelect={handleCustomTemplate}
+              isDisabled={selectedTemplates.length > 0}
+            />
             {loadedTemplates.map((template) => {
               const isSelected = selectedTemplates.some((t) => t.id === template.id);
               const isDisabled = selectedTemplates.length >= MAX_SELECTION && !isSelected;

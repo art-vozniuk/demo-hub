@@ -7,9 +7,14 @@ from pydantic_core._pydantic_core import ValidationError
 from services.common.s3.client import S3Client
 from services.compute.app.pipelines.pipelines import (
     Pipeline,
-    RecastPipeline,
+    FaceRecognitionPipeline,
+    FaceSwapPipeline,
 )
-from services.compute.app.pipelines.schemas import PipelineInput, RecastPipelineInput
+from services.compute.app.pipelines.schemas import (
+    PipelineInput,
+    FaceRecognitionPipelineInput,
+    FaceSwapPipelineInput,
+)
 
 log = logging.getLogger(__name__)
 
@@ -124,10 +129,32 @@ class Service:
         return output
 
 
-class RecastService(Service):
-    def __init__(self, id: str, s3: S3Client, pipeline_input: PipelineInput):
-        Service.__init__(self, id, s3, pipeline_input)
+class FaceRecognitionService(Service):
+    @staticmethod
+    async def initialize(s3: S3Client):
+        # Face detection uses the buffalo_l InsightFace bundle, which the
+        # underlying `analyze_faces` lazily downloads on first call. No
+        # model warmup needed here.
+        pass
 
+    async def prepare_pipeline(self) -> Pipeline:
+        if not isinstance(self.pipeline_input, FaceRecognitionPipelineInput):
+            raise ValueError("Invalid pipeline input for FaceRecognitionService")
+
+        image = await self.s3.download_file(
+            s3_bucket=self.pipeline_input.image_bucket,
+            s3_key=self.pipeline_input.image_key,
+        )
+        return FaceRecognitionPipeline(image)
+
+    async def post_pipeline(self, results: dict) -> dict:
+        # face_recognition has no rendered artifact — it ships the detected
+        # faces as a structured payload that the core service stores against
+        # the pipeline row. The frontend reads it from the pipeline status.
+        return {"payload": results["payload"]}
+
+
+class FaceSwapService(Service):
     @staticmethod
     async def initialize(s3: S3Client):
         await Service.download_model(
@@ -137,8 +164,8 @@ class RecastService(Service):
         )
 
     async def prepare_pipeline(self) -> Pipeline:
-        if not isinstance(self.pipeline_input, RecastPipelineInput):
-            raise ValueError("Invalid pipeline input for RecastService")
+        if not isinstance(self.pipeline_input, FaceSwapPipelineInput):
+            raise ValueError("Invalid pipeline input for FaceSwapService")
 
         key = f"{self.pipeline_input.template_image_bucket}/{self.pipeline_input.template_image_key}"
         if key in _recast_template_cache:
@@ -148,7 +175,12 @@ class RecastService(Service):
                 s3_bucket=self.pipeline_input.source_image_bucket,
                 s3_key=self.pipeline_input.source_image_key,
             )
-            return RecastPipeline(source_image, target_image)
+            return FaceSwapPipeline(
+                source_image,
+                target_image,
+                source_face_bbox=self.pipeline_input.source_face_bbox,
+                target_face_bbox=self.pipeline_input.target_face_bbox,
+            )
 
         source_image_task = self.s3.download_file(
             s3_bucket=self.pipeline_input.source_image_bucket,
@@ -165,7 +197,12 @@ class RecastService(Service):
 
         _recast_template_cache[key] = target_image
 
-        return RecastPipeline(source_image, target_image)
+        return FaceSwapPipeline(
+            source_image,
+            target_image,
+            source_face_bbox=self.pipeline_input.source_face_bbox,
+            target_face_bbox=self.pipeline_input.target_face_bbox,
+        )
 
     async def post_pipeline(self, results: dict) -> dict:
         file_extension = self.pipeline_input.source_image_key.split(".")[-1].lower()
@@ -195,10 +232,15 @@ class PipelineType:
 
 
 pipeline_templates = {
-    "recast": PipelineType(
-        service_type=RecastService,
-        pipeline_type=RecastPipeline,
-        input_type=RecastPipelineInput,
+    "face_recognition": PipelineType(
+        service_type=FaceRecognitionService,
+        pipeline_type=FaceRecognitionPipeline,
+        input_type=FaceRecognitionPipelineInput,
+    ),
+    "face_swap": PipelineType(
+        service_type=FaceSwapService,
+        pipeline_type=FaceSwapPipeline,
+        input_type=FaceSwapPipelineInput,
     ),
 }
 

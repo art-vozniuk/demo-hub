@@ -19,6 +19,7 @@ async def handle_pipeline_update(message: Dict[str, Any]) -> None:
     status = PipelineStatus(message["status"])
     result_url = message.get("result_url")
     error_message = message.get("message")
+    payload = message.get("payload")
 
     context_trace_id.set(str(trace_id))
     context_pipeline_id.set(str(pipeline_id))
@@ -31,6 +32,7 @@ async def handle_pipeline_update(message: Dict[str, Any]) -> None:
             status=status,
             result_url=result_url,
             message=error_message,
+            payload=payload,
         )
 
 
