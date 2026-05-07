@@ -103,18 +103,3 @@ With `--keep-intermediate`:
 ├── sfm/                 # COLMAP database + sparse model
 └── train/               # raw PLY + brush dataset symlinks
 ```
-
-## What this is NOT
-
-- Not for production. No queue, no auth, no remote workers.
-- Doesn't run inside Docker (depends on Metal / native binaries).
-- Doesn't enforce the 50 MB S3 limit beyond a warning — if your scene is denser than ~1.5 M gaussians at 32 B/g, the `.splat` will exceed it and you'll need to either reduce gaussian count during training or apply stronger quantization.
-
-## Productionization sketch (later)
-
-This pipeline lives in `services/gs-training-local/` deliberately separately from the deployed `services/compute/`. To productionize:
-
-1. Wrap `run_pipeline` as a Celery / RabbitMQ task. Existing infra in `docker-compose.yml` already has RabbitMQ.
-2. Worker pulls video from S3, writes `scene.splat` back to S3.
-3. `services/core` exposes a "submit job" endpoint, returns scene URL when done.
-4. Workers stay on Mac (Apple Silicon Metal acceleration) — bare-metal mac mini fleet, not Docker. Linux/CUDA workers are also possible but require a different image (probably the existing `services/compute`).
