@@ -234,10 +234,23 @@ const FaceFusionGenerate = () => {
   }, [selfieFile, selfieS3, track]);
 
   useEffect(() => {
-    if (selfieS3 && selfieRecognition.status === "idle") {
+    // Face recognition hits the authenticated /pipelines/queue endpoint, so
+    // it must wait until auth has resolved AND a user exists. Without this
+    // gate, an anonymous visitor's upload kicks off a queue request with no
+    // Bearer header → backend's HTTPBearer dependency emits 401 "Not
+    // authenticated", which surfaced as a misleading error inside the face
+    // selection overlay. Once the user signs in (via the Generate button's
+    // existing flow), state is persisted, the page remounts post-redirect,
+    // and this effect fires for real.
+    if (
+      !authLoading &&
+      user &&
+      selfieS3 &&
+      selfieRecognition.status === "idle"
+    ) {
       selfieRecognition.run({ bucket: selfieS3.bucket, key: selfieS3.key });
     }
-  }, [selfieS3, selfieRecognition]);
+  }, [authLoading, user, selfieS3, selfieRecognition]);
 
   // Template upload → S3 → kick face_recognition (custom mode only).
   useEffect(() => {
@@ -264,13 +277,22 @@ const FaceFusionGenerate = () => {
   }, [isCustom, templateFile, templateS3]);
 
   useEffect(() => {
-    if (isCustom && templateS3 && templateRecognition.status === "idle") {
+    // Same auth-gate rationale as the selfie recognition effect above —
+    // /pipelines/queue requires a Bearer token, so don't fire face
+    // recognition until the user has authenticated.
+    if (
+      !authLoading &&
+      user &&
+      isCustom &&
+      templateS3 &&
+      templateRecognition.status === "idle"
+    ) {
       templateRecognition.run({
         bucket: templateS3.bucket,
         key: templateS3.key,
       });
     }
-  }, [isCustom, templateS3, templateRecognition]);
+  }, [authLoading, user, isCustom, templateS3, templateRecognition]);
 
   const pollPipelineStatuses = useCallback(
     async (ids: string[]) => {

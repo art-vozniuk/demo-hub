@@ -54,7 +54,7 @@ async def run_single_test(
             "jobs": [
                 {
                     "pipeline_id": pipeline_id,
-                    "pipeline_name": "recast",
+                    "pipeline_name": "face_swap",
                     "input": {
                         "source_image_bucket": source_s3["bucket"],
                         "source_image_key": source_s3["key"],

@@ -25,5 +25,12 @@ ENV BUILD_TAG=${BUILD_TAG}
 
 EXPOSE 8081
 
-CMD sh -c 'export $(cat /app/.env | xargs) && uvicorn services.core.main:app --host 0.0.0.0 --port 8081'
+# Apply pending Alembic migrations on container start, then boot the API.
+# This keeps prod DB schema in lockstep with the deployed code, so new
+# tables/columns introduced by a release land before the first request hits
+# them — previously migrations had to be applied manually and a missed run
+# would surface as 500s the moment any endpoint touched the new schema.
+CMD sh -c 'export $(cat /app/.env | xargs) && \
+    cd services/core && alembic upgrade head && cd /app && \
+    uvicorn services.core.main:app --host 0.0.0.0 --port 8081'
 
