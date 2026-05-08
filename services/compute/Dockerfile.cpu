@@ -17,7 +17,7 @@ COPY services/compute/pyproject.toml services/compute/uv.lock ./services/compute
 COPY services/common/pyproject.toml ./services/common/
 COPY services/external/face_swap/pyproject.toml ./services/external/face_swap/
 
-RUN uv sync --python python3.12 --project ./services/compute --frozen --no-install-project --no-dev
+RUN uv sync --python python3.12 --project ./services/compute --frozen --no-install-project --no-dev --extra cpu
 
 COPY services/compute ./services/compute
 COPY services/common ./services/common

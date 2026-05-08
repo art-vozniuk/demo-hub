@@ -68,9 +68,6 @@ services:
       - app_network
 
   compute:
-    # workaround for Apple Silicon
-    # uv.lock pins onnxruntime-gpu for linux, which has no arm64 wheels — force
-    platform: linux/amd64
     build:
       context: .
       dockerfile: services/compute/Dockerfile.cpu
