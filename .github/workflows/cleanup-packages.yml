@@ -1,0 +1,26 @@
+name: cleanup old package versions
+
+on:
+  schedule:
+    # Sunday 04:00 UTC
+    - cron: '0 4 * * 0'
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [core, web, compute, compute-cpu]
+    steps:
+      - name: delete old versions of ${{ matrix.package }}
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ matrix.package }}
+          package-type: container
+          min-versions-to-keep: 6
+          delete-only-untagged-versions: false

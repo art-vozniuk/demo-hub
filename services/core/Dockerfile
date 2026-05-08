@@ -13,9 +13,8 @@ RUN cd services/common && uv pip install --system -e .
 COPY services/common/ services/common/
 COPY services/core/ services/core/
 
-RUN --mount=type=secret,id=env,target=/tmp/.env \
-    cp /tmp/.env /app/.env && \
-    chmod 644 /app/.env
+RUN --mount=type=secret,id=env,target=/tmp/.env,required=false \
+    if [ -f /tmp/.env ]; then cp /tmp/.env /app/.env && chmod 644 /app/.env; fi
 
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser

@@ -1,0 +1,124 @@
+# Local development stack — builds everything from source against prod Supabase.
+#
+# One-time setup:
+#   bash scripts/setup-local-env.sh
+#
+# Then run:
+#   docker compose -f docker-compose.local.yml up --build
+#
+# Access:
+#   http://localhost:8080      — full app via nginx (recommended entry point)
+#   http://localhost:5173      — web direct (alternative)
+#   http://localhost:8081      — core API direct
+#   http://localhost:15672     — RabbitMQ management UI (guest / guest)
+#
+# Notes:
+#   - DB is production Supabase (read from services/core/.env.docker)
+#   - Face-swap models are cached in a named volume; first run downloads them
+#   - Supabase auth callbacks need http://localhost:8080 added in your Supabase project
+#     (Authentication → URL Configuration → Redirect URLs)
+
+name: meme-fusion-local
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data_local:/var/lib/rabbitmq
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  core:
+    build:
+      context: .
+      dockerfile: services/core/Dockerfile
+    # .env.docker is mounted at runtime so CMD's `export $(cat /app/.env | xargs)` picks
+    # it up. This file must exist — run scripts/setup-local-env.sh first.
+    volumes:
+      - ./services/core/.env.docker:/app/.env:ro
+    ports:
+      - "8081:8081"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app_network
+
+  compute:
+    build:
+      context: .
+      dockerfile: services/compute/Dockerfile.cpu
+    volumes:
+      - ./services/compute/.env.docker:/app/.env:ro
+      # Cache downloaded face-swap models between restarts (~hundreds of MB)
+      - face_swap_models_local:/app/services/external/face_swap/models
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - app_network
+
+  web:
+    build:
+      context: .
+      dockerfile: services/web/Dockerfile
+      # VITE_ vars are baked in at build time — this secret provides them.
+      # Must exist — run scripts/setup-local-env.sh first.
+      secrets:
+        - env
+    ports:
+      - "5173:80"
+    depends_on:
+      - core
+    networks:
+      - app_network
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./nginx/local.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - web
+      - core
+    networks:
+      - app_network
+
+volumes:
+  rabbitmq_data_local:
+    name: meme-fusion-local-rabbitmq
+  face_swap_models_local:
+    name: meme-fusion-local-face-swap-models
+
+networks:
+  app_network:
+    driver: bridge
+
+secrets:
+  # Used only during `web` image build — not mounted into any running container.
+  env:
+    file: services/web/.env.docker

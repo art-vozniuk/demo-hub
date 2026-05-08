@@ -119,3 +119,9 @@ lint-fix:
 	ruff check --fix services/core services/compute services/common --exclude services/external
 	ruff format services/core services/compute services/common --exclude services/external
 	@echo "Linting fixes applied!"
+
+run-dev:
+	docker compose -f docker-compose.local.yml up --build
+
+stop-dev:
+	docker compose -f docker-compose.local.yml down

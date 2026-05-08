@@ -17,6 +17,21 @@ import {
 
 const RENDERER_URL = import.meta.env.VITE_RENDERER_URL as string | undefined;
 
+// Custom shape of the iframe's contentWindow. Module is Emscripten's runtime
+// object; __splatReady is a flag we stamp ourselves so a remount can detect
+// an already-finished session (see splat-ready handler).
+type RendererModule = Record<string, unknown> & {
+  setStatus?: (msg: string) => void;
+  onAbort?: (msg: string) => void;
+  printErr?: (msg: string) => void;
+  print?: (msg: string) => void;
+  __sentryHooked?: boolean;
+};
+type RendererWindow = Window & {
+  Module?: RendererModule;
+  __splatReady?: boolean;
+};
+
 /** If we don't see progress nor splat-ready within this window, assume the
  *  engine is stuck (e.g. WGPU device crash post-init) and surface a crash UI. */
 const STALL_TIMEOUT_MS = 90_000;
@@ -592,7 +607,7 @@ const Renderer = () => {
    *  the message listener was installed (common on cached reloads). */
   const checkIfAlreadyReady = useCallback(() => {
     try {
-      const iWin = iframeRef.current?.contentWindow as any;
+      const iWin = iframeRef.current?.contentWindow as RendererWindow | null;
       // We can only assume readiness when both the WASM runtime AND the
       // splat fetch are done. The latter signals via `__splatReady` flag
       // (set when the iframe posts splat-ready — see below).
@@ -648,7 +663,7 @@ const Renderer = () => {
 
     const onLoad = () => {
       try {
-        const win = iframe.contentWindow as (Window & { Module?: any }) | null;
+        const win = iframe.contentWindow as RendererWindow | null;
         if (!win) return;
 
         const onWinError = (e: ErrorEvent) => {
@@ -840,7 +855,7 @@ const Renderer = () => {
         // Stamp a flag inside the iframe so the cached-reload poll in
         // checkIfAlreadyReady can recognise an already-finished session.
         try {
-          const iWin = iframeRef.current?.contentWindow as any;
+          const iWin = iframeRef.current?.contentWindow as RendererWindow | null;
           if (iWin) iWin.__splatReady = true;
         } catch {
           /* cross-origin — ignore */
