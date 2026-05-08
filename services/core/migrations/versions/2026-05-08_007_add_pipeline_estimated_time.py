@@ -1,7 +1,7 @@
-"""add estimated_time column to pipelines
+"""add estimated_finish_at column to pipelines
 
-Revision ID: 006
-Revises: 005
+Revision ID: 007
+Revises: 006
 Create Date: 2026-05-08
 
 """
@@ -10,8 +10,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "006"
-down_revision = "005"
+revision = "007"
+down_revision = "006"
 branch_labels = None
 depends_on = None
 

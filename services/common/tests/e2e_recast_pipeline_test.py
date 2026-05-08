@@ -100,7 +100,7 @@ async def run_single_test(
                 elapsed = int(time.time() - poll_start)
 
                 if status == "COMPLETED":
-                    result_url = pipeline.get("result_url")
+                    result_url = (pipeline.get("result") or {}).get("result_url")
                     print(f"{prefix} Pipeline completed in {elapsed}s")
                     break
                 elif status == "FAILED":

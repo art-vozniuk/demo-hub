@@ -10,6 +10,8 @@ export type {
   PipelineStatusItem,
   PipelineStatusResponse,
   DetectedFace,
-  FaceRecognitionPayload,
+  FaceRecognitionResult,
+  FaceSwapResult,
+  PipelineResult,
 } from "./core/pipelines";
 

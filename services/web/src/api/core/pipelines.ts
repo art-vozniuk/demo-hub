@@ -23,21 +23,24 @@ export interface DetectedFace {
   det_score: number | null;
 }
 
-export interface FaceRecognitionPayload {
+export interface FaceRecognitionResult {
   image_width: number;
   image_height: number;
   faces: DetectedFace[];
 }
 
+export interface FaceSwapResult {
+  result_url: string;
+}
+
+export type PipelineResult = FaceRecognitionResult | FaceSwapResult | Record<string, any>;
+
 export interface PipelineStatusItem {
   id: string;
   status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
-  result_url?: string | null;
   message?: string | null;
   estimated_finish_at?: string | null;
-  // Structured pipeline output. Currently only the face_recognition
-  // pipeline writes here; face_swap leaves it null.
-  payload?: FaceRecognitionPayload | null;
+  result?: PipelineResult | null;
 }
 
 export interface PipelineStatusResponse {
@@ -57,4 +60,3 @@ export const pipelinesApi = {
     });
   },
 };
-

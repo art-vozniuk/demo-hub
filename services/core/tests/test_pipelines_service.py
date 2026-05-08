@@ -22,12 +22,12 @@ async def test_create_pipeline(db_session):
     assert pipeline.trace_id == trace_id
     assert pipeline.pipeline_name == pipeline_name
     assert pipeline.status == PipelineStatus.PENDING
-    assert pipeline.result_url is None
+    assert pipeline.result is None
     assert pipeline.message is None
 
 
 @pytest.mark.asyncio
-async def test_update_pipeline_status(db_session):
+async def test_update_pipeline_status_face_swap_result(db_session):
     pipeline_id = uuid4()
     trace_id = uuid4()
 
@@ -35,20 +35,20 @@ async def test_update_pipeline_status(db_session):
         db=db_session,
         pipeline_id=pipeline_id,
         trace_id=trace_id,
-        pipeline_name="test",
+        pipeline_name="face_swap",
     )
 
     updated = await service.update_pipeline_status(
         db=db_session,
         pipeline_id=pipeline_id,
         status=PipelineStatus.COMPLETED,
-        result_url="https://example.com/result.png",
+        result={"result_url": "https://example.com/result.png"},
         message="success",
     )
 
     assert updated is not None
     assert updated.status == PipelineStatus.COMPLETED
-    assert updated.result_url == "https://example.com/result.png"
+    assert updated.result == {"result_url": "https://example.com/result.png"}
     assert updated.message == "success"
 
 
@@ -92,7 +92,7 @@ async def test_get_pipelines_by_ids_empty(db_session):
 
 
 @pytest.mark.asyncio
-async def test_update_pipeline_status_inserts_payload(db_session):
+async def test_update_pipeline_status_face_recognition_result(db_session):
     pipeline_id = uuid4()
     trace_id = uuid4()
 
@@ -103,7 +103,7 @@ async def test_update_pipeline_status_inserts_payload(db_session):
         pipeline_name="face_recognition",
     )
 
-    payload = {
+    result = {
         "image_width": 800,
         "image_height": 600,
         "faces": [{"id": "f0", "bbox": [10, 20, 30, 40], "det_score": 0.99}],
@@ -113,17 +113,17 @@ async def test_update_pipeline_status_inserts_payload(db_session):
         db=db_session,
         pipeline_id=pipeline_id,
         status=PipelineStatus.COMPLETED,
+        result=result,
         message="success",
-        payload=payload,
     )
 
-    stored = await service.get_pipeline_payload(db_session, pipeline_id)
-    assert stored is not None
-    assert stored.payload == payload
+    pipelines = await service.get_pipelines_by_ids(db_session, [pipeline_id])
+    assert len(pipelines) == 1
+    assert pipelines[0].result == result
 
 
 @pytest.mark.asyncio
-async def test_update_pipeline_status_upserts_payload(db_session):
+async def test_update_pipeline_status_overwrites_result(db_session):
     pipeline_id = uuid4()
     trace_id = uuid4()
 
@@ -138,41 +138,15 @@ async def test_update_pipeline_status_upserts_payload(db_session):
         db=db_session,
         pipeline_id=pipeline_id,
         status=PipelineStatus.RUNNING,
-        payload={"faces": []},
+        result={"faces": []},
     )
 
     await service.update_pipeline_status(
         db=db_session,
         pipeline_id=pipeline_id,
         status=PipelineStatus.COMPLETED,
-        payload={"faces": [{"id": "f0", "bbox": [1, 2, 3, 4]}]},
+        result={"faces": [{"id": "f0", "bbox": [1, 2, 3, 4]}]},
     )
 
-    stored = await service.get_pipeline_payload(db_session, pipeline_id)
-    assert stored is not None
-    assert stored.payload == {"faces": [{"id": "f0", "bbox": [1, 2, 3, 4]}]}
-
-
-@pytest.mark.asyncio
-async def test_get_pipelines_by_ids_loads_payload(db_session):
-    pipeline_id = uuid4()
-    trace_id = uuid4()
-
-    await service.create_pipeline(
-        db=db_session, pipeline_id=pipeline_id, trace_id=trace_id, pipeline_name="x"
-    )
-
-    payload = {"faces": [{"id": "f0", "bbox": [0, 0, 1, 1]}]}
-    await service.update_pipeline_status(
-        db=db_session,
-        pipeline_id=pipeline_id,
-        status=PipelineStatus.COMPLETED,
-        payload=payload,
-    )
-
-    pipelines = await service.get_pipelines_by_ids(
-        db=db_session, pipeline_ids=[pipeline_id]
-    )
-    assert len(pipelines) == 1
-    assert pipelines[0].payload is not None
-    assert pipelines[0].payload.payload == payload
+    pipelines = await service.get_pipelines_by_ids(db_session, [pipeline_id])
+    assert pipelines[0].result == {"faces": [{"id": "f0", "bbox": [1, 2, 3, 4]}]}
