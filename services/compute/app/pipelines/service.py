@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 
 _inference_lock = asyncio.Lock()
 
+
 class Service:
     def __init__(self, id: str, s3: S3Client, pipeline_input: PipelineInput):
         self.id = id
