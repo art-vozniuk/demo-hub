@@ -3,10 +3,11 @@ import logging
 from typing import List, Optional, Sequence
 
 from PIL import Image
+from insightface.app.common import Face
 
 from services.external.face_swap.reactor_api import (
-    recognize_faces_api,
-    swap_face_api_from_recognition,
+    detect_faces,
+    swap_specific_face,
 )
 
 log = logging.getLogger(__name__)
@@ -33,20 +34,22 @@ def _bbox_iou(a: Sequence[float], b: Sequence[float]) -> float:
     return inter / union if union > 0 else 0.0
 
 
-def _pick_index_by_bbox(
-    bboxes: List[Sequence[float]], target_bbox: Sequence[float]
-) -> Optional[int]:
-    # Translates a UI-selected bbox into the index understood by
-    # swap_face_api_from_recognition, by best-IoU match against the
-    # detector's output. None when no positive overlap.
-    if not bboxes:
+def _pick_face_by_bbox(
+    faces: List[Face], target_bbox: Sequence[float]
+) -> Optional[Face]:
+    # The recognition pipeline gave the UI bboxes; the user picked one and
+    # sent it back. Detection isn't carried across pipelines (Face objects
+    # have heavy embeddings), so the swap pipeline re-detects and matches
+    # the UI's bbox to a fresh Face by best IoU. Returns None when nothing
+    # overlaps — caller decides the fallback.
+    if not faces:
         return None
-    best_idx, best_iou = None, 0.0
-    for i, b in enumerate(bboxes):
-        iou = _bbox_iou(b, target_bbox)
+    best, best_iou = None, 0.0
+    for f in faces:
+        iou = _bbox_iou(f.bbox, target_bbox)
         if iou > best_iou:
-            best_iou, best_idx = iou, i
-    return best_idx
+            best_iou, best = iou, f
+    return best
 
 
 class FaceRecognitionPipeline(Pipeline):
@@ -55,21 +58,16 @@ class FaceRecognitionPipeline(Pipeline):
         self.image = image
 
     def run(self) -> dict:
-        # Submodule's recognize_faces_api requires both source and target;
-        # for our single-image recognition flow, feed the same PIL image
-        # twice and read source_bboxes (target_bboxes mirror them).
         pil = Image.open(io.BytesIO(self.image)).convert("RGB")
-        recognition = recognize_faces_api(pil, pil)
+        faces = detect_faces(pil)
 
-        faces: List[dict] = []
-        for i, (face, bbox) in enumerate(
-            zip(recognition.source_faces, recognition.source_bboxes)
-        ):
+        out_faces: List[dict] = []
+        for i, face in enumerate(faces):
             det_score = getattr(face, "det_score", None)
-            faces.append(
+            out_faces.append(
                 {
                     "id": f"f{i}",
-                    "bbox": [float(v) for v in bbox],
+                    "bbox": [float(v) for v in face.bbox],
                     "det_score": float(det_score) if det_score is not None else None,
                 }
             )
@@ -79,7 +77,7 @@ class FaceRecognitionPipeline(Pipeline):
             "payload": {
                 "image_width": width,
                 "image_height": height,
-                "faces": faces,
+                "faces": out_faces,
             }
         }
 
@@ -102,33 +100,34 @@ class FaceSwapPipeline(Pipeline):
         source = Image.open(io.BytesIO(self.source_image)).convert("RGB")
         target = Image.open(io.BytesIO(self.target_image)).convert("RGB")
 
-        recognition = recognize_faces_api(source, target)
+        source_faces = detect_faces(source)
+        target_faces = detect_faces(target)
 
-        # Submodule's swap entrypoint takes face indices, not bboxes.
-        # Translate any UI-selected bbox to the matching index; absent or
-        # unmatchable bbox falls back to the largest face (index 0).
-        source_face_index = 0
-        target_face_index = 0
-        if self.source_face_bbox is not None:
-            idx = _pick_index_by_bbox(
-                list(recognition.source_bboxes), self.source_face_bbox
-            )
-            if idx is not None:
-                source_face_index = idx
-        if self.target_face_bbox is not None:
-            idx = _pick_index_by_bbox(
-                list(recognition.target_bboxes), self.target_face_bbox
-            )
-            if idx is not None:
-                target_face_index = idx
+        if not source_faces:
+            raise RuntimeError("face_swap: no faces detected in source image")
+        if not target_faces:
+            raise RuntimeError("face_swap: no faces detected in target image")
 
-        result, _bboxes = swap_face_api_from_recognition(
-            recognition,
+        # If the caller pre-selected faces (UI flow), match by bbox; otherwise
+        # — and on stale-bbox misses — fall back to the first detected face.
+        source_face: Face = (
+            _pick_face_by_bbox(source_faces, self.source_face_bbox)
+            if self.source_face_bbox is not None
+            else None
+        ) or source_faces[0]
+        target_face: Face = (
+            _pick_face_by_bbox(target_faces, self.target_face_bbox)
+            if self.target_face_bbox is not None
+            else None
+        ) or target_faces[0]
+
+        result = swap_specific_face(
+            target_img=target,
+            source_face=source_face,
+            target_face=target_face,
             model="inswapper_128.onnx",
-            source_face_index=source_face_index,
-            target_face_index=target_face_index,
             face_boost_model="GFPGANv1.4.pth",
-            visibility=1.0,
+            visibility=1,
         )
 
         output_buffer = io.BytesIO()
