@@ -1,7 +1,7 @@
 export type AnalyticsEvent =
   | { name: 'template_viewed'; params: { template_count: number } }
-  | { name: 'template_selected'; params: { template_id: string; template_name: string; total_selected: number } }
-  | { name: 'template_deselected'; params: { template_id: string; template_name: string; total_selected: number } }
+  | { name: 'template_selected'; params: { template_id: number; template_name: string | null; total_selected: number } }
+  | { name: 'template_deselected'; params: { template_id: number; template_name: string | null; total_selected: number } }
   | { name: 'max_templates_reached'; params: { max_allowed: number } }
   | { name: 'generate_clicked'; params: { template_count: number; source: 'face_fusion' } }
   | { name: 'image_upload_started'; params: Record<string, never> }
@@ -16,13 +16,17 @@ export type AnalyticsEvent =
   | { name: 'back_to_templates'; params: { source: string } }
   | { name: 'nav_home_clicked'; params: Record<string, never> }
   | { name: 'nav_facefusion_clicked'; params: Record<string, never> }
+  | { name: 'nav_renderer_clicked'; params: Record<string, never> }
   | { name: 'footer_link_clicked'; params: { link_name: string; url: string } }
   | { name: 'home_linkedin_clicked'; params: Record<string, never> }
   | { name: 'home_github_clicked'; params: Record<string, never> }
   | { name: 'home_resume_clicked'; params: Record<string, never> }
   | { name: 'home_demo_video_watched'; params: { duration_seconds: number } }
   | { name: 'home_scrolled_to_bottom'; params: Record<string, never> }
-  | { name: 'facefusion_github_repo_clicked'; params: Record<string, never> };
+  | { name: 'facefusion_github_repo_clicked'; params: Record<string, never> }
+  | { name: 'renderer_github_repo_clicked'; params: Record<string, never> }
+  | { name: 'renderer_scene_opened'; params: { scene_slug: string } }
+  | { name: 'renderer_scene_back'; params: { scene_slug: string } };
 
 export interface GtagConfig {
   page_path?: string;
