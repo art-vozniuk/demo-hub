@@ -32,7 +32,7 @@ jobs:
           cd services/common
           uv pip install --system -e .
           cd ../compute
-          uv pip install --system -e ".[dev]"
+          uv pip install --system -e ".[dev,cpu]"
 
       - name: run tests
         env:
