@@ -13,13 +13,14 @@ dependencies = [
     "redis[asyncio]>=5.0.0",
     "httpx>=0.27.0",
     "pyjwt[crypto]>=2.8.0",
+    "prometheus-client>=0.21.0",
 ]
 
 [tool.setuptools]
 py-modules = []
 
 [tool.setuptools.packages.find]
-include = ["logging"]
+include = ["logging", "metrics"]
 
 [tool.uv.workspace]
 members = [

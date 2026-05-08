@@ -45,6 +45,15 @@ async def main():
 
     log.info("Starting compute worker")
 
+    # Expose Prometheus metrics on :9091. The worker has no other HTTP
+    # surface, so this stands alone — Prometheus scrapes compute:9091
+    # over the docker network. Port 9091 (not 9090) avoids the cognitive
+    # collision with Prometheus's own UI port.
+    from prometheus_client import start_http_server
+
+    start_http_server(9091)
+    log.info("Prometheus metrics endpoint listening on :9091")
+
     await pipeline_router.init()
 
     log.info("Compute worker is running, waiting for messages...")

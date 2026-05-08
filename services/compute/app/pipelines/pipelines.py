@@ -5,6 +5,7 @@ from typing import List, Optional, Sequence
 from PIL import Image
 from insightface.app.common import Face
 
+from services.common.metrics import face_detected_count
 from services.external.face_swap.reactor_api import (
     detect_faces,
     swap_specific_face,
@@ -61,6 +62,8 @@ class FaceRecognitionPipeline(Pipeline):
         pil = Image.open(io.BytesIO(self.image)).convert("RGB")
         faces = detect_faces(pil)
 
+        face_detected_count.labels(image_role="source").observe(len(faces))
+
         out_faces: List[dict] = []
         for i, face in enumerate(faces):
             det_score = getattr(face, "det_score", None)
@@ -102,6 +105,9 @@ class FaceSwapPipeline(Pipeline):
 
         source_faces = detect_faces(source)
         target_faces = detect_faces(target)
+
+        face_detected_count.labels(image_role="source").observe(len(source_faces))
+        face_detected_count.labels(image_role="target").observe(len(target_faces))
 
         if not source_faces:
             raise RuntimeError("face_swap: no faces detected in source image")

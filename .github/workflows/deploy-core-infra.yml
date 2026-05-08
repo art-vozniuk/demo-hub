@@ -100,7 +100,7 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "docker-compose.yml,nginx"
+          source: "docker-compose.yml,nginx,observability"
           target: demo-hub
 
       - name: Deploy on server
@@ -111,6 +111,8 @@ jobs:
           CERTBOT_EMAIL: ${{ secrets.CERTBOT_EMAIL }}
           CERTBOT_DOMAINS: ${{ secrets.CERTBOT_DOMAINS }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          GRAFANA_ADMIN_USER: ${{ secrets.GRAFANA_ADMIN_USER }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
           GH_ACTOR: ${{ github.actor }}
           GH_REPO: ${{ github.repository }}
           # Mirror check-changes outputs into env so the SSH script can
@@ -124,7 +126,7 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: RABBITMQ_USER,RABBITMQ_PASSWORD,CERTBOT_EMAIL,CERTBOT_DOMAINS,GHCR_TOKEN,GH_ACTOR,GH_REPO,CHANGED_CORE,CHANGED_WEB,CHANGED_COMPUTE
+          envs: RABBITMQ_USER,RABBITMQ_PASSWORD,CERTBOT_EMAIL,CERTBOT_DOMAINS,GHCR_TOKEN,GRAFANA_ADMIN_USER,GRAFANA_ADMIN_PASSWORD,GH_ACTOR,GH_REPO,CHANGED_CORE,CHANGED_WEB,CHANGED_COMPUTE
           script: |
             set -euo pipefail
 
@@ -149,6 +151,16 @@ jobs:
             # Export variables used by docker-compose.yml
             export RABBITMQ_USER="${RABBITMQ_USER}"
             export RABBITMQ_PASSWORD="${RABBITMQ_PASSWORD}"
+            export GRAFANA_ADMIN_USER="${GRAFANA_ADMIN_USER}"
+            export GRAFANA_ADMIN_PASSWORD="${GRAFANA_ADMIN_PASSWORD}"
+
+            # Fail fast if Grafana creds aren't set — Grafana would
+            # otherwise default to admin/admin (and force password change
+            # on first login).
+            if [ -z "${GRAFANA_ADMIN_USER}" ] || [ -z "${GRAFANA_ADMIN_PASSWORD}" ]; then
+              echo "ERROR: GRAFANA_ADMIN_USER / GRAFANA_ADMIN_PASSWORD secrets not set"
+              exit 1
+            fi
 
             echo "Logging in to GHCR..."
             echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GH_ACTOR}" --password-stdin

@@ -1,0 +1,104 @@
+{
+  "title": "Pipelines (Product)",
+  "uid": "pipelines",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "tags": ["product", "pipelines"],
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Pipelines started / min",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "sum by (pipeline_name) (rate(pipeline_started_total[1m]) * 60)",
+        "legendFormat": "{{pipeline_name}}"
+      }]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Success rate (last 5m)",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "sum(rate(pipeline_completed_total{status=\"completed\"}[5m])) / clamp_min(sum(rate(pipeline_completed_total[5m])), 1e-9)"
+      }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1, "min": 0 } }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "In-flight",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(pipeline_in_flight)" }]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Pipeline duration p50/p95",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le, pipeline_name) (rate(pipeline_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{pipeline_name}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, pipeline_name) (rate(pipeline_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{pipeline_name}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Queue wait p95 (enqueue → start)",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum by (le, pipeline_name) (rate(pipeline_queue_wait_seconds_bucket[5m])))",
+        "legendFormat": "p95 {{pipeline_name}}"
+      }],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "RabbitMQ queue depth (ready)",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "rabbitmq_queue_messages_ready",
+        "legendFormat": "{{queue}}"
+      }]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Failures by reason",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "sum by (pipeline_name, error_kind) (rate(pipeline_completed_total{status=\"failed\"}[5m]))",
+        "legendFormat": "{{pipeline_name}} / {{error_kind}}"
+      }]
+    },
+    {
+      "id": 8,
+      "type": "heatmap",
+      "title": "Faces detected per image",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "sum by (le) (rate(face_detected_count_bucket[5m]))",
+        "format": "heatmap"
+      }]
+    }
+  ]
+}

@@ -1,6 +1,13 @@
 import logging
+from datetime import datetime
 from typing import Any, Dict
 
+from services.common.metrics import (
+    pipeline_completed_total,
+    pipeline_duration_seconds,
+    pipeline_in_flight,
+    pipeline_queue_wait_seconds,
+)
 from services.common.rabbitmq import (
     RabbitMQConnection,
     RabbitMQPublisher,
@@ -49,6 +56,24 @@ async def _publish_pipeline_update(
     )
 
 
+def _classify_error(exc: BaseException) -> str:
+    # Keep cardinality low — bucket exceptions into a small set of well-known
+    # kinds; everything else falls into "unknown".
+    name = type(exc).__name__
+    msg = str(exc).lower()
+    if "no faces detected" in msg or "no face" in msg:
+        return "no_face"
+    if "modulenotfounderror" == name.lower() or "import" in msg:
+        return "import"
+    if "model" in msg and ("load" in msg or "download" in msg):
+        return "model"
+    if "s3" in msg or "contentlength" in msg or "clientpayloaderror" in name.lower():
+        return "s3"
+    if "rabbit" in msg:
+        return "rabbitmq"
+    return "unknown"
+
+
 async def _process_pipeline(message: Dict[str, Any]) -> None:
     import time
 
@@ -58,11 +83,29 @@ async def _process_pipeline(message: Dict[str, Any]) -> None:
     pipeline_id = message["pipeline_id"]
     pipeline_name = message["pipeline_name"]
     pipeline_input_dict = message["input"]
+    enqueued_at_iso = message.get("enqueued_at")
 
     context_trace_id.set(str(trace_id))
     context_pipeline_id.set(str(pipeline_id))
 
     log.info(f"Processing pipeline: {pipeline_name}, trace_id: {trace_id}")
+
+    # Time spent waiting in RabbitMQ (core enqueued → compute picked up).
+    # If clocks drift between core and compute the value can land
+    # slightly negative — clamp to 0 so the histogram stays sane.
+    if enqueued_at_iso:
+        try:
+            enq = datetime.fromisoformat(enqueued_at_iso)
+            wait = max(0.0, (datetime.utcnow() - enq).total_seconds())
+            pipeline_queue_wait_seconds.labels(pipeline_name=pipeline_name).observe(
+                wait
+            )
+        except ValueError:
+            pass
+
+    pipeline_in_flight.labels(pipeline_name=pipeline_name).inc()
+    status_label = "completed"
+    error_kind_label = ""
 
     try:
         await _publish_pipeline_update(
@@ -107,6 +150,8 @@ async def _process_pipeline(message: Dict[str, Any]) -> None:
         )
 
     except Exception as e:
+        status_label = "failed"
+        error_kind_label = _classify_error(e)
         error_message = str(e)
         log.error(
             f"Pipeline failed: {error_message}, trace_id: {trace_id} pipeline_id: {pipeline_id}",
@@ -119,6 +164,18 @@ async def _process_pipeline(message: Dict[str, Any]) -> None:
             status=PipelineStatus.FAILED,
             message=error_message,
         )
+
+    finally:
+        pipeline_in_flight.labels(pipeline_name=pipeline_name).dec()
+        duration = time.perf_counter() - t0
+        pipeline_duration_seconds.labels(
+            pipeline_name=pipeline_name, status=status_label
+        ).observe(duration)
+        pipeline_completed_total.labels(
+            pipeline_name=pipeline_name,
+            status=status_label,
+            error_kind=error_kind_label,
+        ).inc()
 
 
 async def init() -> None:

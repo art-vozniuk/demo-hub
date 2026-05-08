@@ -8,6 +8,8 @@ import aioboto3
 import aiohttp
 from botocore.config import Config as BotoConfig
 
+from services.common.metrics import s3_operations_total
+
 from .config import config
 
 log = logging.getLogger(__name__)
@@ -56,7 +58,12 @@ class S3Client:
             file = io.BytesIO(data_bytes)
             file_name = file_name or uuid4().hex
             s3_key = f"{s3_folder}/{file_name}.{file_extension}"
-            await s3.upload_fileobj(Bucket=s3_bucket, Key=s3_key, Fileobj=file)
+            try:
+                await s3.upload_fileobj(Bucket=s3_bucket, Key=s3_key, Fileobj=file)
+            except Exception:
+                s3_operations_total.labels(op="upload", status="failure").inc()
+                raise
+            s3_operations_total.labels(op="upload", status="success").inc()
             return f"{config.S3_PUBLIC_BUCKETS_ENDPOINT}/{s3_bucket}/{s3_key}"
 
     async def _download_to_file(self, s3_bucket: str, s3_key: str, file):
@@ -84,10 +91,13 @@ class S3Client:
                         if progress - last_log >= 10:
                             log.info(f"{s3_key}: {progress}%")
                             last_log = progress
+                s3_operations_total.labels(op="download", status="success").inc()
                 return
             except _DOWNLOAD_RETRY_EXCEPTIONS as e:
                 if attempt == _DOWNLOAD_MAX_ATTEMPTS:
+                    s3_operations_total.labels(op="download", status="failure").inc()
                     raise
+                s3_operations_total.labels(op="download", status="retry").inc()
                 backoff = 2 ** (attempt - 1)
                 log.warning(
                     f"S3 download {s3_key} failed on attempt {attempt}/"

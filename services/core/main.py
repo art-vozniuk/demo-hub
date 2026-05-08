@@ -82,6 +82,18 @@ async def health_check():
     return {"status": "ok"}
 
 
+# Prometheus instrumentation. Exposes /metrics on the same port (8081)
+# — Prometheus scrapes via the docker network, the route is intentionally
+# NOT proxied through nginx so it stays internal.
+from prometheus_fastapi_instrumentator import Instrumentator  # noqa: E402
+
+Instrumentator(
+    should_group_status_codes=True,
+    should_ignore_untemplated=True,
+    excluded_handlers=["/health", "/metrics", "/docs.*"],
+).instrument(app).expose(app, include_in_schema=False)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.cors_origins,

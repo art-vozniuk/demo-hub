@@ -3,6 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends
 
 from services.common.database import DbSession
+from services.common.metrics import pipeline_started_total
 from services.common.rabbitmq import RabbitMQPublisher, RabbitMQConnection
 from services.common.rabbitmq.config import rabbitmq_config
 from services.common.redis import rate_limit
@@ -114,6 +115,7 @@ async def queue_pipelines(
                 pipeline_id=str(pipeline_id),
             )
 
+            pipeline_started_total.labels(pipeline_name=pipeline_name).inc()
             pipeline_ids.append(pipeline_id)
 
         log.info(
