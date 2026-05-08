@@ -33,7 +33,7 @@ const CustomTemplateCard = ({
 
       <div className="relative z-10 flex flex-col items-center gap-3 p-6 text-center">
         <div className="rounded-full bg-primary/20 p-4 ring-1 ring-primary/40 group-hover:ring-primary group-hover:bg-primary/30 transition-all">
-          <ImagePlus className="h-8 w-8 text-primary" />
+          <ImagePlus className="h-6 w-6 text-primary" />
         </div>
         <div className="space-y-1">
           <p className="text-base font-semibold flex items-center justify-center gap-1.5">
