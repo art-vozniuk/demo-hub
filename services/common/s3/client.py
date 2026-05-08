@@ -1,14 +1,28 @@
+import asyncio
 import io
 import os
 import logging
 from uuid import uuid4
 
 import aioboto3
+import aiohttp
 from botocore.config import Config as BotoConfig
 
 from .config import config
 
 log = logging.getLogger(__name__)
+
+# botocore's `retries` only re-issues the GetObject call. Once the body is
+# streaming, aiohttp owns the socket — and Supabase Storage occasionally
+# closes mid-stream with a Content-Length mismatch (ClientPayloadError) or
+# a connection reset. Those errors must be retried at the app level by
+# re-doing the whole get + read sequence.
+_DOWNLOAD_MAX_ATTEMPTS = 3
+_DOWNLOAD_RETRY_EXCEPTIONS = (
+    aiohttp.ClientPayloadError,
+    aiohttp.ClientConnectionError,
+    asyncio.TimeoutError,
+)
 
 
 class S3Client:
@@ -46,23 +60,41 @@ class S3Client:
             return f"{config.S3_PUBLIC_BUCKETS_ENDPOINT}/{s3_bucket}/{s3_key}"
 
     async def _download_to_file(self, s3_bucket: str, s3_key: str, file):
-        async with await self._get_client() as s3:
-            response = await s3.get_object(Bucket=s3_bucket, Key=s3_key)
-            total = response["ContentLength"]
-            chunk_size = 512 * 1024
-            downloaded = 0
-            last_log = 0
+        for attempt in range(1, _DOWNLOAD_MAX_ATTEMPTS + 1):
+            # Discard any partial bytes from a previous failed attempt before
+            # restarting the download.
+            if attempt > 1:
+                file.seek(0)
+                file.truncate()
+            try:
+                async with await self._get_client() as s3:
+                    response = await s3.get_object(Bucket=s3_bucket, Key=s3_key)
+                    total = response["ContentLength"]
+                    chunk_size = 512 * 1024
+                    downloaded = 0
+                    last_log = 0
 
-            while True:
-                chunk = await response["Body"].read(chunk_size)
-                if not chunk:
-                    break
-                file.write(chunk)
-                downloaded += len(chunk)
-                progress = int(downloaded / total * 100)
-                if progress - last_log >= 10:
-                    log.info(f"{s3_key}: {progress}%")
-                    last_log = progress
+                    while True:
+                        chunk = await response["Body"].read(chunk_size)
+                        if not chunk:
+                            break
+                        file.write(chunk)
+                        downloaded += len(chunk)
+                        progress = int(downloaded / total * 100)
+                        if progress - last_log >= 10:
+                            log.info(f"{s3_key}: {progress}%")
+                            last_log = progress
+                return
+            except _DOWNLOAD_RETRY_EXCEPTIONS as e:
+                if attempt == _DOWNLOAD_MAX_ATTEMPTS:
+                    raise
+                backoff = 2 ** (attempt - 1)
+                log.warning(
+                    f"S3 download {s3_key} failed on attempt {attempt}/"
+                    f"{_DOWNLOAD_MAX_ATTEMPTS} ({type(e).__name__}: {e}); "
+                    f"retrying in {backoff}s"
+                )
+                await asyncio.sleep(backoff)
 
     async def download_file(self, s3_bucket: str, s3_key: str) -> bytes:
         file = io.BytesIO()
