@@ -47,8 +47,11 @@ services:
     environment:
       RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
       RABBITMQ_PREFETCH: "10"
+      REDIS_URL: redis://redis:6379
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       - app_network

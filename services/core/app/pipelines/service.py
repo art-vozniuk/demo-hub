@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,12 +16,14 @@ async def create_pipeline(
     pipeline_id: UUID,
     trace_id: UUID,
     pipeline_name: str,
+    estimated_finish_at: datetime | None = None,
 ) -> Pipeline:
     pipeline = Pipeline(
         id=pipeline_id,
         trace_id=trace_id,
         pipeline_name=pipeline_name,
         status=PipelineStatus.PENDING,
+        estimated_finish_at=estimated_finish_at,
     )
     db.add(pipeline)
     await db.flush()

@@ -16,6 +16,7 @@ from .schemas import (
     PipelineStatusItem,
 )
 from . import service
+from .estimation import estimate_finish_at
 
 log = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ async def queue_pipelines(
         pipeline_ids = []
         publisher = await get_publisher()
 
-        for job in request.jobs:
+        for index, job in enumerate(request.jobs):
             pipeline_id = job.pipeline_id
             pipeline_name = job.pipeline_name
 
@@ -92,11 +93,16 @@ async def queue_pipelines(
 
             log.info(f"Creating pipeline: {pipeline_name}")
 
+            estimated_finish = await estimate_finish_at(
+                queue_position=queue_length + index,
+            )
+
             await service.create_pipeline(
                 db=db,
                 pipeline_id=pipeline_id,
                 trace_id=trace_id,
                 pipeline_name=pipeline_name,
+                estimated_finish_at=estimated_finish,
             )
 
             message = {

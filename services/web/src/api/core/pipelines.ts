@@ -34,6 +34,7 @@ export interface PipelineStatusItem {
   status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
   result_url?: string | null;
   message?: string | null;
+  estimated_finish_at?: string | null;
   // Structured pipeline output. Currently only the face_recognition
   // pipeline writes here; face_swap leaves it null.
   payload?: FaceRecognitionPayload | null;

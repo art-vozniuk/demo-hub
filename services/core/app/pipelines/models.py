@@ -1,4 +1,4 @@
-from sqlalchemy import Column, ForeignKey, JSON, Text
+from sqlalchemy import Column, DateTime, ForeignKey, JSON, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -14,6 +14,7 @@ class Pipeline(Base, TimeStampMixin):
     status = Column(Text, nullable=False)
     result_url = Column(Text, nullable=True)
     message = Column(Text, nullable=True)
+    estimated_finish_at = Column(DateTime(timezone=True), nullable=True)
 
     payload = relationship(
         "PipelinePayload",

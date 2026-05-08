@@ -757,6 +757,7 @@ const FaceFusionGenerate = () => {
                       errorMessage={cardErrorMessage || undefined}
                       templateName={template.name}
                       pipelineId={pipelineId || null}
+                      estimatedFinishAt={status?.estimated_finish_at ?? null}
                       onAnimationComplete={() => handleAnimationComplete(index)}
                     />
                   );
@@ -799,6 +800,7 @@ const FaceFusionGenerate = () => {
                       errorMessage={cardErrorMessage || undefined}
                       templateName="Custom"
                       pipelineId={pipelineId}
+                      estimatedFinishAt={status?.estimated_finish_at ?? null}
                       onAnimationComplete={() => handleAnimationComplete(index)}
                     />
                   );

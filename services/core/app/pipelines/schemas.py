@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 from pydantic import BaseModel, field_validator
@@ -31,6 +32,7 @@ class PipelineStatusItem(BaseModel):
     status: PipelineStatus
     result_url: str | None = None
     message: str | None = None
+    estimated_finish_at: datetime | None = None
     # Structured pipeline output (e.g. face_recognition's detected face
     # bboxes). None when the pipeline didn't produce one or hasn't completed.
     payload: dict[str, Any] | None = None
