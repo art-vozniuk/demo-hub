@@ -37,9 +37,7 @@ async def get_publisher() -> RabbitMQPublisher:
 @router.post(
     "/queue",
     response_model=QueuePipelinesResponse,
-    dependencies=[
-        Depends(rate_limit("queue", config.RATE_LIMIT_QUEUE_PER_MINUTE, 60))
-    ],
+    dependencies=[Depends(rate_limit("queue", config.RATE_LIMIT_QUEUE_PER_MINUTE, 60))],
 )
 async def queue_pipelines(
     request: QueuePipelinesRequest,
