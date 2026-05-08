@@ -6,8 +6,6 @@ from services.common.database import DbSession
 from services.common.rabbitmq import RabbitMQPublisher, RabbitMQConnection
 from services.common.rabbitmq.config import rabbitmq_config
 from services.common.redis import rate_limit
-from services.common.auth import User
-from services.core.app.dependencies import get_current_user
 from services.core.app.config import config
 
 from .schemas import (
@@ -40,42 +38,29 @@ async def get_publisher() -> RabbitMQPublisher:
     "/queue",
     response_model=QueuePipelinesResponse,
     dependencies=[
-        Depends(
-            rate_limit(
-                "queue",
-                config.RATE_LIMIT_QUEUE_PER_MINUTE,
-                60,
-                get_current_user,
-                config.TEST_USER_EMAIL,
-            )
-        )
+        Depends(rate_limit("queue", config.RATE_LIMIT_QUEUE_PER_MINUTE, 60))
     ],
 )
 async def queue_pipelines(
     request: QueuePipelinesRequest,
     db: DbSession,
-    current_user: User = Depends(get_current_user),
 ) -> QueuePipelinesResponse:
     import sentry_sdk
     from services.common.logging.config import (
         context_trace_id,
-        context_user_id,
         context_pipeline_id,
     )
 
     trace_id = request.trace_id
 
     context_trace_id.set(str(trace_id))
-    context_user_id.set(str(current_user.id))
 
     with sentry_sdk.push_scope() as scope:
         scope.set_tag("trace_id", str(trace_id))
-        scope.set_tag("user_id", str(current_user.id))
         scope.set_context(
             "request",
             {
                 "trace_id": str(trace_id),
-                "user_id": str(current_user.id),
                 "jobs_count": len(request.jobs),
             },
         )
@@ -148,21 +133,12 @@ async def queue_pipelines(
     "/status",
     response_model=PipelineStatusResponse,
     dependencies=[
-        Depends(
-            rate_limit(
-                "status",
-                config.RATE_LIMIT_STATUS_PER_MINUTE,
-                60,
-                get_current_user,
-                config.TEST_USER_EMAIL,
-            )
-        )
+        Depends(rate_limit("status", config.RATE_LIMIT_STATUS_PER_MINUTE, 60))
     ],
 )
 async def get_pipeline_status(
     request: PipelineStatusRequest,
     db: DbSession,
-    current_user: User = Depends(get_current_user),
 ) -> PipelineStatusResponse:
     pipelines = await service.get_pipelines_by_ids(db, request.pipeline_ids)
 

@@ -1,6 +1,6 @@
 import logging
-from typing import Callable, Any
-from fastapi import HTTPException, status, Depends
+from typing import Callable
+from fastapi import HTTPException, Request, status
 
 from .client import get_redis_client
 
@@ -47,27 +47,30 @@ async def check_rate_limit(
     log.debug(f"Rate limit checked for {key}: {new_count}/{limit}")
 
 
-def rate_limit(
-    prefix: str,
-    limit: int,
-    window_seconds: int = 60,
-    get_current_user: Callable | None = None,
-    test_user_email: str | None = None,
-) -> Callable:
-    async def dependency(current_user: Any = Depends(get_current_user)) -> None:
-        user_email = getattr(current_user, "email", None)
-        user_id = getattr(current_user, "id", "anonymous")
+def _client_ip(request: Request) -> str:
+    real = request.headers.get("x-real-ip")
+    if real:
+        return real.strip()
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        # Rightmost entry is the IP nginx actually saw
+        return fwd.rsplit(",", 1)[-1].strip()
+    return request.client.host if request.client else "unknown"
 
-        effective_limit = limit
-        if test_user_email and user_email == test_user_email:
-            effective_limit = 100
-            log.info(
-                f"Rate limit for test user {user_email}: {effective_limit} per minute"
-            )
 
+def rate_limit(prefix: str, limit: int, window_seconds: int = 60) -> Callable:
+    """FastAPI dependency factory — rate-limits per client IP.
+
+    Was per-user keyed; switched to IP after the queue/status endpoints
+    became anonymous. nginx in front of core sets X-Real-IP, see
+    `_client_ip`.
+    """
+
+    async def dependency(request: Request) -> None:
+        ip = _client_ip(request)
         await check_rate_limit(
-            key=f"{prefix}:{user_id}",
-            limit=effective_limit,
+            key=f"{prefix}:{ip}",
+            limit=limit,
             window_seconds=window_seconds,
         )
 

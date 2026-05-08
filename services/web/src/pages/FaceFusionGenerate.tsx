@@ -11,7 +11,6 @@ import FaceSelectionOverlay from "@/components/FaceSelectionOverlay";
 import { useFaceRecognition } from "@/hooks/useFaceRecognition";
 import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
-import { useAuth } from "@/contexts/AuthContext";
 import { useAnalytics } from "@/hooks/useAnalytics";
 
 interface S3Ref {
@@ -109,7 +108,6 @@ const clearPersisted = () => sessionStorage.removeItem(STORAGE_KEY);
 const FaceFusionGenerate = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, loading: authLoading } = useAuth();
   const { track } = useAnalytics();
 
   const [initialState] = useState(() => {
@@ -169,7 +167,6 @@ const FaceFusionGenerate = () => {
 
   const pollingIntervalRef = useRef<number | null>(null);
   const pollingTimeoutRef = useRef<number | null>(null);
-  const hasTriggeredAutoGenerate = useRef(false);
   const generationStartTime = useRef<number | null>(null);
   const isMountedRef = useRef(true);
 
@@ -234,23 +231,10 @@ const FaceFusionGenerate = () => {
   }, [selfieFile, selfieS3, track]);
 
   useEffect(() => {
-    // Face recognition hits the authenticated /pipelines/queue endpoint, so
-    // it must wait until auth has resolved AND a user exists. Without this
-    // gate, an anonymous visitor's upload kicks off a queue request with no
-    // Bearer header → backend's HTTPBearer dependency emits 401 "Not
-    // authenticated", which surfaced as a misleading error inside the face
-    // selection overlay. Once the user signs in (via the Generate button's
-    // existing flow), state is persisted, the page remounts post-redirect,
-    // and this effect fires for real.
-    if (
-      !authLoading &&
-      user &&
-      selfieS3 &&
-      selfieRecognition.status === "idle"
-    ) {
+    if (selfieS3 && selfieRecognition.status === "idle") {
       selfieRecognition.run({ bucket: selfieS3.bucket, key: selfieS3.key });
     }
-  }, [authLoading, user, selfieS3, selfieRecognition]);
+  }, [selfieS3, selfieRecognition]);
 
   // Template upload → S3 → kick face_recognition (custom mode only).
   useEffect(() => {
@@ -277,12 +261,7 @@ const FaceFusionGenerate = () => {
   }, [isCustom, templateFile, templateS3]);
 
   useEffect(() => {
-    // Same auth-gate rationale as the selfie recognition effect above —
-    // /pipelines/queue requires a Bearer token, so don't fire face
-    // recognition until the user has authenticated.
     if (
-      !authLoading &&
-      user &&
       isCustom &&
       templateS3 &&
       templateRecognition.status === "idle"
@@ -292,7 +271,7 @@ const FaceFusionGenerate = () => {
         key: templateS3.key,
       });
     }
-  }, [authLoading, user, isCustom, templateS3, templateRecognition]);
+  }, [isCustom, templateS3, templateRecognition]);
 
   const pollPipelineStatuses = useCallback(
     async (ids: string[]) => {
@@ -468,31 +447,6 @@ const FaceFusionGenerate = () => {
 
   const handleGenerate = useCallback(async () => {
     setErrorMessage(null);
-    if (!user) {
-      track({ name: "auth_required", params: { redirect_from: "generate_page" } });
-      try {
-        await persist({
-          isCustom,
-          selectedTemplates,
-          selfieFile,
-          selfieS3: selfieS3 ?? undefined,
-          templateFile: isCustom ? templateFile : null,
-          templateS3: isCustom ? templateS3 ?? undefined : undefined,
-        });
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        navigate("/auth", {
-          state: {
-            returnPath: "/face-fusion/generate",
-            autoGenerate: true,
-            selectedTemplates,
-          },
-        });
-      } catch (error) {
-        console.error("Failed to save state:", error);
-        toast.error("Failed to save state: " + error);
-      }
-      return;
-    }
 
     track({
       name: "generate_initiated",
@@ -503,50 +457,7 @@ const FaceFusionGenerate = () => {
     });
 
     await startGeneration();
-  }, [
-    user,
-    isCustom,
-    selectedTemplates,
-    selfieFile,
-    selfieS3,
-    templateFile,
-    templateS3,
-    track,
-    navigate,
-    startGeneration,
-  ]);
-
-  // Auto-generate after returning from /auth — only fire once everything
-  // (uploads + face recognition + selected face) is ready, otherwise the
-  // generation would race the recognition pipeline.
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const shouldAutoGenerate = params.get("autoGenerate") === "true";
-    if (
-      shouldAutoGenerate &&
-      !authLoading &&
-      user &&
-      !hasTriggeredAutoGenerate.current &&
-      selfieS3 &&
-      selfieRecognition.selectedBbox &&
-      (!isCustom || (templateS3 && templateRecognition.selectedBbox))
-    ) {
-      hasTriggeredAutoGenerate.current = true;
-      setTimeout(() => {
-        startGeneration();
-      }, 500);
-    }
-  }, [
-    location.search,
-    authLoading,
-    user,
-    selfieS3,
-    templateS3,
-    isCustom,
-    selfieRecognition.selectedBbox,
-    templateRecognition.selectedBbox,
-    startGeneration,
-  ]);
+  }, [isCustom, selectedTemplates, track, startGeneration]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -620,8 +531,8 @@ const FaceFusionGenerate = () => {
     pipelineIds.length === 0 &&
     !!selfieS3 &&
     !isUploadingSelfie &&
-    selfieReady &&
     (!isCustom || (!!templateS3 && !isUploadingTemplate)) &&
+    selfieReady &&
     templateReady;
 
   const handleResetSelfie = () => {
