@@ -18,9 +18,7 @@ from services.compute.app.pipelines.schemas import (
 
 log = logging.getLogger(__name__)
 
-_recast_template_cache: dict[str, bytes] = {}
 _inference_lock = asyncio.Lock()
-
 
 class Service:
     def __init__(self, id: str, s3: S3Client, pipeline_input: PipelineInput):
@@ -167,21 +165,6 @@ class FaceSwapService(Service):
         if not isinstance(self.pipeline_input, FaceSwapPipelineInput):
             raise ValueError("Invalid pipeline input for FaceSwapService")
 
-        key = f"{self.pipeline_input.template_image_bucket}/{self.pipeline_input.template_image_key}"
-        if key in _recast_template_cache:
-            log.info(f"Using cached template image for key: {key}")
-            target_image = _recast_template_cache[key]
-            source_image = await self.s3.download_file(
-                s3_bucket=self.pipeline_input.source_image_bucket,
-                s3_key=self.pipeline_input.source_image_key,
-            )
-            return FaceSwapPipeline(
-                source_image,
-                target_image,
-                source_face_bbox=self.pipeline_input.source_face_bbox,
-                target_face_bbox=self.pipeline_input.target_face_bbox,
-            )
-
         source_image_task = self.s3.download_file(
             s3_bucket=self.pipeline_input.source_image_bucket,
             s3_key=self.pipeline_input.source_image_key,
@@ -194,8 +177,6 @@ class FaceSwapService(Service):
         source_image, target_image = await asyncio.gather(
             source_image_task, target_image_task
         )
-
-        _recast_template_cache[key] = target_image
 
         return FaceSwapPipeline(
             source_image,

@@ -78,7 +78,7 @@ async def _process_pipeline(message: Dict[str, Any]) -> None:
             s3_client=s3_client,
         )
 
-        log.info(f"Running pipeline: {pipeline_name}, trace_id: {trace_id}")
+        log.info(f"Running pipeline: {pipeline_name}, trace_id: {trace_id}, input: {pipeline_input_dict}")
         t1 = time.perf_counter()
         results = await service.run()
         log.info(
