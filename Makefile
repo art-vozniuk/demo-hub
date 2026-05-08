@@ -125,3 +125,12 @@ run-dev:
 
 stop-dev:
 	docker compose -f docker-compose.local.yml down
+
+deploy-core:
+	docker compose -f docker-compose.local.yml up --build core --detach
+
+deploy-compute:
+	docker compose -f docker-compose.local.yml up --build compute --detach
+
+deploy-web:
+	docker compose -f docker-compose.local.yml up --build web --detach
