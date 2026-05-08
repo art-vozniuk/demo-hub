@@ -23,12 +23,10 @@ COPY services/compute ./services/compute
 COPY services/common ./services/common
 COPY services/external/face_swap ./services/external/face_swap
 
-RUN --mount=type=secret,id=env,target=/tmp/.env \
+RUN --mount=type=secret,id=env,target=/tmp/.env,required=false \
     if [ -f /tmp/.env ]; then \
         cp /tmp/.env /app/.env && \
         chmod 644 /app/.env; \
-    else \
-        echo "No .env secret provided, skipping (use --env-file at runtime)"; \
     fi
 
 ENV PATH="/app/services/compute/.venv/bin:$PATH"
