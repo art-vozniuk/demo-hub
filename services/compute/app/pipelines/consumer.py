@@ -25,9 +25,8 @@ async def _publish_pipeline_update(
     trace_id: str,
     pipeline_id: str,
     status: PipelineStatus,
-    result_url: str | None = None,
+    result: dict | None = None,
     message: str | None = None,
-    payload: dict | None = None,
 ) -> None:
     if not rabbitmq_publisher:
         raise RuntimeError("Publisher not initialized")
@@ -36,9 +35,8 @@ async def _publish_pipeline_update(
         "trace_id": trace_id,
         "pipeline_id": pipeline_id,
         "status": status.value,
-        "result_url": result_url,
+        "result": result,
         "message": message,
-        "payload": payload,
     }
 
     await rabbitmq_publisher.publish(
@@ -82,21 +80,17 @@ async def _process_pipeline(message: Dict[str, Any]) -> None:
             f"Running pipeline: {pipeline_name}, trace_id: {trace_id}, input: {pipeline_input_dict}"
         )
         t1 = time.perf_counter()
-        results = await service.run()
+        result = await service.run()
         log.info(
             f"_process_pipeline service.run took {(time.perf_counter() - t1) * 1000:.1f}ms"
         )
-
-        result_url = results.get("url")
-        payload = results.get("payload")
 
         await _publish_pipeline_update(
             trace_id=trace_id,
             pipeline_id=pipeline_id,
             status=PipelineStatus.COMPLETED,
-            result_url=result_url,
+            result=result,
             message="success",
-            payload=payload,
         )
 
         log.info(

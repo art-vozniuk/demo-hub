@@ -744,7 +744,9 @@ const FaceFusionGenerate = () => {
                       status.status === "PENDING"
                     : false;
                   const generatedImage =
-                    status?.status === "COMPLETED" ? status.result_url : null;
+                    status?.status === "COMPLETED"
+                      ? ((status.result as { result_url?: string } | null)?.result_url ?? null)
+                      : null;
                   const cardErrorMessage =
                     status?.status === "FAILED" ? status.message : null;
 
@@ -783,7 +785,9 @@ const FaceFusionGenerate = () => {
                     status.status === "RUNNING" ||
                     status.status === "PENDING";
                   const generatedImage =
-                    status?.status === "COMPLETED" ? status.result_url : null;
+                    status?.status === "COMPLETED"
+                      ? ((status.result as { result_url?: string } | null)?.result_url ?? null)
+                      : null;
                   const cardErrorMessage =
                     status?.status === "FAILED" ? status.message : null;
                   const previewSource = templateFile

@@ -2,13 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 
 import { pipelinesApi } from "@/api";
-import type { FaceRecognitionPayload } from "@/api";
+import type { FaceRecognitionResult } from "@/api";
 
 type Status = "idle" | "running" | "complete" | "failed";
 
 interface State {
   status: Status;
-  payload: FaceRecognitionPayload | null;
+  payload: FaceRecognitionResult | null;
   errorMessage: string | null;
   selectedFaceId: string | null;
 }
@@ -113,7 +113,7 @@ export function useFaceRecognition() {
 
           if (item.status === "COMPLETED") {
             clearTimers();
-            const payload = item.payload ?? null;
+            const payload = (item.result as FaceRecognitionResult | null) ?? null;
             const firstFaceId = payload?.faces?.[0]?.id ?? null;
             if (!payload || payload.faces.length === 0) {
               setState({

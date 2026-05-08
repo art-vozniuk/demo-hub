@@ -147,10 +147,7 @@ class FaceRecognitionService(Service):
         return FaceRecognitionPipeline(image)
 
     async def post_pipeline(self, results: dict) -> dict:
-        # face_recognition has no rendered artifact — it ships the detected
-        # faces as a structured payload that the core service stores against
-        # the pipeline row. The frontend reads it from the pipeline status.
-        return {"payload": results["payload"]}
+        return results["payload"]
 
 
 class FaceSwapService(Service):
@@ -194,7 +191,7 @@ class FaceSwapService(Service):
             s3_folder="recast_results",
             file_extension=file_extension,
         )
-        return {"url": url}
+        return {"result_url": url}
 
 
 class PipelineType:

@@ -1,6 +1,6 @@
 from typing import Any
 from uuid import UUID
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 
 from services.common.domain.enums import PipelineStatus
 
@@ -29,24 +29,10 @@ class PipelineStatusRequest(BaseModel):
 class PipelineStatusItem(BaseModel):
     id: UUID
     status: PipelineStatus
-    result_url: str | None = None
     message: str | None = None
-    # Structured pipeline output (e.g. face_recognition's detected face
-    # bboxes). None when the pipeline didn't produce one or hasn't completed.
-    payload: dict[str, Any] | None = None
+    result: dict[str, Any] | None = None
 
     model_config = {"from_attributes": True}
-
-    @field_validator("payload", mode="before")
-    @classmethod
-    def _unwrap_payload(cls, v: Any) -> Any:
-        # SQLAlchemy hands the relationship object; pull its `.payload` JSON
-        # column out so the wire format is just the dict.
-        if v is None:
-            return None
-        if isinstance(v, dict):
-            return v
-        return getattr(v, "payload", None)
 
 
 class PipelineStatusResponse(BaseModel):
