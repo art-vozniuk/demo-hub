@@ -66,15 +66,6 @@ async def _read_heartbeats() -> dict[str, dict[str, float]]:
 
 async def estimate_pipeline(pending_by_type: dict[str, int]) -> PipelineEstimate:
     queue_position = sum(pending_by_type.values())
-
-    if queue_position == 0:
-        return PipelineEstimate(
-            estimated_seconds=0.01,
-            queue_position=0,
-            worker_count=0,
-            workers_missing=False,
-        )
-
     heartbeats = await _read_heartbeats()
 
     relevant_workers: set[str] = set()
@@ -94,7 +85,12 @@ async def estimate_pipeline(pending_by_type: dict[str, int]) -> PipelineEstimate
     divisor = worker_count if worker_count > 0 else 1
     estimated_seconds = total_work_ms / 1000.0 / divisor
 
-    log.info(f"estimated time for pipeline: {estimated_seconds}s")
+    log.info(
+        f"estimated time for pipeline: {estimated_seconds}s "
+        f"(queue_position={queue_position}, worker_count={worker_count}, "
+        f"workers_missing={workers_missing}, pending_by_type={pending_by_type})"
+        f"heartbeats: {heartbeats}"
+    )
 
     return PipelineEstimate(
         estimated_seconds=max(estimated_seconds, 0.01),
