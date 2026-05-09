@@ -103,8 +103,11 @@ async def _process_pipeline(message: Dict[str, Any]) -> None:
         )
 
         duration_ms = (time.perf_counter() - t0) * 1000.0
-        heartbeat.record_success(pipeline_name, duration_ms)
-        log.info(f"_process_pipeline: TOTAL took {duration_ms:.1f}ms")
+        heartbeat.record_success(pipeline_name, service.last_inference_ms)
+        log.info(
+            f"_process_pipeline: TOTAL took {duration_ms:.1f}ms, "
+            f"heartbeat={service.last_inference_ms:.1f}ms"
+        )
         log.info(
             f"Pipeline completed successfully: {pipeline_name}, trace_id: {trace_id} pipeline_id: {pipeline_id}"
         )
