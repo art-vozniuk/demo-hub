@@ -157,6 +157,9 @@ const FaceFusionGenerate = () => {
     Map<string, PipelineStatusItem>
   >(new Map());
   const [pipelineIds, setPipelineIds] = useState<string[]>([]);
+  const [estimatedFinishAt, setEstimatedFinishAt] = useState<
+    Map<string, string>
+  >(new Map());
   const [completedAnimations, setCompletedAnimations] = useState<Set<string>>(
     new Set()
   );
@@ -358,6 +361,7 @@ const FaceFusionGenerate = () => {
     generationStartTime.current = Date.now();
     setIsProcessing(true);
     setPipelineStatuses(new Map());
+    setEstimatedFinishAt(new Map());
     setCompletedAnimations(new Set());
     setErrorMessage(null);
     setTotalGenerationDuration(null);
@@ -406,6 +410,26 @@ const FaceFusionGenerate = () => {
       });
 
       toast.success("Your generation pipelines are queued.", { duration: 5000 });
+
+      // Fetch ETA per pipeline; failures shouldn't block the generation flow.
+      Promise.all(
+        ids.map((id) =>
+          pipelinesApi
+            .getEstimate(id)
+            .then((res) => {
+              if (!isMountedRef.current) return;
+              const target = new Date(
+                Date.now() + res.estimated_seconds * 1000
+              ).toISOString();
+              setEstimatedFinishAt((prev) => {
+                const next = new Map(prev);
+                next.set(id, target);
+                return next;
+              });
+            })
+            .catch((e) => console.warn(`Failed to fetch estimate for ${id}:`, e))
+        )
+      );
 
       clearPolling();
       await pollPipelineStatuses(ids);
@@ -759,7 +783,9 @@ const FaceFusionGenerate = () => {
                       errorMessage={cardErrorMessage || undefined}
                       templateName={template.name}
                       pipelineId={pipelineId || null}
-                      estimatedFinishAt={status?.estimated_finish_at ?? null}
+                      estimatedFinishAt={
+                        pipelineId ? estimatedFinishAt.get(pipelineId) ?? null : null
+                      }
                       onAnimationComplete={() => handleAnimationComplete(index)}
                     />
                   );
@@ -804,7 +830,9 @@ const FaceFusionGenerate = () => {
                       errorMessage={cardErrorMessage || undefined}
                       templateName="Custom"
                       pipelineId={pipelineId}
-                      estimatedFinishAt={status?.estimated_finish_at ?? null}
+                      estimatedFinishAt={
+                        pipelineId ? estimatedFinishAt.get(pipelineId) ?? null : null
+                      }
                       onAnimationComplete={() => handleAnimationComplete(index)}
                     />
                   );

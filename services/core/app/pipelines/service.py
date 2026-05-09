@@ -1,7 +1,6 @@
 import logging
-from datetime import datetime
 from uuid import UUID
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.domain.enums import PipelineStatus
@@ -15,14 +14,12 @@ async def create_pipeline(
     pipeline_id: UUID,
     trace_id: UUID,
     pipeline_name: str,
-    estimated_finish_at: datetime | None = None,
 ) -> Pipeline:
     pipeline = Pipeline(
         id=pipeline_id,
         trace_id=trace_id,
         pipeline_name=pipeline_name,
         status=PipelineStatus.PENDING,
-        estimated_finish_at=estimated_finish_at,
     )
     db.add(pipeline)
     await db.flush()
@@ -40,6 +37,36 @@ async def get_pipelines_by_ids(
 ) -> list[Pipeline]:
     result = await db.execute(select(Pipeline).where(Pipeline.id.in_(pipeline_ids)))
     return list(result.scalars().all())
+
+
+async def get_pipeline_by_id(
+    db: AsyncSession,
+    pipeline_id: UUID,
+) -> Pipeline | None:
+    result = await db.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
+    return result.scalar_one_or_none()
+
+
+async def count_pending_ahead_by_type(
+    db: AsyncSession,
+    pipeline: Pipeline,
+) -> dict[str, int]:
+    # Count PENDING pipelines created at-or-before the given pipeline,
+    # grouped by pipeline_name. Includes the pipeline itself if still
+    # pending. RUNNING/COMPLETED/FAILED rows are excluded.
+    stmt = (
+        select(Pipeline.pipeline_name, func.count(Pipeline.id))
+        .where(Pipeline.status == PipelineStatus.PENDING)
+        .where(
+            or_(
+                Pipeline.created_at < pipeline.created_at,
+                Pipeline.id == pipeline.id,
+            )
+        )
+        .group_by(Pipeline.pipeline_name)
+    )
+    result = await db.execute(stmt)
+    return {name: int(count) for name, count in result.all()}
 
 
 async def update_pipeline_status(

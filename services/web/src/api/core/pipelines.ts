@@ -39,12 +39,18 @@ export interface PipelineStatusItem {
   id: string;
   status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
   message?: string | null;
-  estimated_finish_at?: string | null;
   result?: PipelineResult | null;
 }
 
 export interface PipelineStatusResponse {
   pipelines: PipelineStatusItem[];
+}
+
+export interface PipelineEstimateResponse {
+  pipeline_id: string;
+  estimated_seconds: number;
+  queue_position: number;
+  worker_count: number;
 }
 
 export const pipelinesApi = {
@@ -58,5 +64,13 @@ export const pipelinesApi = {
     return apiClient.post<PipelineStatusResponse>("/pipelines/status", {
       pipeline_ids: pipelineIds,
     });
+  },
+
+  getEstimate: async (
+    pipelineId: string
+  ): Promise<PipelineEstimateResponse> => {
+    return apiClient.get<PipelineEstimateResponse>(
+      `/pipelines/${pipelineId}/estimate`
+    );
   },
 };

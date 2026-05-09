@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, JSON, Text
+from sqlalchemy import Column, JSON, Text
 from sqlalchemy.dialects.postgresql import UUID
 
 from services.common.database import Base, TimeStampMixin
@@ -13,4 +13,3 @@ class Pipeline(Base, TimeStampMixin):
     status = Column(Text, nullable=False)
     result = Column(JSON, nullable=True)
     message = Column(Text, nullable=True)
-    estimated_finish_at = Column(DateTime(timezone=True), nullable=True)

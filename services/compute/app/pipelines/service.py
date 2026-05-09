@@ -200,26 +200,29 @@ class PipelineType:
         service_type: type[Service],
         pipeline_type: type[Pipeline],
         input_type: type[PipelineInput],
+        estimated_time_ms: int,
     ):
         self.service_type = service_type
         self.pipeline_type = pipeline_type
         self.input_type = input_type
+        # Best-known wall-clock duration of one run on this worker, in ms.
+        # Mutated in place after each successful execution so the heartbeat
+        # picks up the latest value.
+        self.estimated_time_ms = estimated_time_ms
 
-    service_type: type[Service]
-    pipeline_type: type[Pipeline]
-    input_type: type[PipelineInput]
 
-
-pipeline_templates = {
+pipeline_templates: dict[str, PipelineType] = {
     "face_recognition": PipelineType(
         service_type=FaceRecognitionService,
         pipeline_type=FaceRecognitionPipeline,
         input_type=FaceRecognitionPipelineInput,
+        estimated_time_ms=1000,
     ),
     "face_swap": PipelineType(
         service_type=FaceSwapService,
         pipeline_type=FaceSwapPipeline,
         input_type=FaceSwapPipelineInput,
+        estimated_time_ms=10000,
     ),
 }
 

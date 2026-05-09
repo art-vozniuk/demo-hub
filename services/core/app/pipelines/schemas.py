@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Any
 from uuid import UUID
 from pydantic import BaseModel
@@ -31,7 +30,6 @@ class PipelineStatusItem(BaseModel):
     id: UUID
     status: PipelineStatus
     message: str | None = None
-    estimated_finish_at: datetime | None = None
     result: dict[str, Any] | None = None
 
     model_config = {"from_attributes": True}
@@ -39,3 +37,10 @@ class PipelineStatusItem(BaseModel):
 
 class PipelineStatusResponse(BaseModel):
     pipelines: list[PipelineStatusItem]
+
+
+class PipelineEstimateResponse(BaseModel):
+    pipeline_id: UUID
+    estimated_seconds: float
+    queue_position: int
+    worker_count: int
