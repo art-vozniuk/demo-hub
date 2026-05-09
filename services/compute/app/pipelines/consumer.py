@@ -148,6 +148,14 @@ async def init() -> None:
 
     log.info(f"Starting worker heartbeat loop, worker_id={_worker_id}")
     _heartbeat_stop = asyncio.Event()
+    # Publish first heartbeat synchronously so core sees this worker as
+    # capable of every configured pipeline before init returns. Otherwise
+    # there is a brief window where /pipelines/{id}/estimate would report
+    # workers_missing=true.
+    try:
+        await heartbeat.publish_once(_worker_id)
+    except Exception as e:
+        log.warning(f"Initial heartbeat publish failed: {e}")
     _heartbeat_task = asyncio.create_task(heartbeat.run_loop(_worker_id, _heartbeat_stop))
 
     log.info("Pipeline router initialized successfully")

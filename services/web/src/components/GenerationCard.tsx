@@ -20,7 +20,7 @@ interface GenerationCardProps {
 }
 
 const formatRemaining = (seconds: number): string => {
-  if (seconds <= 0) return "0.01s";
+  if (seconds <= 1) return "<1s";
   if (seconds >= 60) {
     const m = Math.floor(seconds / 60);
     const s = Math.round(seconds % 60);
@@ -49,6 +49,7 @@ const GenerationCard = ({
 
   useEffect(() => {
     if (!isProcessing || !estimatedFinishAt) return;
+    setNow(Date.now());
     const id = window.setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(id);
   }, [isProcessing, estimatedFinishAt]);
