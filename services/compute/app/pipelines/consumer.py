@@ -159,7 +159,9 @@ async def init() -> None:
         await heartbeat.publish_once(_worker_id)
     except Exception as e:
         log.warning(f"Initial heartbeat publish failed: {e}")
-    _heartbeat_task = asyncio.create_task(heartbeat.run_loop(_worker_id, _heartbeat_stop))
+    _heartbeat_task = asyncio.create_task(
+        heartbeat.run_loop(_worker_id, _heartbeat_stop)
+    )
 
     log.info("Pipeline router initialized successfully")
 

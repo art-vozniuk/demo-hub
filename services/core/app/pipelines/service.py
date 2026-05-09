@@ -67,11 +67,7 @@ async def count_pending_ahead_by_type(
     cutoff = pipeline.created_at - timedelta(seconds=STALE_PENDING_AGE_SECONDS)
     stmt = (
         select(Pipeline.pipeline_name, func.count(Pipeline.id))
-        .where(
-            Pipeline.status.in_(
-                [PipelineStatus.PENDING, PipelineStatus.RUNNING]
-            )
-        )
+        .where(Pipeline.status.in_([PipelineStatus.PENDING, PipelineStatus.RUNNING]))
         .where(
             or_(
                 and_(

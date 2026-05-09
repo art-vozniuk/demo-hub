@@ -117,9 +117,7 @@ class Service:
             t1 = time.perf_counter()
             results = await asyncio.to_thread(lambda: pipeline.run())
             self.last_inference_ms = (time.perf_counter() - t1) * 1000
-            log.info(
-                f"Service.run pipeline.run took {self.last_inference_ms:.1f}ms"
-            )
+            log.info(f"Service.run pipeline.run took {self.last_inference_ms:.1f}ms")
 
         t1 = time.perf_counter()
         output = await self.post_pipeline(results)
