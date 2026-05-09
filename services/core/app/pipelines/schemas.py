@@ -44,3 +44,4 @@ class PipelineEstimateResponse(BaseModel):
     estimated_seconds: float
     queue_position: int
     worker_count: int
+    workers_missing: bool

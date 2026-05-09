@@ -15,6 +15,7 @@ interface GenerationCardProps {
   templateName?: string | null;
   pipelineId?: string | null;
   estimatedFinishAt?: string | null;
+  workersMissing?: boolean;
   onAnimationComplete?: () => void;
 }
 
@@ -36,6 +37,7 @@ const GenerationCard = ({
   templateName,
   pipelineId,
   estimatedFinishAt,
+  workersMissing = false,
   onAnimationComplete,
 }: GenerationCardProps) => {
   const [blurAmount, setBlurAmount] = useState(0);
@@ -165,10 +167,17 @@ const GenerationCard = ({
             {showSpinner && (
               <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/10 backdrop-blur-sm gap-2">
                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                {isProcessing && remainingSeconds !== null && (
-                  <p className="text-white text-xs font-medium px-2 py-0.5 rounded bg-black/40">
-                    ~{formatRemaining(remainingSeconds)} left
+                {isProcessing && workersMissing ? (
+                  <p className="text-white text-xs font-medium px-2 py-0.5 rounded bg-destructive/70 text-center max-w-[80%]">
+                    No workers available for this pipeline
                   </p>
+                ) : (
+                  isProcessing &&
+                  remainingSeconds !== null && (
+                    <p className="text-white text-xs font-medium px-2 py-0.5 rounded bg-black/40">
+                      ~{formatRemaining(remainingSeconds)} left
+                    </p>
+                  )
                 )}
               </div>
             )}

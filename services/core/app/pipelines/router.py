@@ -172,4 +172,5 @@ async def get_pipeline_estimate(
         estimated_seconds=estimate.estimated_seconds,
         queue_position=estimate.queue_position,
         worker_count=estimate.worker_count,
+        workers_missing=estimate.workers_missing,
     )

@@ -6,11 +6,6 @@ from services.common.redis import get_redis_client
 
 
 HEARTBEAT_KEY_PREFIX = "worker:heartbeat:"
-DEFAULT_DURATIONS_MS: dict[str, float] = {
-    "face_recognition": 1000.0,
-    "face_swap": 10000.0,
-}
-FALLBACK_DURATION_MS = 10000.0
 
 log = logging.getLogger(__name__)
 
@@ -20,6 +15,7 @@ class PipelineEstimate:
     estimated_seconds: float
     queue_position: int
     worker_count: int
+    workers_missing: bool
 
 
 async def _read_heartbeats() -> dict[str, dict[str, float]]:
@@ -58,11 +54,10 @@ async def _read_heartbeats() -> dict[str, dict[str, float]]:
                 continue
             pipeline_name = parts[2]
             worker_id = parts[3]
-            duration = float(
-                payload.get("estimated_time_ms")
-                or DEFAULT_DURATIONS_MS.get(pipeline_name, FALLBACK_DURATION_MS)
-            )
-            out.setdefault(pipeline_name, {})[worker_id] = duration
+            duration = payload.get("estimated_time_ms")
+            if duration is None:
+                continue
+            out.setdefault(pipeline_name, {})[worker_id] = float(duration)
     except Exception as e:
         log.warning(f"Failed to read worker heartbeats: {e}")
 
@@ -77,28 +72,25 @@ async def estimate_pipeline(pending_by_type: dict[str, int]) -> PipelineEstimate
             estimated_seconds=0.01,
             queue_position=0,
             worker_count=0,
+            workers_missing=False,
         )
 
     heartbeats = await _read_heartbeats()
-    all_workers: set[str] = set()
-    for workers in heartbeats.values():
-        all_workers.update(workers.keys())
-    worker_count = len(all_workers)
 
-    # Sum expected execution time for everything ahead+ours, using per-type
-    # average across heartbeating workers; fall back to defaults when no
-    # worker has reported for that type yet.
+    relevant_workers: set[str] = set()
     total_work_ms = 0.0
+    workers_missing = False
+
     for pipeline_name, count in pending_by_type.items():
-        durations = list(heartbeats.get(pipeline_name, {}).values())
-        if durations:
-            avg_ms = sum(durations) / len(durations)
-        else:
-            avg_ms = DEFAULT_DURATIONS_MS.get(pipeline_name, FALLBACK_DURATION_MS)
+        workers_for_type = heartbeats.get(pipeline_name, {})
+        if not workers_for_type:
+            workers_missing = True
+            continue
+        relevant_workers.update(workers_for_type.keys())
+        avg_ms = sum(workers_for_type.values()) / len(workers_for_type)
         total_work_ms += count * avg_ms
 
-    # No live workers — give the optimistic single-stream estimate so the
-    # frontend still has a non-zero countdown to render.
+    worker_count = len(relevant_workers)
     divisor = worker_count if worker_count > 0 else 1
     estimated_seconds = total_work_ms / 1000.0 / divisor
 
@@ -106,4 +98,5 @@ async def estimate_pipeline(pending_by_type: dict[str, int]) -> PipelineEstimate
         estimated_seconds=max(estimated_seconds, 0.01),
         queue_position=queue_position,
         worker_count=worker_count,
+        workers_missing=workers_missing,
     )

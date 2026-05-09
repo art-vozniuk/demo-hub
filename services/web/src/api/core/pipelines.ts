@@ -51,6 +51,7 @@ export interface PipelineEstimateResponse {
   estimated_seconds: number;
   queue_position: number;
   worker_count: number;
+  workers_missing: boolean;
 }
 
 export const pipelinesApi = {

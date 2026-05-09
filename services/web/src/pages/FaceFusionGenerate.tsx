@@ -160,6 +160,9 @@ const FaceFusionGenerate = () => {
   const [estimatedFinishAt, setEstimatedFinishAt] = useState<
     Map<string, string>
   >(new Map());
+  const [workersMissing, setWorkersMissing] = useState<Map<string, boolean>>(
+    new Map()
+  );
   const [completedAnimations, setCompletedAnimations] = useState<Set<string>>(
     new Set()
   );
@@ -362,6 +365,7 @@ const FaceFusionGenerate = () => {
     setIsProcessing(true);
     setPipelineStatuses(new Map());
     setEstimatedFinishAt(new Map());
+    setWorkersMissing(new Map());
     setCompletedAnimations(new Set());
     setErrorMessage(null);
     setTotalGenerationDuration(null);
@@ -424,6 +428,11 @@ const FaceFusionGenerate = () => {
               setEstimatedFinishAt((prev) => {
                 const next = new Map(prev);
                 next.set(id, target);
+                return next;
+              });
+              setWorkersMissing((prev) => {
+                const next = new Map(prev);
+                next.set(id, res.workers_missing);
                 return next;
               });
             })
@@ -786,6 +795,9 @@ const FaceFusionGenerate = () => {
                       estimatedFinishAt={
                         pipelineId ? estimatedFinishAt.get(pipelineId) ?? null : null
                       }
+                      workersMissing={
+                        pipelineId ? workersMissing.get(pipelineId) ?? false : false
+                      }
                       onAnimationComplete={() => handleAnimationComplete(index)}
                     />
                   );
@@ -832,6 +844,9 @@ const FaceFusionGenerate = () => {
                       pipelineId={pipelineId}
                       estimatedFinishAt={
                         pipelineId ? estimatedFinishAt.get(pipelineId) ?? null : null
+                      }
+                      workersMissing={
+                        pipelineId ? workersMissing.get(pipelineId) ?? false : false
                       }
                       onAnimationComplete={() => handleAnimationComplete(index)}
                     />

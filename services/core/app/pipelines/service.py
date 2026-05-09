@@ -1,12 +1,18 @@
 import logging
+from datetime import timedelta
 from uuid import UUID
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.domain.enums import PipelineStatus
 from .models import Pipeline
 
 log = logging.getLogger(__name__)
+
+# PENDING rows older than this relative to the requested pipeline are
+# treated as orphaned (e.g. left behind by crashed workers) and excluded
+# from queue-position counting.
+STALE_PENDING_AGE_SECONDS = 300
 
 
 async def create_pipeline(
@@ -52,14 +58,19 @@ async def count_pending_ahead_by_type(
     pipeline: Pipeline,
 ) -> dict[str, int]:
     # Count PENDING pipelines created at-or-before the given pipeline,
-    # grouped by pipeline_name. Includes the pipeline itself if still
-    # pending. RUNNING/COMPLETED/FAILED rows are excluded.
+    # grouped by pipeline_name. Always include the pipeline itself if it
+    # is still pending; otherwise restrict to a bounded recent window so
+    # orphaned rows from crashed workers don't inflate the queue.
+    cutoff = pipeline.created_at - timedelta(seconds=STALE_PENDING_AGE_SECONDS)
     stmt = (
         select(Pipeline.pipeline_name, func.count(Pipeline.id))
         .where(Pipeline.status == PipelineStatus.PENDING)
         .where(
             or_(
-                Pipeline.created_at < pipeline.created_at,
+                and_(
+                    Pipeline.created_at < pipeline.created_at,
+                    Pipeline.created_at >= cutoff,
+                ),
                 Pipeline.id == pipeline.id,
             )
         )
