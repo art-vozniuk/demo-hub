@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from services.common.database import DbSession
 from services.common.rabbitmq import RabbitMQPublisher, RabbitMQConnection
 from services.common.rabbitmq.config import rabbitmq_config
-from services.common.redis import rate_limit
+from services.common.redis.rate_limit import rate_limit
 from services.core.app.config import config
 
 from .schemas import (
