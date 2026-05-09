@@ -46,6 +46,14 @@ export interface PipelineStatusResponse {
   pipelines: PipelineStatusItem[];
 }
 
+export interface PipelineEstimateResponse {
+  pipeline_id: string;
+  estimated_seconds: number;
+  queue_position: number;
+  worker_count: number;
+  workers_missing: boolean;
+}
+
 export const pipelinesApi = {
   queuePipelines: async (
     request: QueuePipelinesRequest
@@ -57,5 +65,13 @@ export const pipelinesApi = {
     return apiClient.post<PipelineStatusResponse>("/pipelines/status", {
       pipeline_ids: pipelineIds,
     });
+  },
+
+  getEstimate: async (
+    pipelineId: string
+  ): Promise<PipelineEstimateResponse> => {
+    return apiClient.get<PipelineEstimateResponse>(
+      `/pipelines/${pipelineId}/estimate`
+    );
   },
 };

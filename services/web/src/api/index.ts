@@ -9,6 +9,7 @@ export type {
   QueuePipelinesResponse,
   PipelineStatusItem,
   PipelineStatusResponse,
+  PipelineEstimateResponse,
   DetectedFace,
   FaceRecognitionResult,
   FaceSwapResult,

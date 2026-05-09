@@ -1,11 +1,12 @@
 import logging
 from datetime import datetime
-from fastapi import APIRouter, Depends
+from uuid import UUID
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from services.common.database import DbSession
 from services.common.rabbitmq import RabbitMQPublisher, RabbitMQConnection
 from services.common.rabbitmq.config import rabbitmq_config
-from services.common.redis import rate_limit
+from services.common.redis.rate_limit import rate_limit
 from services.core.app.config import config
 
 from .schemas import (
@@ -14,8 +15,10 @@ from .schemas import (
     PipelineStatusRequest,
     PipelineStatusResponse,
     PipelineStatusItem,
+    PipelineEstimateResponse,
 )
 from . import service
+from .estimation import estimate_pipeline
 
 log = logging.getLogger(__name__)
 
@@ -70,8 +73,6 @@ async def queue_pipelines(
             or len(request.jobs) == 0
             or len(request.jobs) > config.MAX_PIPELINES_PER_REQUEST
         ):
-            from fastapi import HTTPException, status
-
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid number of jobs in request: {len(request.jobs)}. "
@@ -142,4 +143,34 @@ async def get_pipeline_status(
 
     return PipelineStatusResponse(
         pipelines=[PipelineStatusItem.model_validate(p) for p in pipelines]
+    )
+
+
+@router.get(
+    "/{pipeline_id}/estimate",
+    response_model=PipelineEstimateResponse,
+    dependencies=[
+        Depends(rate_limit("estimate", config.RATE_LIMIT_STATUS_PER_MINUTE, 60))
+    ],
+)
+async def get_pipeline_estimate(
+    pipeline_id: UUID,
+    db: DbSession,
+) -> PipelineEstimateResponse:
+    pipeline = await service.get_pipeline_by_id(db, pipeline_id)
+    if pipeline is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Pipeline {pipeline_id} not found",
+        )
+
+    pending_by_type = await service.count_pending_ahead_by_type(db, pipeline)
+    estimate = await estimate_pipeline(pending_by_type)
+
+    return PipelineEstimateResponse(
+        pipeline_id=pipeline_id,
+        estimated_seconds=estimate.estimated_seconds,
+        queue_position=estimate.queue_position,
+        worker_count=estimate.worker_count,
+        workers_missing=estimate.workers_missing,
     )
