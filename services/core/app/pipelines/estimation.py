@@ -94,6 +94,8 @@ async def estimate_pipeline(pending_by_type: dict[str, int]) -> PipelineEstimate
     divisor = worker_count if worker_count > 0 else 1
     estimated_seconds = total_work_ms / 1000.0 / divisor
 
+    log.info(f"estimated time for pipeline: {estimated_seconds}s")
+
     return PipelineEstimate(
         estimated_seconds=max(estimated_seconds, 0.01),
         queue_position=queue_position,
