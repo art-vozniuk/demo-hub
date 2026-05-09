@@ -39,3 +39,11 @@ class PipelineStatusItem(BaseModel):
 
 class PipelineStatusResponse(BaseModel):
     pipelines: list[PipelineStatusItem]
+
+
+class PipelineEstimateResponse(BaseModel):
+    pipeline_id: UUID
+    estimated_seconds: float
+    queue_position: int
+    worker_count: int
+    workers_missing: bool

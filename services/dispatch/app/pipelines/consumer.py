@@ -1,4 +1,9 @@
+import asyncio
 import logging
+import os
+import socket
+import time
+import uuid
 from typing import Any, Dict
 
 from services.common.rabbitmq import (
@@ -8,17 +13,15 @@ from services.common.rabbitmq import (
 )
 from services.common.rabbitmq.config import rabbitmq_config
 from services.common.domain.enums import PipelineStatus
+from services.common.redis import close_redis_client
 from services.common.s3.client import S3Client
-from services.common.redis import (
-    WorkerHeartbeat,
-    track_pipeline_run,
-)
-from services.common.logging.config import context_trace_id, context_pipeline_id
 
 from services.dispatch.app.pipelines.service import (
     create_service,
     pipeline_templates,
 )
+from services.dispatch.app.pipelines import heartbeat
+from services.common.logging.config import context_trace_id, context_pipeline_id
 
 log = logging.getLogger(__name__)
 
@@ -26,7 +29,10 @@ rabbitmq_connection: RabbitMQConnection | None = None
 rabbitmq_publisher: RabbitMQPublisher | None = None
 rabbitmq_consumer: RabbitMQConsumer | None = None
 s3_client: S3Client | None = None
-heartbeat: WorkerHeartbeat | None = None
+
+_worker_id: str = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
+_heartbeat_task: asyncio.Task | None = None
+_heartbeat_stop: asyncio.Event | None = None
 
 
 async def _publish_pipeline_update(
@@ -56,6 +62,8 @@ async def _publish_pipeline_update(
 
 
 async def _process_pipeline(message: Dict[str, Any]) -> None:
+    t0 = time.perf_counter()
+
     trace_id = message["trace_id"]
     pipeline_id = message["pipeline_id"]
     pipeline_name = message["pipeline_name"]
@@ -80,10 +88,7 @@ async def _process_pipeline(message: Dict[str, Any]) -> None:
             s3_client=s3_client,
         )
 
-        async with track_pipeline_run(
-            pipeline_id=pipeline_id, pipeline_name=pipeline_name
-        ):
-            result = await service.run()
+        result = await service.run()
 
         await _publish_pipeline_update(
             trace_id=trace_id,
@@ -93,7 +98,12 @@ async def _process_pipeline(message: Dict[str, Any]) -> None:
             message="success",
         )
 
-        log.info(f"Pipeline completed: {pipeline_name} pipeline_id={pipeline_id}")
+        duration_ms = (time.perf_counter() - t0) * 1000.0
+        heartbeat.record_success(pipeline_name, service.last_inference_ms)
+        log.info(
+            f"Pipeline completed: {pipeline_name} pipeline_id={pipeline_id} "
+            f"total={duration_ms:.1f}ms heartbeat={service.last_inference_ms:.1f}ms"
+        )
 
     except Exception as e:
         error_message = str(e)
@@ -111,8 +121,8 @@ async def _process_pipeline(message: Dict[str, Any]) -> None:
 
 
 async def init() -> None:
-    global rabbitmq_connection, rabbitmq_publisher, rabbitmq_consumer
-    global s3_client, heartbeat
+    global rabbitmq_connection, rabbitmq_publisher, rabbitmq_consumer, s3_client
+    global _heartbeat_task, _heartbeat_stop
 
     log.info("Initializing dispatch pipeline router")
 
@@ -137,19 +147,35 @@ async def init() -> None:
     for template in pipeline_templates.values():
         await template.service_type.initialize(s3_client)
 
-    heartbeat = WorkerHeartbeat(pool="dispatch")
-    await heartbeat.start()
+    log.info(f"Starting dispatch heartbeat loop, worker_id={_worker_id}")
+    _heartbeat_stop = asyncio.Event()
+    try:
+        await heartbeat.publish_once(_worker_id)
+    except Exception as e:
+        log.warning(f"Initial heartbeat publish failed: {e}")
+    _heartbeat_task = asyncio.create_task(
+        heartbeat.run_loop(_worker_id, _heartbeat_stop)
+    )
 
     log.info("Dispatch pipeline router initialized successfully")
 
 
 async def shutdown() -> None:
-    global rabbitmq_connection, rabbitmq_consumer, heartbeat
+    global rabbitmq_connection, rabbitmq_consumer, _heartbeat_task, _heartbeat_stop
 
     log.info("Shutting down dispatch pipeline router")
 
-    if heartbeat:
-        await heartbeat.stop()
+    if _heartbeat_stop is not None:
+        _heartbeat_stop.set()
+    if _heartbeat_task:
+        try:
+            await _heartbeat_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        _heartbeat_task = None
+    _heartbeat_stop = None
+
+    await close_redis_client()
 
     if rabbitmq_consumer:
         await rabbitmq_consumer.stop()

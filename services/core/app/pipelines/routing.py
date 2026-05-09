@@ -1,50 +1,28 @@
-"""Maps a pipeline_name to the queue/worker pool that drains it.
+"""Maps a pipeline_name to the RabbitMQ routing key its messages should
+publish to. Core is otherwise oblivious to what each worker actually
+does — only the routing key here decides which pool drains the message.
 
-Core itself stays oblivious to what each worker actually does — it only
-needs to know which routing key to publish under and which `pool` label
-the workers in question heartbeat under (so ETA math can use the right
-parallelism + duration history).
+ETA estimation is intentionally pipeline-name-agnostic (see
+services/core/app/pipelines/estimation.py): it just sums per-worker
+heartbeat durations grouped by pipeline_name across the whole platform.
+That keeps this module a pure routing table.
 """
-
-from dataclasses import dataclass
 
 from services.common.rabbitmq.config import rabbitmq_config
 
 
-@dataclass(frozen=True)
-class PipelineRoute:
-    routing_key: str
-    pool: str
-    fallback_duration_ms: float
-
-
-# `fallback_duration_ms` is what we report as "average duration" before any
-# real samples have been recorded — picked from rough empirical wall-time
-# of one inference end-to-end, used so that first-ever ETAs don't read 0s.
-_ROUTES: dict[str, PipelineRoute] = {
-    "face_recognition": PipelineRoute(
-        routing_key=rabbitmq_config.routing_submit,
-        pool="compute",
-        fallback_duration_ms=2_000,
-    ),
-    "face_swap": PipelineRoute(
-        routing_key=rabbitmq_config.routing_submit,
-        pool="compute",
-        fallback_duration_ms=8_000,
-    ),
-    "generative_editing": PipelineRoute(
-        routing_key=rabbitmq_config.routing_dispatch,
-        pool="dispatch",
-        fallback_duration_ms=25_000,
-    ),
+_ROUTES: dict[str, str] = {
+    "face_recognition": rabbitmq_config.routing_submit,
+    "face_swap": rabbitmq_config.routing_submit,
+    "generative_editing": rabbitmq_config.routing_dispatch,
 }
 
 
-def get_route(pipeline_name: str) -> PipelineRoute:
-    route = _ROUTES.get(pipeline_name)
-    if route is None:
+def get_routing_key(pipeline_name: str) -> str:
+    key = _ROUTES.get(pipeline_name)
+    if key is None:
         raise ValueError(f"Unknown pipeline_name: {pipeline_name!r}")
-    return route
+    return key
 
 
 def known_pipeline_names() -> list[str]:

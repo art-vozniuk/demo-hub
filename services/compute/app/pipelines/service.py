@@ -26,6 +26,7 @@ class Service:
         self.id = id
         self.s3 = s3
         self.pipeline_input = pipeline_input
+        self.last_inference_ms: float = 0.0
 
     @staticmethod
     async def initialize(s3: S3Client):
@@ -115,9 +116,8 @@ class Service:
 
             t1 = time.perf_counter()
             results = await asyncio.to_thread(lambda: pipeline.run())
-            log.info(
-                f"Service.run pipeline.run took {(time.perf_counter() - t1) * 1000:.1f}ms"
-            )
+            self.last_inference_ms = (time.perf_counter() - t1) * 1000
+            log.info(f"Service.run pipeline.run took {self.last_inference_ms:.1f}ms")
 
         t1 = time.perf_counter()
         output = await self.post_pipeline(results)
@@ -200,26 +200,29 @@ class PipelineType:
         service_type: type[Service],
         pipeline_type: type[Pipeline],
         input_type: type[PipelineInput],
+        estimated_time_ms: int,
     ):
         self.service_type = service_type
         self.pipeline_type = pipeline_type
         self.input_type = input_type
+        # Best-known wall-clock duration of one run on this worker, in ms.
+        # Mutated in place after each successful execution so the heartbeat
+        # picks up the latest value.
+        self.estimated_time_ms = estimated_time_ms
 
-    service_type: type[Service]
-    pipeline_type: type[Pipeline]
-    input_type: type[PipelineInput]
 
-
-pipeline_templates = {
+pipeline_templates: dict[str, PipelineType] = {
     "face_recognition": PipelineType(
         service_type=FaceRecognitionService,
         pipeline_type=FaceRecognitionPipeline,
         input_type=FaceRecognitionPipelineInput,
+        estimated_time_ms=1000,
     ),
     "face_swap": PipelineType(
         service_type=FaceSwapService,
         pipeline_type=FaceSwapPipeline,
         input_type=FaceSwapPipelineInput,
+        estimated_time_ms=10000,
     ),
 }
 

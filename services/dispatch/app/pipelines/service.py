@@ -7,6 +7,7 @@ max_concurrent_tasks semaphore.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from pydantic_core._pydantic_core import ValidationError
@@ -29,6 +30,7 @@ class Service:
         self.id = id
         self.s3 = s3
         self.pipeline_input = pipeline_input
+        self.last_inference_ms: float = 0.0
 
     @staticmethod
     async def initialize(s3: S3Client) -> None:
@@ -39,7 +41,10 @@ class Service:
 
     async def run(self) -> dict[str, Any]:
         pipeline = await self.prepare_pipeline()
-        return await pipeline.run()
+        t0 = time.perf_counter()
+        result = await pipeline.run()
+        self.last_inference_ms = (time.perf_counter() - t0) * 1000.0
+        return result
 
 
 class GenerativeEditingService(Service):
@@ -57,15 +62,20 @@ class PipelineType:
         self,
         service_type: type[Service],
         input_type: type[PipelineInput],
+        estimated_time_ms: int,
     ) -> None:
         self.service_type = service_type
         self.input_type = input_type
+        # Mutated in place by heartbeat.record_success after each run, so
+        # the next heartbeat tick advertises the latest wall time.
+        self.estimated_time_ms = estimated_time_ms
 
 
 pipeline_templates: dict[str, PipelineType] = {
     "generative_editing": PipelineType(
         service_type=GenerativeEditingService,
         input_type=GenerativeEditingPipelineInput,
+        estimated_time_ms=25_000,
     ),
 }
 

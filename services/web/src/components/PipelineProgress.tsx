@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Loader2, Check, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PipelineStatusItem } from "@/api";
@@ -17,17 +18,35 @@ const DEFAULT_STAGES: PipelineStage[] = [
 
 interface PipelineProgressProps {
   status: PipelineStatusItem | null;
+  // ISO 8601 timestamp captured once at queue time from /pipelines/{id}/estimate.
+  // Null when the estimate has not arrived yet — the UI then shows just the
+  // current status without a countdown.
+  estimatedFinishAt?: string | null;
+  workersMissing?: boolean;
   stages?: PipelineStage[];
   className?: string;
 }
 
-function activeStageIndex(status: PipelineStatusItem | null): number {
+function progressFraction(
+  remaining: number | null,
+  total: number | null
+): number {
+  if (remaining == null || total == null || total <= 0) return 0;
+  const fraction = 1 - remaining / total;
+  if (!isFinite(fraction)) return 0;
+  return Math.max(0, Math.min(1, fraction));
+}
+
+function activeStageIndex(
+  status: PipelineStatusItem | null,
+  remaining: number | null
+): number {
   if (!status) return 0;
   if (status.status === "PENDING") return 0;
   if (status.status === "RUNNING") {
-    if (status.eta_seconds == null) return 1;
-    if (status.eta_seconds > 8) return 1;
-    if (status.eta_seconds > 2) return 2;
+    if (remaining == null) return 1;
+    if (remaining > 8) return 1;
+    if (remaining > 2) return 2;
     return 3;
   }
   if (status.status === "COMPLETED") return 4;
@@ -35,23 +54,48 @@ function activeStageIndex(status: PipelineStatusItem | null): number {
   return 0;
 }
 
-function formatEta(seconds: number | null | undefined): string | null {
-  if (seconds == null || !isFinite(seconds)) return null;
-  if (seconds <= 0) return "almost done";
-  if (seconds < 60) return `~${Math.round(seconds)}s`;
-  const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds - m * 60);
-  return s > 0 ? `~${m}m ${s}s` : `~${m}m`;
+function formatRemaining(seconds: number): string {
+  if (seconds <= 1) return "<1s";
+  if (seconds >= 60) {
+    const m = Math.floor(seconds / 60);
+    const s = Math.round(seconds % 60);
+    return `${m}m ${s}s`;
+  }
+  return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
 }
 
 const PipelineProgress = ({
   status,
+  estimatedFinishAt,
+  workersMissing,
   stages = DEFAULT_STAGES,
   className,
 }: PipelineProgressProps) => {
+  const [now, setNow] = useState(() => Date.now());
+
+  // 250ms ticker drives the countdown. Stops once the pipeline reaches a
+  // terminal state.
+  useEffect(() => {
+    if (!estimatedFinishAt) return;
+    if (
+      status?.status === "COMPLETED" ||
+      status?.status === "FAILED"
+    )
+      return;
+    const id = window.setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [estimatedFinishAt, status?.status]);
+
+  const target = estimatedFinishAt
+    ? new Date(estimatedFinishAt).getTime()
+    : null;
+  const remainingSeconds =
+    target != null && !Number.isNaN(target)
+      ? Math.max(0, (target - now) / 1000)
+      : null;
+
   const failed = status?.status === "FAILED";
-  const active = activeStageIndex(status);
-  const eta = formatEta(status?.eta_seconds);
+  const active = activeStageIndex(status, remainingSeconds);
 
   return (
     <div className={cn("space-y-3", className)}>
@@ -75,8 +119,7 @@ const PipelineProgress = ({
                   "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border",
                   isDone &&
                     "border-primary bg-primary text-primary-foreground",
-                  isActive &&
-                    "border-primary text-primary",
+                  isActive && "border-primary text-primary",
                   isPending && "border-border",
                   failed && idx === 0 && "border-destructive text-destructive"
                 )}
@@ -90,20 +133,50 @@ const PipelineProgress = ({
                 ) : null}
               </span>
               <span className="flex-1">{stage.label}</span>
-              {isActive && eta && (
+              {isActive && remainingSeconds != null && (
                 <span className="text-xs text-muted-foreground tabular-nums">
-                  {eta}
+                  ~{formatRemaining(remainingSeconds)}
                 </span>
               )}
             </li>
           );
         })}
       </ol>
+
+      {workersMissing && !failed && (
+        <p className="text-xs text-muted-foreground">
+          GPU worker is warming up — first request may take longer than the estimate.
+        </p>
+      )}
+
       {failed && status?.message && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
           {status.message}
         </div>
       )}
+
+      {/* Overall progress bar — proxy via the elapsed/total ratio when an
+          estimate is present, otherwise a slim indeterminate shimmer. */}
+      <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
+        {remainingSeconds != null && target != null ? (
+          <div
+            className="h-full bg-primary transition-[width] duration-300 ease-out"
+            style={{
+              width: `${
+                progressFraction(
+                  remainingSeconds,
+                  Math.max(
+                    0.1,
+                    (target - (now - remainingSeconds * 1000)) / 1000
+                  )
+                ) * 100
+              }%`,
+            }}
+          />
+        ) : !failed ? (
+          <div className="h-full w-1/3 bg-primary/60 animate-pulse" />
+        ) : null}
+      </div>
     </div>
   );
 };

@@ -14,8 +14,20 @@ interface GenerationCardProps {
   errorMessage?: string | null;
   templateName?: string | null;
   pipelineId?: string | null;
+  estimatedFinishAt?: string | null;
+  workersMissing?: boolean;
   onAnimationComplete?: () => void;
 }
+
+const formatRemaining = (seconds: number): string => {
+  if (seconds <= 1) return "<1s";
+  if (seconds >= 60) {
+    const m = Math.floor(seconds / 60);
+    const s = Math.round(seconds % 60);
+    return `${m}m ${s}s`;
+  }
+  return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+};
 
 const GenerationCard = ({
   imageUrl,
@@ -24,6 +36,8 @@ const GenerationCard = ({
   errorMessage,
   templateName,
   pipelineId,
+  estimatedFinishAt,
+  workersMissing = false,
   onAnimationComplete,
 }: GenerationCardProps) => {
   const [blurAmount, setBlurAmount] = useState(0);
@@ -31,6 +45,22 @@ const GenerationCard = ({
   const [isImageLoaded, setIsImageLoaded] = useState(false);
   const [showSpinner, setShowSpinner] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!isProcessing || !estimatedFinishAt) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [isProcessing, estimatedFinishAt]);
+
+  const remainingSeconds = (() => {
+    if (!estimatedFinishAt) return null;
+    const target = new Date(estimatedFinishAt).getTime();
+    if (Number.isNaN(target)) return null;
+    const diff = (target - now) / 1000;
+    return diff > 0 ? diff : 0.01;
+  })();
 
   useEffect(() => {
     if (isProcessing) {
@@ -136,8 +166,20 @@ const GenerationCard = ({
             />
         
             {showSpinner && (
-              <div className="absolute inset-0 flex items-center justify-center bg-background/10 backdrop-blur-sm">
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/10 backdrop-blur-sm gap-2">
                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                {isProcessing && workersMissing ? (
+                  <p className="text-white text-xs font-medium px-2 py-0.5 rounded bg-destructive/70 text-center max-w-[80%]">
+                    No workers available for this pipeline
+                  </p>
+                ) : (
+                  isProcessing &&
+                  remainingSeconds !== null && (
+                    <p className="text-white text-xs font-medium px-2 py-0.5 rounded bg-black/40">
+                      ~{formatRemaining(remainingSeconds)} left
+                    </p>
+                  )
+                )}
               </div>
             )}
 

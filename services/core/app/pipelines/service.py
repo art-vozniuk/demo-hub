@@ -1,13 +1,18 @@
 import logging
+from datetime import timedelta
 from uuid import UUID
-
-from sqlalchemy import select, and_
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.domain.enums import PipelineStatus
 from .models import Pipeline
 
 log = logging.getLogger(__name__)
+
+# PENDING rows older than this relative to the requested pipeline are
+# treated as orphaned (e.g. left behind by crashed workers) and excluded
+# from queue-position counting.
+STALE_PENDING_AGE_SECONDS = 300
 
 
 async def create_pipeline(
@@ -40,6 +45,44 @@ async def get_pipelines_by_ids(
     return list(result.scalars().all())
 
 
+async def get_pipeline_by_id(
+    db: AsyncSession,
+    pipeline_id: UUID,
+) -> Pipeline | None:
+    result = await db.execute(select(Pipeline).where(Pipeline.id == pipeline_id))
+    return result.scalar_one_or_none()
+
+
+async def count_pending_ahead_by_type(
+    db: AsyncSession,
+    pipeline: Pipeline,
+) -> dict[str, int]:
+    # Count in-flight pipelines (PENDING or RUNNING) created at-or-before
+    # the given pipeline, grouped by pipeline_name. RUNNING is included
+    # because a worker grabs a message and commits PENDING→RUNNING within
+    # tens of ms — the frontend's /estimate call routinely arrives after
+    # that flip. Restricted to a bounded recent window so orphaned rows
+    # from crashed workers don't inflate the queue. The pipeline itself
+    # is always included while not in a terminal state.
+    cutoff = pipeline.created_at - timedelta(seconds=STALE_PENDING_AGE_SECONDS)
+    stmt = (
+        select(Pipeline.pipeline_name, func.count(Pipeline.id))
+        .where(Pipeline.status.in_([PipelineStatus.PENDING, PipelineStatus.RUNNING]))
+        .where(
+            or_(
+                and_(
+                    Pipeline.created_at <= pipeline.created_at,
+                    Pipeline.created_at >= cutoff,
+                ),
+                Pipeline.id == pipeline.id,
+            )
+        )
+        .group_by(Pipeline.pipeline_name)
+    )
+    result = await db.execute(stmt)
+    return {name: int(count) for name, count in result.all()}
+
+
 async def update_pipeline_status(
     db: AsyncSession,
     pipeline_id: UUID,
@@ -68,30 +111,3 @@ async def update_pipeline_status(
     log.info(f"Pipeline status updated to {status}")
 
     return pipeline
-
-
-async def queue_position_for_pipeline(
-    db: AsyncSession,
-    pipeline: Pipeline,
-    pipeline_names: list[str],
-) -> int:
-    """Count PENDING pipelines in the same pool that were enqueued earlier.
-
-    Pool membership is approximated via the list of pipeline_names that
-    share the route (caller resolves it). Position is 0-based: the
-    pipeline at the head of the queue gets 0.
-    """
-
-    if pipeline.status != PipelineStatus.PENDING:
-        return 0
-
-    stmt = select(Pipeline).where(
-        and_(
-            Pipeline.status == PipelineStatus.PENDING,
-            Pipeline.pipeline_name.in_(pipeline_names),
-            Pipeline.created_at < pipeline.created_at,
-        )
-    )
-    result = await db.execute(stmt)
-    rows = result.scalars().all()
-    return len(rows)

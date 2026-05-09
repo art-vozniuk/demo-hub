@@ -38,6 +38,10 @@ const GenerativeEditingGenerate = () => {
   const [pipelineId, setPipelineId] = useState<string | null>(null);
   const [pipelineStatus, setPipelineStatus] =
     useState<PipelineStatusItem | null>(null);
+  const [estimatedFinishAt, setEstimatedFinishAt] = useState<string | null>(
+    null
+  );
+  const [workersMissing, setWorkersMissing] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -153,6 +157,8 @@ const GenerativeEditingGenerate = () => {
     setIsProcessing(true);
     setErrorMessage(null);
     setPipelineStatus(null);
+    setEstimatedFinishAt(null);
+    setWorkersMissing(false);
 
     try {
       const traceId = uuidv4();
@@ -179,6 +185,21 @@ const GenerativeEditingGenerate = () => {
       });
 
       setPipelineId(newPipelineId);
+
+      // Fire one estimate request as soon as we have an id; capture the
+      // result as a fixed finish-time the UI can count down against
+      // (mirrors FaceFusionGenerate's approach so both demos use the
+      // same heartbeat-driven ETA infrastructure).
+      pipelinesApi
+        .getEstimate(newPipelineId)
+        .then((res) => {
+          if (!isMountedRef.current) return;
+          setEstimatedFinishAt(
+            new Date(Date.now() + res.estimated_seconds * 1000).toISOString()
+          );
+          setWorkersMissing(res.workers_missing);
+        })
+        .catch((e) => console.warn("estimate fetch failed:", e));
 
       await pollOnce(newPipelineId);
       pollIntervalRef.current = window.setInterval(
@@ -336,7 +357,11 @@ const GenerativeEditingGenerate = () => {
 
           {pipelineId && (
             <div className="rounded-lg border border-border bg-card p-4">
-              <PipelineProgress status={pipelineStatus} />
+              <PipelineProgress
+                status={pipelineStatus}
+                estimatedFinishAt={estimatedFinishAt}
+                workersMissing={workersMissing}
+              />
             </div>
           )}
 

@@ -1,11 +1,12 @@
 import logging
 from datetime import datetime
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from services.common.database import DbSession
 from services.common.rabbitmq import RabbitMQPublisher, RabbitMQConnection
 from services.common.rabbitmq.config import rabbitmq_config
-from services.common.redis import rate_limit
+from services.common.redis.rate_limit import rate_limit
 from services.core.app.config import config
 
 from .schemas import (
@@ -14,10 +15,11 @@ from .schemas import (
     PipelineStatusRequest,
     PipelineStatusResponse,
     PipelineStatusItem,
+    PipelineEstimateResponse,
 )
 from . import service
-from .routing import get_route, known_pipeline_names
-from .eta import estimate_seconds
+from .estimation import estimate_pipeline
+from .routing import get_routing_key, known_pipeline_names
 
 log = logging.getLogger(__name__)
 
@@ -86,9 +88,8 @@ async def queue_pipelines(
                 )
 
         connection = await get_connection()
-        # `queue_length` here is the legacy compute-queue gauge — kept for
-        # backwards compatibility with the existing FaceSwap UI. Per-pipeline
-        # ETAs (the actual UX signal) come from /status.
+        # Legacy gauge — only counts the compute pool. Per-pipeline ETAs
+        # via /pipelines/{id}/estimate are the actual UX signal.
         queue_length = await connection.get_queue_length(rabbitmq_config.queue_main)
 
         pipeline_ids = []
@@ -97,13 +98,11 @@ async def queue_pipelines(
         for job in request.jobs:
             pipeline_id = job.pipeline_id
             pipeline_name = job.pipeline_name
+            routing_key = get_routing_key(pipeline_name)
 
             context_pipeline_id.set(str(pipeline_id))
-            route = get_route(pipeline_name)
 
-            log.info(
-                f"Creating pipeline: {pipeline_name} -> routing_key={route.routing_key}"
-            )
+            log.info(f"Creating pipeline: {pipeline_name} -> {routing_key}")
 
             await service.create_pipeline(
                 db=db,
@@ -121,7 +120,7 @@ async def queue_pipelines(
             }
 
             await publisher.publish(
-                routing_key=route.routing_key,
+                routing_key=routing_key,
                 message=message,
                 trace_id=str(trace_id),
                 pipeline_id=str(pipeline_id),
@@ -140,13 +139,6 @@ async def queue_pipelines(
         )
 
 
-def _peers_for_pool(pipeline_name: str) -> list[str]:
-    target = get_route(pipeline_name)
-    return [
-        name for name in known_pipeline_names() if get_route(name).pool == target.pool
-    ]
-
-
 @router.post(
     "/status",
     response_model=PipelineStatusResponse,
@@ -160,37 +152,36 @@ async def get_pipeline_status(
 ) -> PipelineStatusResponse:
     pipelines = await service.get_pipelines_by_ids(db, request.pipeline_ids)
 
-    items: list[PipelineStatusItem] = []
-    for p in pipelines:
-        try:
-            position = await service.queue_position_for_pipeline(
-                db, p, _peers_for_pool(p.pipeline_name)
-            )
-        except ValueError:
-            # Pipeline name not in the routing table (legacy row); skip ETA
-            # rather than failing the whole status response.
-            position = 0
+    return PipelineStatusResponse(
+        pipelines=[PipelineStatusItem.model_validate(p) for p in pipelines]
+    )
 
-        try:
-            eta = await estimate_seconds(
-                pipeline_id=str(p.id),
-                pipeline_name=p.pipeline_name,
-                status=p.status,
-                queue_position=position,
-            )
-        except Exception as e:
-            log.warning(f"ETA estimation failed for {p.id}: {e}")
-            eta = None
 
-        items.append(
-            PipelineStatusItem(
-                id=p.id,
-                pipeline_name=p.pipeline_name,
-                status=p.status,
-                message=p.message,
-                result=p.result,
-                eta_seconds=eta,
-            )
+@router.get(
+    "/{pipeline_id}/estimate",
+    response_model=PipelineEstimateResponse,
+    dependencies=[
+        Depends(rate_limit("estimate", config.RATE_LIMIT_STATUS_PER_MINUTE, 60))
+    ],
+)
+async def get_pipeline_estimate(
+    pipeline_id: UUID,
+    db: DbSession,
+) -> PipelineEstimateResponse:
+    pipeline = await service.get_pipeline_by_id(db, pipeline_id)
+    if pipeline is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Pipeline {pipeline_id} not found",
         )
 
-    return PipelineStatusResponse(pipelines=items)
+    pending_by_type = await service.count_pending_ahead_by_type(db, pipeline)
+    estimate = await estimate_pipeline(pending_by_type)
+
+    return PipelineEstimateResponse(
+        pipeline_id=pipeline_id,
+        estimated_seconds=estimate.estimated_seconds,
+        queue_position=estimate.queue_position,
+        worker_count=estimate.worker_count,
+        workers_missing=estimate.workers_missing,
+    )
