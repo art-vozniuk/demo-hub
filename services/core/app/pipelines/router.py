@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from services.common.database import DbSession
 from services.common.rabbitmq import RabbitMQPublisher, RabbitMQConnection
@@ -16,6 +16,8 @@ from .schemas import (
     PipelineStatusItem,
 )
 from . import service
+from .routing import get_route, known_pipeline_names
+from .eta import estimate_seconds
 
 log = logging.getLogger(__name__)
 
@@ -70,15 +72,23 @@ async def queue_pipelines(
             or len(request.jobs) == 0
             or len(request.jobs) > config.MAX_PIPELINES_PER_REQUEST
         ):
-            from fastapi import HTTPException, status
-
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid number of jobs in request: {len(request.jobs)}. "
                 f"Must be between 1 and {config.MAX_PIPELINES_PER_REQUEST}.",
             )
 
+        for job in request.jobs:
+            if job.pipeline_name not in known_pipeline_names():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Unknown pipeline_name: {job.pipeline_name!r}",
+                )
+
         connection = await get_connection()
+        # `queue_length` here is the legacy compute-queue gauge — kept for
+        # backwards compatibility with the existing FaceSwap UI. Per-pipeline
+        # ETAs (the actual UX signal) come from /status.
         queue_length = await connection.get_queue_length(rabbitmq_config.queue_main)
 
         pipeline_ids = []
@@ -89,8 +99,11 @@ async def queue_pipelines(
             pipeline_name = job.pipeline_name
 
             context_pipeline_id.set(str(pipeline_id))
+            route = get_route(pipeline_name)
 
-            log.info(f"Creating pipeline: {pipeline_name}")
+            log.info(
+                f"Creating pipeline: {pipeline_name} -> routing_key={route.routing_key}"
+            )
 
             await service.create_pipeline(
                 db=db,
@@ -108,7 +121,7 @@ async def queue_pipelines(
             }
 
             await publisher.publish(
-                routing_key=rabbitmq_config.routing_submit,
+                routing_key=route.routing_key,
                 message=message,
                 trace_id=str(trace_id),
                 pipeline_id=str(pipeline_id),
@@ -127,6 +140,13 @@ async def queue_pipelines(
         )
 
 
+def _peers_for_pool(pipeline_name: str) -> list[str]:
+    target = get_route(pipeline_name)
+    return [
+        name for name in known_pipeline_names() if get_route(name).pool == target.pool
+    ]
+
+
 @router.post(
     "/status",
     response_model=PipelineStatusResponse,
@@ -140,6 +160,37 @@ async def get_pipeline_status(
 ) -> PipelineStatusResponse:
     pipelines = await service.get_pipelines_by_ids(db, request.pipeline_ids)
 
-    return PipelineStatusResponse(
-        pipelines=[PipelineStatusItem.model_validate(p) for p in pipelines]
-    )
+    items: list[PipelineStatusItem] = []
+    for p in pipelines:
+        try:
+            position = await service.queue_position_for_pipeline(
+                db, p, _peers_for_pool(p.pipeline_name)
+            )
+        except ValueError:
+            # Pipeline name not in the routing table (legacy row); skip ETA
+            # rather than failing the whole status response.
+            position = 0
+
+        try:
+            eta = await estimate_seconds(
+                pipeline_id=str(p.id),
+                pipeline_name=p.pipeline_name,
+                status=p.status,
+                queue_position=position,
+            )
+        except Exception as e:
+            log.warning(f"ETA estimation failed for {p.id}: {e}")
+            eta = None
+
+        items.append(
+            PipelineStatusItem(
+                id=p.id,
+                pipeline_name=p.pipeline_name,
+                status=p.status,
+                message=p.message,
+                result=p.result,
+                eta_seconds=eta,
+            )
+        )
+
+    return PipelineStatusResponse(pipelines=items)

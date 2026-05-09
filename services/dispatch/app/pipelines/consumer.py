@@ -9,10 +9,16 @@ from services.common.rabbitmq import (
 from services.common.rabbitmq.config import rabbitmq_config
 from services.common.domain.enums import PipelineStatus
 from services.common.s3.client import S3Client
-from services.common.redis import WorkerHeartbeat, track_pipeline_run
-
-from services.compute.app.pipelines.service import create_service, pipeline_templates
+from services.common.redis import (
+    WorkerHeartbeat,
+    track_pipeline_run,
+)
 from services.common.logging.config import context_trace_id, context_pipeline_id
+
+from services.dispatch.app.pipelines.service import (
+    create_service,
+    pipeline_templates,
+)
 
 log = logging.getLogger(__name__)
 
@@ -50,10 +56,6 @@ async def _publish_pipeline_update(
 
 
 async def _process_pipeline(message: Dict[str, Any]) -> None:
-    import time
-
-    t0 = time.perf_counter()
-
     trace_id = message["trace_id"]
     pipeline_id = message["pipeline_id"]
     pipeline_name = message["pipeline_name"]
@@ -62,7 +64,7 @@ async def _process_pipeline(message: Dict[str, Any]) -> None:
     context_trace_id.set(str(trace_id))
     context_pipeline_id.set(str(pipeline_id))
 
-    log.info(f"Processing pipeline: {pipeline_name}, trace_id: {trace_id}")
+    log.info(f"Dispatch processing pipeline: {pipeline_name}")
 
     try:
         await _publish_pipeline_update(
@@ -78,17 +80,10 @@ async def _process_pipeline(message: Dict[str, Any]) -> None:
             s3_client=s3_client,
         )
 
-        log.info(
-            f"Running pipeline: {pipeline_name}, trace_id: {trace_id}, input: {pipeline_input_dict}"
-        )
-        t1 = time.perf_counter()
         async with track_pipeline_run(
             pipeline_id=pipeline_id, pipeline_name=pipeline_name
         ):
             result = await service.run()
-        log.info(
-            f"_process_pipeline service.run took {(time.perf_counter() - t1) * 1000:.1f}ms"
-        )
 
         await _publish_pipeline_update(
             trace_id=trace_id,
@@ -98,17 +93,12 @@ async def _process_pipeline(message: Dict[str, Any]) -> None:
             message="success",
         )
 
-        log.info(
-            f"_process_pipeline: TOTAL took {(time.perf_counter() - t0) * 1000:.1f}ms"
-        )
-        log.info(
-            f"Pipeline completed successfully: {pipeline_name}, trace_id: {trace_id} pipeline_id: {pipeline_id}"
-        )
+        log.info(f"Pipeline completed: {pipeline_name} pipeline_id={pipeline_id}")
 
     except Exception as e:
         error_message = str(e)
         log.error(
-            f"Pipeline failed: {error_message}, trace_id: {trace_id} pipeline_id: {pipeline_id}",
+            f"Pipeline failed: {error_message} pipeline_id={pipeline_id}",
             exc_info=True,
         )
 
@@ -124,17 +114,22 @@ async def init() -> None:
     global rabbitmq_connection, rabbitmq_publisher, rabbitmq_consumer
     global s3_client, heartbeat
 
-    log.info("Initializing pipeline router")
+    log.info("Initializing dispatch pipeline router")
 
     rabbitmq_connection = RabbitMQConnection(rabbitmq_config)
     await rabbitmq_connection.connect()
     await rabbitmq_connection.declare_topology()
 
     rabbitmq_publisher = RabbitMQPublisher(rabbitmq_connection, rabbitmq_config)
-    rabbitmq_consumer = RabbitMQConsumer(rabbitmq_connection, rabbitmq_config)
+    # Dispatch is IO-bound; allow more concurrent in-flight Modal calls than
+    # compute does. Modal queues server-side, so there's no benefit in
+    # capping client-side beyond a sane upper bound.
+    rabbitmq_consumer = RabbitMQConsumer(
+        rabbitmq_connection, rabbitmq_config, max_concurrent_tasks=50
+    )
 
     await rabbitmq_consumer.consume(
-        queue_name=rabbitmq_config.queue_main,
+        queue_name=rabbitmq_config.queue_dispatch,
         callback=_process_pipeline,
     )
 
@@ -142,16 +137,16 @@ async def init() -> None:
     for template in pipeline_templates.values():
         await template.service_type.initialize(s3_client)
 
-    heartbeat = WorkerHeartbeat(pool="compute")
+    heartbeat = WorkerHeartbeat(pool="dispatch")
     await heartbeat.start()
 
-    log.info("Pipeline router initialized successfully")
+    log.info("Dispatch pipeline router initialized successfully")
 
 
 async def shutdown() -> None:
     global rabbitmq_connection, rabbitmq_consumer, heartbeat
 
-    log.info("Shutting down pipeline router")
+    log.info("Shutting down dispatch pipeline router")
 
     if heartbeat:
         await heartbeat.stop()
@@ -162,4 +157,4 @@ async def shutdown() -> None:
     if rabbitmq_connection:
         await rabbitmq_connection.close()
 
-    log.info("Pipeline router shutdown complete")
+    log.info("Dispatch pipeline router shutdown complete")

@@ -60,6 +60,14 @@ class RabbitMQConnection:
                 )
                 await queue_main_dlq.bind(dlx, routing_key=self.config.routing_submit)
 
+                queue_dispatch_dlq = await self.channel.declare_queue(
+                    self.config.queue_dispatch_dlq,
+                    durable=True,
+                )
+                await queue_dispatch_dlq.bind(
+                    dlx, routing_key=self.config.routing_dispatch
+                )
+
                 queue_update_dlq = await self.channel.declare_queue(
                     self.config.queue_update_dlq,
                     durable=True,
@@ -75,6 +83,18 @@ class RabbitMQConnection:
                     },
                 )
                 await queue_main.bind(exchange, routing_key=self.config.routing_submit)
+
+                queue_dispatch = await self.channel.declare_queue(
+                    self.config.queue_dispatch,
+                    durable=True,
+                    arguments={
+                        "x-dead-letter-exchange": self.config.dlx,
+                        "x-dead-letter-routing-key": self.config.routing_dispatch,
+                    },
+                )
+                await queue_dispatch.bind(
+                    exchange, routing_key=self.config.routing_dispatch
+                )
 
                 queue_update = await self.channel.declare_queue(
                     self.config.queue_update,

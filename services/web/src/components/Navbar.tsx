@@ -11,6 +11,7 @@ const Navbar = () => {
   const navLinks = [
     { to: "/", label: "Home" },
     { to: "/face-fusion", label: "Face Swap" },
+    { to: "/generative-editing", label: "Generative Editing" },
     { to: "/renderer", label: "Gaussian Splatting" },
   ];
 
@@ -27,6 +28,8 @@ const Navbar = () => {
       track({ name: 'nav_home_clicked', params: {} });
     } else if (to === "/face-fusion") {
       track({ name: 'nav_facefusion_clicked', params: {} });
+    } else if (to === "/generative-editing") {
+      track({ name: 'nav_generative_clicked', params: {} });
     } else if (to === "/renderer") {
       track({ name: 'nav_renderer_clicked', params: {} });
     }

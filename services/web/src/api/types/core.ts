@@ -23,3 +23,13 @@ export interface SplatSceneRead {
   updated_at: string;
 }
 
+export interface GenerativePresetRead {
+  id: number;
+  slug: string;
+  title: string;
+  description: string | null;
+  preview_image_url: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}

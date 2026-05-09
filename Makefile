@@ -4,6 +4,7 @@ SHELL := /bin/bash
 
 COMPUTE_IMAGE_NAME := compute
 CORE_IMAGE_NAME := core
+DISPATCH_IMAGE_NAME := dispatch
 PLATFORM := linux/amd64
 REGISTRY := ghcr.io
 
@@ -12,6 +13,8 @@ COMPUTE_IMAGE := $(REGISTRY)/$(GITHUB_USER)/$(COMPUTE_IMAGE_NAME):$(TAG)
 COMPUTE_IMAGE_LATEST := $(REGISTRY)/$(GITHUB_USER)/$(COMPUTE_IMAGE_NAME):latest
 CORE_IMAGE := $(REGISTRY)/$(GITHUB_USER)/$(CORE_IMAGE_NAME):$(TAG)
 CORE_IMAGE_LATEST := $(REGISTRY)/$(GITHUB_USER)/$(CORE_IMAGE_NAME):latest
+DISPATCH_IMAGE := $(REGISTRY)/$(GITHUB_USER)/$(DISPATCH_IMAGE_NAME):$(TAG)
+DISPATCH_IMAGE_LATEST := $(REGISTRY)/$(GITHUB_USER)/$(DISPATCH_IMAGE_NAME):latest
 IMAGE_REPO := $(REGISTRY)/$(GITHUB_USER)/$(COMPUTE_IMAGE_NAME)
 
 # Compute service
@@ -97,6 +100,28 @@ test-compute:
 	cd services/compute && uv pip install -e ".[dev]"
 	cd services/compute && PYTHONPATH="$(PWD)" uv run pytest tests/ -v
 
+test-dispatch:
+	@echo "Running dispatch tests..."
+	cd services/common && uv pip install -e .
+	cd services/dispatch && uv pip install -e ".[dev]"
+	cd services/dispatch && PYTHONPATH="$(PWD)" uv run pytest tests/ -v
+
+# Dispatch service
+build-dispatch:
+	docker build --platform $(PLATFORM) -f services/dispatch/Dockerfile -t $(DISPATCH_IMAGE) --build-arg BUILD_TAG=$(TAG) .
+
+build-and-push-dispatch: build-dispatch login-ghcr
+	docker push $(DISPATCH_IMAGE)
+	@echo "Successfully pushed: $(DISPATCH_IMAGE)"
+
+run-latest-dispatch:
+	docker pull $(DISPATCH_IMAGE_LATEST)
+	docker rm -f dispatch || true
+	docker run --name dispatch --env-file services/dispatch/.env $(DISPATCH_IMAGE_LATEST)
+
+deploy-dispatch:
+	docker compose -f docker-compose.local.yml up --build dispatch --detach
+
 test-e2e:
 	@echo "Running E2E test..."
 	@if [ ! -f services/common/tests/.env ]; then echo "Error: services/common/tests/.env not found"; exit 1; fi
@@ -105,19 +130,19 @@ test-e2e:
 	set -a && source .env && set +a && \
 	uv run python e2e_recast_pipeline_test.py $(if $(COUNT),--count $(COUNT),)
 
-test: test-core test-compute
+test: test-core test-compute test-dispatch
 	@echo "All tests passed!"
 
 lint:
 	@echo "Running ruff checks..."
-	ruff check services/core services/compute services/common --exclude services/external
-	ruff format --check services/core services/compute services/common --exclude services/external
+	ruff check services/core services/compute services/dispatch services/common --exclude services/external
+	ruff format --check services/core services/compute services/dispatch services/common --exclude services/external
 	@echo "Linting passed!"
 
 lint-fix:
 	@echo "Auto-fixing ruff issues..."
-	ruff check --fix services/core services/compute services/common --exclude services/external
-	ruff format services/core services/compute services/common --exclude services/external
+	ruff check --fix services/core services/compute services/dispatch services/common --exclude services/external
+	ruff format services/core services/compute services/dispatch services/common --exclude services/external
 	@echo "Linting fixes applied!"
 
 run-dev:

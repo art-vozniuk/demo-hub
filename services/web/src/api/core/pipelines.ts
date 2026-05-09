@@ -33,13 +33,23 @@ export interface FaceSwapResult {
   result_url: string;
 }
 
-export type PipelineResult = FaceRecognitionResult | FaceSwapResult | Record<string, any>;
+export interface GenerativeEditingResult {
+  result_url: string;
+}
+
+export type PipelineResult =
+  | FaceRecognitionResult
+  | FaceSwapResult
+  | GenerativeEditingResult
+  | Record<string, any>;
 
 export interface PipelineStatusItem {
   id: string;
+  pipeline_name: string;
   status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
   message?: string | null;
   result?: PipelineResult | null;
+  eta_seconds?: number | null;
 }
 
 export interface PipelineStatusResponse {

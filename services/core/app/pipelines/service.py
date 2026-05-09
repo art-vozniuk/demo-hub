@@ -1,6 +1,7 @@
 import logging
 from uuid import UUID
-from sqlalchemy import select
+
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.domain.enums import PipelineStatus
@@ -67,3 +68,30 @@ async def update_pipeline_status(
     log.info(f"Pipeline status updated to {status}")
 
     return pipeline
+
+
+async def queue_position_for_pipeline(
+    db: AsyncSession,
+    pipeline: Pipeline,
+    pipeline_names: list[str],
+) -> int:
+    """Count PENDING pipelines in the same pool that were enqueued earlier.
+
+    Pool membership is approximated via the list of pipeline_names that
+    share the route (caller resolves it). Position is 0-based: the
+    pipeline at the head of the queue gets 0.
+    """
+
+    if pipeline.status != PipelineStatus.PENDING:
+        return 0
+
+    stmt = select(Pipeline).where(
+        and_(
+            Pipeline.status == PipelineStatus.PENDING,
+            Pipeline.pipeline_name.in_(pipeline_names),
+            Pipeline.created_at < pipeline.created_at,
+        )
+    )
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+    return len(rows)

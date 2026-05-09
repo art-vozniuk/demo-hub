@@ -1,0 +1,92 @@
+"""Pipeline registry mirror of services/compute/app/pipelines/service.py
+— same factory shape, but async and without an inference lock. IO-bound
+work parallelises freely; the only ceiling is the consumer's
+max_concurrent_tasks semaphore.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from pydantic_core._pydantic_core import ValidationError
+
+from services.common.s3.client import S3Client
+
+from .pipelines import AsyncPipeline, GenerativeEditingPipeline
+from .schemas import GenerativeEditingPipelineInput, PipelineInput
+
+log = logging.getLogger(__name__)
+
+
+class Service:
+    def __init__(
+        self,
+        id: str,
+        s3: S3Client,
+        pipeline_input: PipelineInput,
+    ) -> None:
+        self.id = id
+        self.s3 = s3
+        self.pipeline_input = pipeline_input
+
+    @staticmethod
+    async def initialize(s3: S3Client) -> None:
+        return None
+
+    async def prepare_pipeline(self) -> AsyncPipeline:
+        raise NotImplementedError
+
+    async def run(self) -> dict[str, Any]:
+        pipeline = await self.prepare_pipeline()
+        return await pipeline.run()
+
+
+class GenerativeEditingService(Service):
+    async def prepare_pipeline(self) -> AsyncPipeline:
+        if not isinstance(self.pipeline_input, GenerativeEditingPipelineInput):
+            raise ValueError("Invalid pipeline input for GenerativeEditingService")
+        return GenerativeEditingPipeline(
+            s3=self.s3,
+            pipeline_input=self.pipeline_input,
+        )
+
+
+class PipelineType:
+    def __init__(
+        self,
+        service_type: type[Service],
+        input_type: type[PipelineInput],
+    ) -> None:
+        self.service_type = service_type
+        self.input_type = input_type
+
+
+pipeline_templates: dict[str, PipelineType] = {
+    "generative_editing": PipelineType(
+        service_type=GenerativeEditingService,
+        input_type=GenerativeEditingPipelineInput,
+    ),
+}
+
+
+def create_service(
+    pipeline_id: str,
+    pipeline_name: str,
+    pipeline_input: dict,
+    s3_client: S3Client,
+) -> Service:
+    template = pipeline_templates.get(pipeline_name)
+    if not template:
+        raise ValueError(f"Invalid pipeline type: {pipeline_name}")
+
+    try:
+        validated_input = template.input_type.model_validate(pipeline_input)
+    except ValidationError as e:
+        raise ValueError(f"Invalid input for {pipeline_name}: {e}")
+
+    return template.service_type(
+        id=pipeline_id,
+        s3=s3_client,
+        pipeline_input=validated_input,
+    )
