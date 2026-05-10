@@ -14,8 +14,16 @@ Same code path runs natively on macOS via Dawn → Metal.
 
 <img width="1135" height="717" alt="image" src="https://github.com/user-attachments/assets/18502ab7-9bba-4109-8a3e-29f1b775ff26" />
 
-
 Source: [renderer](https://github.com/art-vozniuk/renderer)
+
+### Generative Editing
+
+Image-conditioned generative editing on FLUX.2 klein. Pick a cinematic
+preset, upload a photo, get the same subject in the chosen style. The
+inference itself runs on a serverless Modal A10G; the platform side is
+an async dispatch worker draining a dedicated RabbitMQ queue.
+
+<img width="1048" height="719" alt="image" src="https://github.com/user-attachments/assets/eba782f1-dedb-4800-9a0f-c55825c3b77e" />
 
 ### Face Swap
 
@@ -24,14 +32,6 @@ Upload a portrait and apply it to various style templates using a GAN-based imag
 <img width="891" height="796" alt="image" src="https://github.com/user-attachments/assets/dcf22caa-6754-4239-85f5-28a5c8fbf4af" />
 <img width="1009" height="502" alt="image" src="https://github.com/user-attachments/assets/44e47bcb-6e89-44d6-b0d4-21a0ebffb1e8" />
 <img width="1019" height="510" alt="image" src="https://github.com/user-attachments/assets/9a445ec5-3ab7-42be-a36f-67fac2f8f058" />
-
-### Generative Editing
-
-Image-conditioned generative editing on FLUX.2 klein. Pick a cinematic
-preset, upload a photo, get the same subject in the chosen style. The
-inference itself runs on a serverless Modal A10G; the platform side is
-an async dispatch worker draining a dedicated RabbitMQ queue, with ETA
-backed by Redis worker heartbeats unified across both demos.
 
 ## Tech Stack
 
