@@ -64,9 +64,18 @@ export interface PipelineEstimateResponse {
 
 export const pipelinesApi = {
   queuePipelines: async (
-    request: QueuePipelinesRequest
+    request: QueuePipelinesRequest,
+    turnstileToken?: string,
   ): Promise<QueuePipelinesResponse> => {
-    return apiClient.post<QueuePipelinesResponse>("/pipelines/queue", request);
+    const headers: Record<string, string> = {};
+    if (turnstileToken) {
+      headers["X-Turnstile-Token"] = turnstileToken;
+    }
+    return apiClient.post<QueuePipelinesResponse>(
+      "/pipelines/queue",
+      request,
+      headers,
+    );
   },
 
   getStatus: async (pipelineIds: string[]): Promise<PipelineStatusResponse> => {

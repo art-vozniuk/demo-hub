@@ -11,6 +11,8 @@ import type { AnalyticsEvent } from "@/types/analytics";
 import "./masonry.css";
 import {Tooltip, TooltipContent, TooltipTrigger} from "@/components/ui/tooltip.tsx";
 import { ExpandableDescription } from "@/components/ExpandableDescription";
+import CostBadge from "@/components/CostBadge";
+import { useWallet } from "@/contexts/WalletContext";
 
 const MAX_SELECTION = 3;
 const MIN_TEMPLATES_TO_SHOW = 6;
@@ -18,6 +20,8 @@ const MIN_TEMPLATES_TO_SHOW = 6;
 const FaceFusion = () => {
   const navigate = useNavigate();
   const { track } = useAnalytics();
+  const { getCost } = useWallet();
+  const faceSwapCost = getCost("face_swap");
   const [selectedTemplates, setSelectedTemplates] = useState<RecastTemplateRead[]>([]);
   const [isSticky, setIsSticky] = useState(false);
   const counterRef = useRef<HTMLDivElement>(null);
@@ -158,8 +162,11 @@ const FaceFusion = () => {
     <main className="container mx-auto px-6 py-16 space-y-12 min-h-[calc(100vh-8rem)]">
       <section className="max-w-4xl mx-auto space-y-6 text-center animate-fade-in">
         <div className="space-y-4">
-          <h1 className="text-5xl font-bold tracking-tight sm:text-6xl">
+          <h1 className="text-5xl font-bold tracking-tight sm:text-6xl flex items-center justify-center gap-3 flex-wrap">
             <span className="text-gradient">Face Swap</span>
+            {faceSwapCost !== undefined && (
+              <CostBadge cost={faceSwapCost} size="md" />
+            )}
           </h1>
 
           <ExpandableDescription>

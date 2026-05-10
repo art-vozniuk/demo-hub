@@ -13,12 +13,18 @@ import GenerationCard from "@/components/GenerationCard";
 import {
   generativeApi,
   pipelinesApi,
+  ApiError,
   type GenerativePresetRead,
   type GenerativeEditingResult,
   type PipelineStatusItem,
 } from "@/api";
 import { uploadToS3, parseS3Url, getFileExtension } from "@/lib/s3";
 import { useAnalytics } from "@/hooks/useAnalytics";
+import { useWallet } from "@/contexts/WalletContext";
+import { useTurnstile } from "@/hooks/useTurnstile";
+import CostBadge from "@/components/CostBadge";
+import InsufficientTokensDialog from "@/components/InsufficientTokensDialog";
+import OutOfTokensDialog from "@/components/OutOfTokensDialog";
 import { toast } from "sonner";
 
 const POLL_INTERVAL_MS = 1000;
@@ -29,6 +35,16 @@ const GenerativeEditingGenerate = () => {
   const { track } = useAnalytics();
   const [searchParams] = useSearchParams();
   const presetSlug = searchParams.get("preset") ?? "";
+
+  const { balance, isAnonymous, getCost, refresh: refreshBalance } = useWallet();
+  const fluxCost = getCost("generative_editing");
+  const faceSwapCost = getCost("face_swap");
+  // Render Turnstile only for anon callers; widget unmounts once authed.
+  const turnstile = useTurnstile(isAnonymous === true);
+
+  const [insufficientDialogOpen, setInsufficientDialogOpen] = useState(false);
+  const [insufficientDialogCost, setInsufficientDialogCost] = useState(0);
+  const [outOfTokensDialogOpen, setOutOfTokensDialogOpen] = useState(false);
 
   const [preset, setPreset] = useState<GenerativePresetRead | null>(null);
   const [presetError, setPresetError] = useState<string | null>(null);
@@ -171,6 +187,9 @@ const GenerativeEditingGenerate = () => {
       if (item.status === "COMPLETED" || item.status === "FAILED") {
         setIsProcessing(false);
         clearPolling();
+        // FAILED triggers a refund server-side; pull it into the UI so
+        // users see the credit return without a page reload.
+        if (item.status === "FAILED") refreshBalance();
       }
     } catch (err) {
       if (!isMountedRef.current) return;
@@ -179,7 +198,7 @@ const GenerativeEditingGenerate = () => {
       clearPolling();
       setIsProcessing(false);
     }
-  }, []);
+  }, [refreshBalance]);
 
   const pollRefineOnce = useCallback(async (id: string) => {
     if (!isMountedRef.current) return;
@@ -192,6 +211,7 @@ const GenerativeEditingGenerate = () => {
       if (item.status === "COMPLETED" || item.status === "FAILED") {
         setIsRefining(false);
         clearRefinePolling();
+        if (item.status === "FAILED") refreshBalance();
       }
     } catch (err) {
       if (!isMountedRef.current) return;
@@ -200,10 +220,22 @@ const GenerativeEditingGenerate = () => {
       clearRefinePolling();
       setIsRefining(false);
     }
-  }, []);
+  }, [refreshBalance]);
 
   const handleGenerate = useCallback(async () => {
     if (!preset || !uploadedRef) return;
+    if (fluxCost === undefined) return;
+
+    // Pre-flight gate; server-side charge is still authoritative.
+    if (balance !== null && balance < fluxCost) {
+      if (isAnonymous) {
+        setInsufficientDialogCost(fluxCost);
+        setInsufficientDialogOpen(true);
+      } else {
+        setOutOfTokensDialogOpen(true);
+      }
+      return;
+    }
 
     setIsProcessing(true);
     setErrorMessage(null);
@@ -220,21 +252,44 @@ const GenerativeEditingGenerate = () => {
         params: { preset_slug: preset.slug, pipeline_id: newPipelineId },
       });
 
-      await pipelinesApi.queuePipelines({
-        trace_id: traceId,
-        jobs: [
-          {
-            pipeline_id: newPipelineId,
-            pipeline_name: "generative_editing",
-            input: {
-              image_bucket: uploadedRef.bucket,
-              image_key: uploadedRef.key,
-              preset_slug: preset.slug,
-            },
-          },
-        ],
-      });
+      const turnstileToken = isAnonymous
+        ? (await turnstile.getToken().catch(() => null)) ?? undefined
+        : undefined;
 
+      try {
+        await pipelinesApi.queuePipelines(
+          {
+            trace_id: traceId,
+            jobs: [
+              {
+                pipeline_id: newPipelineId,
+                pipeline_name: "generative_editing",
+                input: {
+                  image_bucket: uploadedRef.bucket,
+                  image_key: uploadedRef.key,
+                  preset_slug: preset.slug,
+                },
+              },
+            ],
+          },
+          turnstileToken,
+        );
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 402) {
+          await refreshBalance();
+          if (isAnonymous) {
+            setInsufficientDialogCost(fluxCost);
+            setInsufficientDialogOpen(true);
+          } else {
+            setOutOfTokensDialogOpen(true);
+          }
+          setIsProcessing(false);
+          return;
+        }
+        throw err;
+      }
+
+      refreshBalance();
       setPipelineId(newPipelineId);
 
       // Fire one estimate request as soon as we have an id; capture the
@@ -270,14 +325,35 @@ const GenerativeEditingGenerate = () => {
       setIsProcessing(false);
       setPipelineId(null);
     }
-  }, [preset, uploadedRef, track, pollOnce]);
+  }, [
+    preset,
+    uploadedRef,
+    track,
+    pollOnce,
+    balance,
+    isAnonymous,
+    turnstile,
+    refreshBalance,
+    fluxCost,
+  ]);
 
   const handleRefineFace = useCallback(async () => {
     if (!uploadedRef) return;
+    if (faceSwapCost === undefined) return;
     const fluxResultUrl = (
       pipelineStatus?.result as GenerativeEditingResult | undefined
     )?.result_url;
     if (!fluxResultUrl) return;
+
+    if (balance !== null && balance < faceSwapCost) {
+      if (isAnonymous) {
+        setInsufficientDialogCost(faceSwapCost);
+        setInsufficientDialogOpen(true);
+      } else {
+        setOutOfTokensDialogOpen(true);
+      }
+      return;
+    }
 
     let templateRef: { bucket: string; key: string };
     try {
@@ -305,25 +381,48 @@ const GenerativeEditingGenerate = () => {
         },
       });
 
+      const turnstileToken = isAnonymous
+        ? (await turnstile.getToken().catch(() => null)) ?? undefined
+        : undefined;
+
       // Compute auto-detects the largest face on both source and target
       // when bboxes are omitted (see FaceSwapPipelineInput) — that's the
       // only sensible default here since there's no UI for face picking.
-      await pipelinesApi.queuePipelines({
-        trace_id: traceId,
-        jobs: [
+      try {
+        await pipelinesApi.queuePipelines(
           {
-            pipeline_id: newRefineId,
-            pipeline_name: "face_swap",
-            input: {
-              source_image_bucket: uploadedRef.bucket,
-              source_image_key: uploadedRef.key,
-              template_image_bucket: templateRef.bucket,
-              template_image_key: templateRef.key,
-            },
+            trace_id: traceId,
+            jobs: [
+              {
+                pipeline_id: newRefineId,
+                pipeline_name: "face_swap",
+                input: {
+                  source_image_bucket: uploadedRef.bucket,
+                  source_image_key: uploadedRef.key,
+                  template_image_bucket: templateRef.bucket,
+                  template_image_key: templateRef.key,
+                },
+              },
+            ],
           },
-        ],
-      });
+          turnstileToken,
+        );
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 402) {
+          await refreshBalance();
+          if (isAnonymous) {
+            setInsufficientDialogCost(faceSwapCost);
+            setInsufficientDialogOpen(true);
+          } else {
+            setOutOfTokensDialogOpen(true);
+          }
+          setIsRefining(false);
+          return;
+        }
+        throw err;
+      }
 
+      refreshBalance();
       setRefinePipelineId(newRefineId);
 
       pipelinesApi
@@ -353,7 +452,19 @@ const GenerativeEditingGenerate = () => {
       setIsRefining(false);
       setRefinePipelineId(null);
     }
-  }, [uploadedRef, pipelineStatus, pipelineId, preset, track, pollRefineOnce]);
+  }, [
+    uploadedRef,
+    pipelineStatus,
+    pipelineId,
+    preset,
+    track,
+    pollRefineOnce,
+    balance,
+    isAnonymous,
+    turnstile,
+    refreshBalance,
+    faceSwapCost,
+  ]);
 
   const handleReplacePhoto = () => {
     setPhoto(null);
@@ -423,9 +534,12 @@ const GenerativeEditingGenerate = () => {
       </Button>
 
       <header className="max-w-5xl mx-auto space-y-2">
-        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
-          {preset.title}
-        </h1>
+        <div className="flex items-center gap-3 flex-wrap">
+          <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
+            {preset.title}
+          </h1>
+          {fluxCost !== undefined && <CostBadge cost={fluxCost} />}
+        </div>
         {preset.description && (
           <p className="text-muted-foreground leading-relaxed max-w-3xl">
             {preset.description}
@@ -556,6 +670,17 @@ const GenerativeEditingGenerate = () => {
           )}
         </div>
       </section>
+
+      <InsufficientTokensDialog
+        open={insufficientDialogOpen}
+        onOpenChange={setInsufficientDialogOpen}
+        cost={insufficientDialogCost}
+        balance={balance ?? 0}
+      />
+      <OutOfTokensDialog
+        open={outOfTokensDialogOpen}
+        onOpenChange={setOutOfTokensDialogOpen}
+      />
     </main>
   );
 };

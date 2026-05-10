@@ -9,12 +9,16 @@ import {
 } from "@/components/ui/tooltip";
 import { ExpandableDescription } from "@/components/ExpandableDescription";
 import PresetCard from "@/components/PresetCard";
+import CostBadge from "@/components/CostBadge";
+import { useWallet } from "@/contexts/WalletContext";
 import { generativeApi, type GenerativePresetRead } from "@/api";
 import { useAnalytics } from "@/hooks/useAnalytics";
 
 const GenerativeEditing = () => {
   const navigate = useNavigate();
   const { track } = useAnalytics();
+  const { getCost } = useWallet();
+  const fluxCost = getCost("generative_editing");
   const [presets, setPresets] = useState<GenerativePresetRead[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -50,8 +54,11 @@ const GenerativeEditing = () => {
     <main className="container mx-auto px-6 py-16 space-y-12 min-h-[calc(100vh-8rem)]">
       <section className="max-w-4xl mx-auto space-y-6 text-center animate-fade-in">
         <div className="space-y-4">
-          <h1 className="text-5xl font-bold tracking-tight sm:text-6xl">
+          <h1 className="text-5xl font-bold tracking-tight sm:text-6xl flex items-center justify-center gap-3 flex-wrap">
             <span className="text-gradient">Generative Editing</span>
+            {fluxCost !== undefined && (
+              <CostBadge cost={fluxCost} size="md" />
+            )}
           </h1>
 
           <ExpandableDescription>

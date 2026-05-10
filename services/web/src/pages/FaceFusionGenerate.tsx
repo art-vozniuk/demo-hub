@@ -3,12 +3,17 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Sparkles, ArrowLeft } from "lucide-react";
 import type { RecastTemplateRead } from "@/api";
-import { pipelinesApi, type PipelineStatusItem } from "@/api";
+import { pipelinesApi, ApiError, type PipelineStatusItem } from "@/api";
 import { uploadToS3, parseS3Url, getFileExtension } from "@/lib/s3";
 import UploadDropzone from "@/components/UploadDropzone";
 import GenerationCard from "@/components/GenerationCard";
 import FaceSelectionOverlay from "@/components/FaceSelectionOverlay";
+import CostBadge from "@/components/CostBadge";
+import InsufficientTokensDialog from "@/components/InsufficientTokensDialog";
+import OutOfTokensDialog from "@/components/OutOfTokensDialog";
 import { useFaceRecognition } from "@/hooks/useFaceRecognition";
+import { useTurnstile } from "@/hooks/useTurnstile";
+import { useWallet } from "@/contexts/WalletContext";
 import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
 import { useAnalytics } from "@/hooks/useAnalytics";
@@ -109,6 +114,12 @@ const FaceFusionGenerate = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { track } = useAnalytics();
+  const { balance, isAnonymous, getCost, refresh: refreshBalance } = useWallet();
+  const faceSwapCost = getCost("face_swap");
+  const turnstile = useTurnstile(isAnonymous === true);
+  const [insufficientDialogOpen, setInsufficientDialogOpen] = useState(false);
+  const [insufficientDialogCost, setInsufficientDialogCost] = useState(0);
+  const [outOfTokensDialogOpen, setOutOfTokensDialogOpen] = useState(false);
 
   const [initialState] = useState(() => {
     const persisted = loadPersisted();
@@ -334,6 +345,9 @@ const FaceFusionGenerate = () => {
               "Some pipelines failed. Check individual results for details."
             );
           }
+
+          // Pull post-refund balance so users see returned tokens.
+          if (hasFailures) refreshBalance();
         }
 
         if (allCompleted) {
@@ -348,17 +362,30 @@ const FaceFusionGenerate = () => {
         setIsProcessing(false);
       }
     },
-    [totalGenerationDuration, clearPolling, track]
+    [totalGenerationDuration, clearPolling, track, refreshBalance]
   );
 
   const startGeneration = useCallback(async () => {
     if (!selfieS3) return;
+    if (faceSwapCost === undefined) return;
     const sourceBbox = selfieRecognition.selectedBbox;
     if (!sourceBbox) return;
 
     if (isCustom) {
       if (!templateS3) return;
       if (!templateRecognition.selectedBbox) return;
+    }
+
+    const jobCount = isCustom ? 1 : selectedTemplates.length;
+    const totalCost = jobCount * faceSwapCost;
+    if (balance !== null && balance < totalCost) {
+      if (isAnonymous) {
+        setInsufficientDialogCost(totalCost);
+        setInsufficientDialogOpen(true);
+      } else {
+        setOutOfTokensDialogOpen(true);
+      }
+      return;
     }
 
     generationStartTime.current = Date.now();
@@ -406,7 +433,32 @@ const FaceFusionGenerate = () => {
       const ids = jobs.map((j) => j.pipeline_id);
       setPipelineIds(ids);
 
-      await pipelinesApi.queuePipelines({ trace_id: traceId, jobs });
+      const turnstileToken = isAnonymous
+        ? (await turnstile.getToken().catch(() => null)) ?? undefined
+        : undefined;
+
+      try {
+        await pipelinesApi.queuePipelines(
+          { trace_id: traceId, jobs },
+          turnstileToken,
+        );
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 402) {
+          await refreshBalance();
+          if (isAnonymous) {
+            setInsufficientDialogCost(jobs.length * faceSwapCost);
+            setInsufficientDialogOpen(true);
+          } else {
+            setOutOfTokensDialogOpen(true);
+          }
+          setIsProcessing(false);
+          setPipelineIds([]);
+          return;
+        }
+        throw err;
+      }
+
+      refreshBalance();
 
       track({
         name: "generation_started",
@@ -476,6 +528,11 @@ const FaceFusionGenerate = () => {
     pollPipelineStatuses,
     clearPolling,
     track,
+    balance,
+    isAnonymous,
+    faceSwapCost,
+    turnstile,
+    refreshBalance,
   ]);
 
   const handleGenerate = useCallback(async () => {
@@ -602,6 +659,13 @@ const FaceFusionGenerate = () => {
               ? "Upload a template and a portrait, choose which face to swap."
               : `Upload a clear portrait to apply ${selectedTemplates.length} selected style${selectedTemplates.length !== 1 ? "s" : ""}`}
           </p>
+          {faceSwapCost !== undefined && (
+            <div className="flex justify-center">
+              <CostBadge
+                cost={(isCustom ? 1 : selectedTemplates.length) * faceSwapCost}
+              />
+            </div>
+          )}
         </div>
 
         {/* Custom flow: dual upload — template first, then selfie. */}
@@ -913,6 +977,17 @@ const FaceFusionGenerate = () => {
           )}
         </>
       )}
+
+      <InsufficientTokensDialog
+        open={insufficientDialogOpen}
+        onOpenChange={setInsufficientDialogOpen}
+        cost={insufficientDialogCost}
+        balance={balance ?? 0}
+      />
+      <OutOfTokensDialog
+        open={outOfTokensDialogOpen}
+        onOpenChange={setOutOfTokensDialogOpen}
+      />
     </main>
   );
 };

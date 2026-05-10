@@ -7,59 +7,28 @@ import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 const Auth = () => {
-  const { user, loading: authLoading, signInWithGoogle, signInAsTestUser } = useAuth();
+  const { user, loading: authLoading, signInWithGoogle } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const { track } = useAnalytics();
   const [isSigningIn, setIsSigningIn] = useState(false);
 
   const returnPath = location.state?.returnPath || '/face-fusion';
-  const selectedTemplates = location.state?.selectedTemplates;
-  const autoGenerate = location.state?.autoGenerate;
 
   useEffect(() => {
     if (!authLoading && user) {
       track({ name: 'auth_completed', params: { provider: 'google' } });
-      
-      const navState: any = {};
-      if (selectedTemplates) {
-        navState.selectedTemplates = selectedTemplates;
-      }
-      
-      const searchParams = new URLSearchParams();
-      if (autoGenerate) {
-        searchParams.set('autoGenerate', 'true');
-      }
-      
-      const finalPath = searchParams.toString() 
-        ? `${returnPath}?${searchParams.toString()}` 
-        : returnPath;
-      
-      navigate(finalPath, {
-        state: Object.keys(navState).length > 0 ? navState : undefined,
-        replace: true,
-      });
+      navigate(returnPath, { replace: true });
     }
-  }, [user, authLoading, navigate, returnPath, selectedTemplates, autoGenerate, track]);
+  }, [user, authLoading, navigate, returnPath, track]);
 
   const handleSignIn = async () => {
     setIsSigningIn(true);
     try {
-      await signInWithGoogle();
+      await signInWithGoogle(returnPath);
     } catch (error) {
       console.error('Sign in error:', error);
       toast.error('Failed to sign in. Please try again.');
-      setIsSigningIn(false);
-    }
-  };
-
-  const handleTestUserSignIn = async () => {
-    setIsSigningIn(true);
-    try {
-      await signInAsTestUser();
-    } catch (error) {
-      console.error('Test user sign in error:', error);
-      toast.error('Failed to sign in as test user. Please try again.');
       setIsSigningIn(false);
     }
   };
@@ -76,9 +45,11 @@ const Auth = () => {
     <main className="container mx-auto px-6 py-16 flex items-center justify-center min-h-[calc(100vh-8rem)]">
       <div className="max-w-md w-full space-y-8 text-center">
         <div className="space-y-4">
-          <h1 className="text-4xl font-bold">Sign In Required</h1>
-          <p className="text-lg text-muted-foreground">
-            Please sign in to continue. We need authentication to rate limit GPU requests and ensure fair usage for everyone.
+          <h1 className="text-4xl font-bold">Sign in</h1>
+          <p className="text-base text-muted-foreground leading-relaxed">
+            This demo runs GPU pipelines on Modal, which costs money. To
+            prevent abuse, generations are gated by tokens. Sign in to
+            receive 200 tokens — enough to fully explore the demos.
           </p>
         </div>
 
@@ -120,21 +91,11 @@ const Auth = () => {
           </Button>
 
           <Button
-            onClick={handleTestUserSignIn}
-            disabled={isSigningIn}
-            variant="secondary"
-            size="sm"
-            className="w-full"
-          >
-            Sign In as Test User
-          </Button>
-
-          <Button
             onClick={() => navigate(returnPath)}
             variant="ghost"
             className="w-full"
           >
-            Go Back
+            Go back
           </Button>
         </div>
       </div>

@@ -7,6 +7,7 @@ from services.common.rabbitmq.config import rabbitmq_config
 from services.common.domain.enums import PipelineStatus
 from services.common.database.core import async_session_maker
 from . import service
+from ..wallet import service as wallet_service
 
 from services.common.logging.config import context_trace_id, context_pipeline_id
 
@@ -32,6 +33,11 @@ async def handle_pipeline_update(message: Dict[str, Any]) -> None:
             result=result,
             message=error_message,
         )
+
+        # Refund on terminal failure; idempotent if message redelivers.
+        if status == PipelineStatus.FAILED:
+            await wallet_service.refund(db, pipeline_id)
+            await db.commit()
 
 
 async def start_pipeline_update_consumer(consumer: RabbitMQConsumer) -> None:

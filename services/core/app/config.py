@@ -16,7 +16,11 @@ class Config(BaseSettings):
 
     MAX_PIPELINES_PER_REQUEST: int = 3
 
-    TEST_USER_EMAIL: str | None = None
+    # HMAC for the anon-wallet cookie. Unset disables the anon tier.
+    WALLET_COOKIE_SECRET: str | None = None
+
+    # Cloudflare Turnstile server secret. Unset skips verification (dev).
+    TURNSTILE_SECRET: str | None = None
 
     @property
     def cors_origins(self) -> list[str]:

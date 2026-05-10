@@ -1,8 +1,10 @@
 import logging
 from datetime import datetime
+from typing import Optional
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
+from services.common.auth.models import User
 from services.common.database import DbSession
 from services.common.rabbitmq import RabbitMQPublisher, RabbitMQConnection
 from services.common.rabbitmq.config import rabbitmq_config
@@ -26,6 +28,9 @@ from .routing import (
     known_pipeline_names,
     names_in_same_pool,
 )
+from ..wallet import service as wallet_service
+from ..wallet.cookies import issue_anon_id, read_anon_id
+from ..wallet.turnstile import verify_turnstile
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +49,12 @@ async def get_publisher() -> RabbitMQPublisher:
     return await get_rabbitmq_publisher()
 
 
+def _get_optional_user_dep():
+    from ..dependencies import get_current_user_optional
+
+    return get_current_user_optional
+
+
 @router.post(
     "/queue",
     response_model=QueuePipelinesResponse,
@@ -51,7 +62,10 @@ async def get_publisher() -> RabbitMQPublisher:
 )
 async def queue_pipelines(
     request: QueuePipelinesRequest,
+    http_request: Request,
+    http_response: Response,
     db: DbSession,
+    user: Optional[User] = Depends(_get_optional_user_dep()),
 ) -> QueuePipelinesResponse:
     import sentry_sdk
     from services.common.logging.config import (
@@ -93,6 +107,28 @@ async def queue_pipelines(
                     detail=f"Unknown pipeline_name: {job.pipeline_name!r}",
                 )
 
+        # Anonymous: gate via Turnstile and resolve / mint cookie.
+        # Authenticated: lazily grant +200, lazily migrate anon if any.
+        user_uuid: Optional[UUID] = UUID(user.id) if user else None
+        anon_id: Optional[UUID] = None
+        if user is None:
+            if not await verify_turnstile(http_request):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Turnstile verification failed",
+                )
+            anon_id = read_anon_id(http_request)
+            if anon_id is None:
+                anon_id = issue_anon_id(http_response)
+            await wallet_service.grant_anon_if_needed(db, anon_id)
+        else:
+            await wallet_service.grant_signup_if_needed(db, user_uuid)
+            existing_anon = read_anon_id(http_request)
+            if existing_anon is not None:
+                await wallet_service.migrate_anon_to_user(
+                    db, user_uuid, existing_anon
+                )
+
         connection = await get_connection()
         # Legacy gauge — only counts the compute pool. Per-pipeline ETAs
         # via /pipelines/{id}/estimate are the actual UX signal.
@@ -107,6 +143,35 @@ async def queue_pipelines(
             routing_key = get_routing_key(pipeline_name)
 
             context_pipeline_id.set(str(pipeline_id))
+
+            ptype = await wallet_service.get_pipeline_type(db, pipeline_name)
+            if ptype is None:
+                # Missing seed row = config drift, not a user error.
+                log.error(
+                    f"pipeline_types missing seed row for {pipeline_name!r}"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Pipeline pricing not configured",
+                )
+
+            try:
+                await wallet_service.charge(
+                    db,
+                    pipeline_id=pipeline_id,
+                    pipeline_type_id=ptype.id,
+                    cost=ptype.base_cost,
+                    user_id=user_uuid,
+                    anon_id=anon_id,
+                )
+            except wallet_service.InsufficientFunds:
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail=(
+                        "Out of tokens. Sign in for more, or contact the "
+                        "site author."
+                    ),
+                )
 
             log.info(f"Creating pipeline: {pipeline_name} -> {routing_key}")
 

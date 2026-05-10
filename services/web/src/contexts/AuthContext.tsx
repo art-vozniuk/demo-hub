@@ -7,8 +7,7 @@ interface AuthContextType {
   user: User | null;
   session: Session | null;
   loading: boolean;
-  signInWithGoogle: () => Promise<void>;
-  signInAsTestUser: () => Promise<void>;
+  signInWithGoogle: (redirectTo?: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -37,42 +36,17 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return () => subscription.unsubscribe();
   }, []);
 
-  const signInWithGoogle = async () => {
-    const redirectUrl = import.meta.env.VITE_APP_URL 
-      ? `${import.meta.env.VITE_APP_URL}/face-fusion/generate?autoGenerate=true`
-      : `${window.location.origin}/face-fusion/generate?autoGenerate=true`;
-    
+  const signInWithGoogle = async (redirectTo?: string) => {
+    // Defaults to current path so OAuth lands users back where they were.
+    const base = import.meta.env.VITE_APP_URL ?? window.location.origin;
+    const path = redirectTo ?? `${window.location.pathname}${window.location.search}`;
+    const redirectUrl = `${base}${path.startsWith('/') ? path : `/${path}`}`;
+
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
         redirectTo: redirectUrl,
       },
-    });
-    
-    if (error) {
-      throw error;
-    }
-  };
-
-  const signInAsTestUser = async () => {
-    const apiUrl = import.meta.env.VITE_CORE_API_URL;
-    const response = await fetch(`${apiUrl}/auth/test-user`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail || 'Failed to sign in as test user');
-    }
-
-    const { access_token, refresh_token } = await response.json();
-
-    const { error } = await supabase.auth.setSession({
-      access_token,
-      refresh_token,
     });
 
     if (error) {
@@ -88,7 +62,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, signInWithGoogle, signInAsTestUser, signOut }}>
+    <AuthContext.Provider value={{ user, session, loading, signInWithGoogle, signOut }}>
       {children}
     </AuthContext.Provider>
   );
