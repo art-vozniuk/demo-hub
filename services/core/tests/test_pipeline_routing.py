@@ -8,11 +8,11 @@ from services.common.rabbitmq.config import rabbitmq_config
 
 
 def test_face_swap_routes_to_compute_queue():
-    assert get_routing_key("face_swap") == rabbitmq_config.routing_submit
+    assert get_routing_key("face_swap") == rabbitmq_config.routing_compute
 
 
 def test_face_recognition_routes_to_compute_queue():
-    assert get_routing_key("face_recognition") == rabbitmq_config.routing_submit
+    assert get_routing_key("face_recognition") == rabbitmq_config.routing_compute
 
 
 def test_generative_editing_routes_to_dispatch_queue():

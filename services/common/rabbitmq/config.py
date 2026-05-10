@@ -42,7 +42,7 @@ class RabbitMQConfig(BaseSettings):
         )
     )
 
-    routing_submit: str = Field(
+    routing_compute: str = Field(
         default_factory=lambda: os.getenv("RABBITMQ_ROUTING_SUBMIT", "pipelines.submit")
     )
     routing_dispatch: str = Field(

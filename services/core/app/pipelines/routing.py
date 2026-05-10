@@ -12,8 +12,8 @@ from services.common.rabbitmq.config import rabbitmq_config
 
 
 _ROUTES: dict[str, str] = {
-    "face_recognition": rabbitmq_config.routing_submit,
-    "face_swap": rabbitmq_config.routing_submit,
+    "face_recognition": rabbitmq_config.routing_compute,
+    "face_swap": rabbitmq_config.routing_compute,
     "generative_editing": rabbitmq_config.routing_dispatch,
 }
 
