@@ -469,22 +469,6 @@ const GenerativeEditingGenerate = () => {
               {errorMessage}
             </div>
           )}
-
-          <div className="flex justify-center">
-            <Button
-              size="lg"
-              disabled={!canGenerate}
-              onClick={handleGenerate}
-              className="hover-glow text-base font-semibold px-10 py-5 shadow-elegant"
-            >
-              <Sparkles className="mr-2 h-5 w-5" />
-              {isUploading
-                ? "Uploading…"
-                : isProcessing
-                  ? "Generating…"
-                  : "Generate"}
-            </Button>
-          </div>
         </div>
 
         <div className="space-y-4">
@@ -502,6 +486,22 @@ const GenerativeEditingGenerate = () => {
             estimatedFinishAt={estimatedFinishAt}
             workersMissing={workersMissing}
           />
+
+          <div className="flex justify-center">
+            <Button
+              size="lg"
+              disabled={!canGenerate}
+              onClick={handleGenerate}
+              className="hover-glow text-base font-semibold px-10 py-5 shadow-elegant"
+            >
+              <Sparkles className="mr-2 h-5 w-5" />
+              {isUploading
+                ? "Uploading…"
+                : isProcessing
+                  ? "Generating…"
+                  : "Generate"}
+            </Button>
+          </div>
 
           {canRefineFace && (
             <div className="flex justify-center items-center gap-2">
