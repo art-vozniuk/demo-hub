@@ -163,7 +163,7 @@ const FaceFusion = () => {
           </h1>
 
           <ExpandableDescription>
-            AI-powered face swap pipeline built with Python, PyTorch and ONNX Runtime.
+            Face Swap GAN pipeline built with Python, PyTorch and ONNX Runtime.
             Event-driven async backend on FastAPI with RabbitMQ message orchestration.
           </ExpandableDescription>
 

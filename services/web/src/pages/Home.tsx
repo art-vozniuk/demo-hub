@@ -41,8 +41,8 @@ const Home = () => {
 
         <div className="space-y-4">
           <h1 className="text-4xl font-bold tracking-tight sm:text-5xl leading-tight">
-            Software Engineer<br/>
-            <span className="text-gradient">ML Serving Infrastructure, GPU Systems, Scalable Distributed Backends</span>
+            Artem Vozniuk<br/>
+            <span className="text-gradient">Software Engineering, ML Serving Infrastructure, GPU Systems, Scalable Distributed Backends</span>
           </h1>
 
           <p className="mx-auto max-w-xl text-lg leading-relaxed text-muted-foreground">
