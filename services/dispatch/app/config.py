@@ -16,9 +16,5 @@ class Config(BaseSettings):
     # klein on A10G runs ~30-60s; we leave plenty of headroom.
     MODAL_REQUEST_TIMEOUT_SECONDS: int = 240
 
-    # Core's HTTP service-to-service URL on the docker network. Used to
-    # resolve preset slugs to the hidden prompt template.
-    CORE_INTERNAL_URL: str = "http://core:8081"
-
 
 config = Config()

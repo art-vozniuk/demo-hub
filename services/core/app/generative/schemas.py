@@ -4,7 +4,8 @@ from pydantic import BaseModel
 
 class GenerativePresetRead(BaseModel):
     """Public-facing preset card. The `prompt` is intentionally hidden:
-    runtime resolves it server-side from the slug, so users never see it."""
+    core resolves it from the slug at pipeline enqueue time and bakes it
+    into the worker's payload, so users never see it."""
 
     id: int
     slug: str
@@ -16,10 +17,3 @@ class GenerativePresetRead(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
-
-
-class GenerativePresetInternal(GenerativePresetRead):
-    """Internal-only — includes the prompt template. Dispatch worker
-    fetches this via /generative/internal/presets/{slug}."""
-
-    prompt: str

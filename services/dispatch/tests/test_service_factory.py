@@ -15,6 +15,7 @@ def test_create_service_generative_editing(mock_s3_client):
             "image_bucket": "media",
             "image_key": "user/foo.jpg",
             "preset_slug": "neo-tokyo",
+            "prompt": "cinematic still",
         },
         s3_client=mock_s3_client,
     )
@@ -23,6 +24,7 @@ def test_create_service_generative_editing(mock_s3_client):
     assert svc.id == "abc"
     assert isinstance(svc.pipeline_input, GenerativeEditingPipelineInput)
     assert svc.pipeline_input.preset_slug == "neo-tokyo"
+    assert svc.pipeline_input.prompt == "cinematic still"
 
 
 def test_create_service_unknown_pipeline(mock_s3_client):

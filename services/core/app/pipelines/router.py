@@ -19,6 +19,7 @@ from .schemas import (
 )
 from . import service
 from .estimation import estimate_pipeline
+from .input_resolution import resolve_pipeline_input
 from .routing import get_routing_key, known_pipeline_names
 
 log = logging.getLogger(__name__)
@@ -111,11 +112,13 @@ async def queue_pipelines(
                 pipeline_name=pipeline_name,
             )
 
+            resolved_input = await resolve_pipeline_input(db, pipeline_name, job.input)
+
             message = {
                 "trace_id": str(trace_id),
                 "pipeline_id": str(pipeline_id),
                 "pipeline_name": pipeline_name,
-                "input": job.input,
+                "input": resolved_input,
                 "enqueued_at": datetime.utcnow().isoformat(),
             }
 

@@ -6,12 +6,13 @@ class PipelineInput(BaseModel):
 
 
 class GenerativeEditingPipelineInput(PipelineInput):
-    """User-supplied photo + selected preset slug.
+    """User-supplied photo + prompt resolved by core at enqueue time.
 
-    Core resolves the preset's hidden prompt server-side from the slug —
-    the dispatch worker never receives raw prompts from clients.
+    `preset_slug` is forwarded by core for traceability/logging; the
+    dispatch worker only needs `prompt` to drive the Modal call.
     """
 
     image_bucket: str
     image_key: str
     preset_slug: str
+    prompt: str

@@ -64,14 +64,11 @@ services:
       RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
       REDIS_URL: redis://redis:6379
       RABBITMQ_PREFETCH: "20"
-      CORE_INTERNAL_URL: http://core:8081
     depends_on:
       rabbitmq:
         condition: service_healthy
       redis:
         condition: service_healthy
-      core:
-        condition: service_started
     networks:
       - app_network
     restart: unless-stopped

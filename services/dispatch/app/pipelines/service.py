@@ -75,7 +75,7 @@ pipeline_templates: dict[str, PipelineType] = {
     "generative_editing": PipelineType(
         service_type=GenerativeEditingService,
         input_type=GenerativeEditingPipelineInput,
-        estimated_time_ms=25_000,
+        estimated_time_ms=30_000,
     ),
 }
 
