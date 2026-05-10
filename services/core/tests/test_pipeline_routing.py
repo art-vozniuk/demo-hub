@@ -2,7 +2,9 @@ import pytest
 
 from services.core.app.pipelines.routing import (
     get_routing_key,
+    is_parallel_pipeline,
     known_pipeline_names,
+    names_in_same_pool,
 )
 from services.common.rabbitmq.config import rabbitmq_config
 
@@ -29,3 +31,20 @@ def test_known_pipeline_names_contains_all():
     assert "face_recognition" in names
     assert "face_swap" in names
     assert "generative_editing" in names
+
+
+def test_compute_pool_is_sequential():
+    assert is_parallel_pipeline("face_swap") is False
+    assert is_parallel_pipeline("face_recognition") is False
+
+
+def test_dispatch_pool_is_parallel():
+    assert is_parallel_pipeline("generative_editing") is True
+
+
+def test_same_pool_names_for_compute():
+    assert names_in_same_pool("face_swap") == {"face_swap", "face_recognition"}
+
+
+def test_same_pool_names_for_dispatch():
+    assert names_in_same_pool("generative_editing") == {"generative_editing"}

@@ -64,16 +64,71 @@ async def _read_heartbeats() -> dict[str, dict[str, float]]:
     return out
 
 
-async def estimate_pipeline(pending_by_type: dict[str, int]) -> PipelineEstimate:
-    queue_position = sum(pending_by_type.values())
+async def estimate_pipeline(
+    pending_by_type: dict[str, int],
+    *,
+    target_pipeline_name: str,
+    parallel: bool,
+    same_pool_names: set[str],
+) -> PipelineEstimate:
+    """Estimate wait time for one pipeline.
+
+    `pending_by_type` is a count of in-flight pipelines (PENDING+RUNNING)
+    grouped by pipeline_name across the whole platform. We filter it
+    down to pipelines in the *same pool* as the target — only those
+    block its progress; everything else drains on different workers.
+
+    Concurrency model decides how the remaining count translates into
+    seconds:
+
+    - parallel=True (e.g. Modal autoscale): each request runs in its own
+      container, so queue depth doesn't add latency. ETA is one
+      inference duration for the target pipeline_name.
+    - parallel=False (e.g. single-GPU compute): jobs drain sequentially.
+      ETA is the sum of (count × avg) across same-pool types, divided
+      by the number of workers serving this pool.
+    """
+
+    # Only pipelines in the same pool as the target can block it. Cross-
+    # pool jobs run on completely different workers and don't share a
+    # queue — bundling them in would inflate the estimate.
+    relevant_pending = {
+        name: count
+        for name, count in pending_by_type.items()
+        if name in same_pool_names
+    }
+    queue_position = sum(relevant_pending.values())
+
     heartbeats = await _read_heartbeats()
 
+    if parallel:
+        workers = heartbeats.get(target_pipeline_name, {})
+        worker_count = len(workers)
+        workers_missing = worker_count == 0
+        avg_ms = sum(workers.values()) / worker_count if workers else 0.0
+        estimated_seconds = avg_ms / 1000.0
+
+        log.info(
+            f"estimate (parallel): pipeline={target_pipeline_name} "
+            f"avg_ms={avg_ms:.0f} -> {estimated_seconds:.2f}s "
+            f"workers={worker_count} pool_pending={queue_position}"
+        )
+
+        return PipelineEstimate(
+            estimated_seconds=max(estimated_seconds, 0.01),
+            queue_position=queue_position,
+            worker_count=worker_count,
+            workers_missing=workers_missing,
+        )
+
+    # Sequential pool: the cumulative work in the queue, spread across
+    # whatever workers serve this pool.
     relevant_workers: set[str] = set()
     total_work_ms = 0.0
     workers_missing = False
 
-    for pipeline_name, count in pending_by_type.items():
-        workers_for_type = heartbeats.get(pipeline_name, {})
+    for name, count in relevant_pending.items():
+        workers_for_type = heartbeats.get(name, {})
         if not workers_for_type:
             workers_missing = True
             continue
@@ -86,10 +141,11 @@ async def estimate_pipeline(pending_by_type: dict[str, int]) -> PipelineEstimate
     estimated_seconds = total_work_ms / 1000.0 / divisor
 
     log.info(
-        f"estimated time for pipeline: {estimated_seconds}s "
-        f"(queue_position={queue_position}, worker_count={worker_count}, "
-        f"workers_missing={workers_missing}, pending_by_type={pending_by_type})"
-        f"heartbeats: {heartbeats}"
+        f"estimate (sequential): pipeline={target_pipeline_name} "
+        f"-> {estimated_seconds:.2f}s "
+        f"queue_position={queue_position} workers={worker_count} "
+        f"workers_missing={workers_missing} "
+        f"relevant_pending={relevant_pending}"
     )
 
     return PipelineEstimate(

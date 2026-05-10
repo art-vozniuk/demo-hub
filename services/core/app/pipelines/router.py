@@ -20,7 +20,12 @@ from .schemas import (
 from . import service
 from .estimation import estimate_pipeline
 from .input_resolution import resolve_pipeline_input
-from .routing import get_routing_key, known_pipeline_names
+from .routing import (
+    get_routing_key,
+    is_parallel_pipeline,
+    known_pipeline_names,
+    names_in_same_pool,
+)
 
 log = logging.getLogger(__name__)
 
@@ -179,7 +184,12 @@ async def get_pipeline_estimate(
         )
 
     pending_by_type = await service.count_pending_ahead_by_type(db, pipeline)
-    estimate = await estimate_pipeline(pending_by_type)
+    estimate = await estimate_pipeline(
+        pending_by_type,
+        target_pipeline_name=pipeline.pipeline_name,
+        parallel=is_parallel_pipeline(pipeline.pipeline_name),
+        same_pool_names=names_in_same_pool(pipeline.pipeline_name),
+    )
 
     return PipelineEstimateResponse(
         pipeline_id=pipeline_id,
