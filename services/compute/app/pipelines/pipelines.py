@@ -58,8 +58,7 @@ class FaceRecognitionPipeline(Pipeline):
         self.image = image
 
     def run(self) -> dict:
-        # exif_transpose bakes phone-camera Orientation tags into pixels so
-        # detection bboxes line up with what the user sees in the UI.
+        # Bake EXIF Orientation so face bboxes match what the user sees.
         pil = ImageOps.exif_transpose(Image.open(io.BytesIO(self.image))).convert(
             "RGB"
         )

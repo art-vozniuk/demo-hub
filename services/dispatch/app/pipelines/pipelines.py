@@ -26,11 +26,8 @@ class AsyncPipeline:
 
 
 def _bake_exif_orientation(image_bytes: bytes) -> bytes:
-    # Phones save JPEGs upright with an EXIF Orientation tag instead of
-    # rotating pixels, and FLUX's PIL.Image.open downstream silently drops
-    # that tag — so the model sees the photo sideways. Bake the rotation
-    # into the pixels here, then re-encode. FLUX downscales to 1024 max
-    # side anyway, so a single JPEG round-trip is invisible.
+    # FLUX's PIL.Image.open drops the EXIF Orientation tag, so phone-portrait
+    # JPEGs reach the model sideways unless we bake the rotation in here.
     with Image.open(io.BytesIO(image_bytes)) as img:
         oriented = ImageOps.exif_transpose(img)
         if oriented.mode != "RGB":
