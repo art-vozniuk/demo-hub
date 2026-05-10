@@ -4,10 +4,10 @@
 
 set -euo pipefail
 
-if ! command -v modal >/dev/null 2>&1; then
-    echo "Installing modal CLI..."
-    pip install --user --upgrade modal
-fi
+#if ! command -v modal >/dev/null 2>&1; then
+#    echo "Installing modal CLI..."
+#    pip install --user --upgrade modal
+#fi
 
 echo "Checking Modal auth..."
 if ! modal token list >/dev/null 2>&1; then

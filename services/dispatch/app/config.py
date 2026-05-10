@@ -12,8 +12,9 @@ class Config(BaseSettings):
     MODAL_PROXY_AUTH_TOKEN_ID: str | None = None
     MODAL_PROXY_AUTH_TOKEN_SECRET: str | None = None
 
-    # End-to-end Modal call ceiling. Cold start + inference for FLUX.2
-    # klein on A10G runs ~30-60s; we leave plenty of headroom.
+    # End-to-end Modal call ceiling. Klein 4B is fast (~sub-second
+    # inference, 4 steps), but cold start + first GPU upload can take
+    # 30-60s; we leave plenty of headroom.
     MODAL_REQUEST_TIMEOUT_SECONDS: int = 240
 
 

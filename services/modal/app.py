@@ -19,8 +19,8 @@ import modal
 APP_NAME = "demo-hub-flux"
 VOLUME_NAME = "flux-models"
 MODEL_DIR = "/models"
-MODEL_REPO = "black-forest-labs/FLUX.2-klein"
-MODEL_LOCAL_DIR = f"{MODEL_DIR}/flux2-klein"
+MODEL_REPO = "black-forest-labs/FLUX.2-klein-4B"
+MODEL_LOCAL_DIR = f"{MODEL_DIR}/flux2-klein-4b"
 
 
 app = modal.App(APP_NAME)
@@ -32,13 +32,18 @@ flux_image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0")
     .pip_install(
+        # Torch/torchvision pinned together — CUDA ABI mismatch hurts.
         "torch==2.5.1",
         "torchvision==0.20.1",
-        "diffusers==0.31.0",
-        "transformers==4.46.3",
-        "accelerate==1.1.1",
-        "safetensors==0.4.5",
-        "huggingface-hub[hf-transfer]==0.26.5",
+        # Flux2KleinPipeline only landed on diffusers main; no PyPI release
+        # ships it yet. The rest of the ML stack (transformers, accelerate,
+        # safetensors, tokenizers) is left unpinned so pip can resolve a
+        # mutually-compatible set against this dev build. Pin again once a
+        # versioned release cuts.
+        "git+https://github.com/huggingface/diffusers.git",
+        "transformers",
+        "accelerate",
+        "huggingface-hub[hf-transfer]>=0.34.0",
         "Pillow==11.0.0",
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
@@ -55,7 +60,7 @@ flux_image = (
 
 with flux_image.imports():
     import torch
-    from diffusers import FluxImg2ImgPipeline
+    from diffusers import Flux2KleinPipeline
     from PIL import Image
 
 
@@ -66,7 +71,7 @@ with flux_image.imports():
     secrets=[modal.Secret.from_name("huggingface", required_keys=[])],
 )
 def preload_weights() -> str:
-    """Download FLUX.2 klein into the persistent volume.
+    """Download FLUX.2 klein 4B into the persistent volume.
 
     Run once: `modal run services/modal/app.py::preload_weights`.
     Re-running is a no-op when files are already up to date.
@@ -103,30 +108,26 @@ class FluxInference:
         captures RAM after this returns, so subsequent cold starts skip
         the heavy disk + GPU upload."""
 
-        self.pipe = FluxImg2ImgPipeline.from_pretrained(
+        self.pipe = Flux2KleinPipeline.from_pretrained(
             MODEL_LOCAL_DIR,
             torch_dtype=torch.bfloat16,
         )
         self.pipe.to("cuda")
-        # Slicing is essentially free at A10G size and keeps headroom for
-        # bigger input images without crossing 24GB.
-        self.pipe.enable_attention_slicing()
 
     @modal.method()
     def generate(
         self,
         image_b64: str,
         prompt: str,
-        guidance_scale: float = 3.5,
-        num_inference_steps: int = 28,
-        strength: float = 0.85,
+        guidance_scale: float = 1.0,
+        num_inference_steps: int = 4,
         max_side: int = 1024,
     ) -> dict[str, Any]:
         raw = base64.b64decode(image_b64)
         init = Image.open(io.BytesIO(raw)).convert("RGB")
 
-        # Cap the longest side. Anything larger stops fitting comfortably
-        # alongside FLUX activations on A10G with bf16.
+        # Cap the longest side. Klein 4B itself fits comfortably on A10G,
+        # but very large inputs blow up the encoder activations.
         w, h = init.size
         scale = max_side / max(w, h)
         if scale < 1.0:
@@ -136,9 +137,8 @@ class FluxInference:
             )
 
         out = self.pipe(
-            prompt=prompt,
             image=init,
-            strength=strength,
+            prompt=prompt,
             guidance_scale=guidance_scale,
             num_inference_steps=num_inference_steps,
         )
@@ -172,7 +172,6 @@ def generate(payload: dict[str, Any]) -> dict[str, Any]:
     return inference.generate.remote(
         image_b64=image_b64,
         prompt=prompt,
-        guidance_scale=float(payload.get("guidance_scale", 3.5)),
-        num_inference_steps=int(payload.get("num_inference_steps", 28)),
-        strength=float(payload.get("strength", 0.85)),
+        guidance_scale=float(payload.get("guidance_scale", 1.0)),
+        num_inference_steps=int(payload.get("num_inference_steps", 4)),
     )
