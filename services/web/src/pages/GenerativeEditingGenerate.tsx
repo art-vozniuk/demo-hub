@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { v4 as uuidv4 } from "uuid";
-import { ArrowLeft, Download, Sparkles } from "lucide-react";
+import { ArrowLeft, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import UploadDropzone from "@/components/UploadDropzone";
 import PipelineProgress from "@/components/PipelineProgress";
+import GenerationCard from "@/components/GenerationCard";
 import {
   generativeApi,
   pipelinesApi,
@@ -229,26 +230,6 @@ const GenerativeEditingGenerate = () => {
     setErrorMessage(null);
   };
 
-  const handleDownload = async () => {
-    const url = (pipelineStatus?.result as GenerativeEditingResult | undefined)
-      ?.result_url;
-    if (!url) return;
-    try {
-      const r = await fetch(url);
-      const blob = await r.blob();
-      const objUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = objUrl;
-      a.download = `generative-${preset?.slug ?? "result"}-${Date.now()}.png`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(objUrl);
-    } catch (err) {
-      toast.error(`Download failed: ${err}`);
-    }
-  };
-
   if (presetError) {
     return (
       <main className="container mx-auto px-6 py-16 flex items-center justify-center min-h-[calc(100vh-8rem)]">
@@ -295,13 +276,16 @@ const GenerativeEditingGenerate = () => {
 
       <section className="max-w-5xl mx-auto grid gap-8 lg:grid-cols-2 items-start">
         <div className="space-y-4">
-          <div className="aspect-[3/4] rounded-xl overflow-hidden border border-border bg-black">
-            <img
-              src={preset.preview_image_url}
-              alt={preset.title}
-              className="w-full h-full object-cover"
-            />
-          </div>
+          <GenerationCard
+            imageUrl={preset.preview_image_url}
+            isProcessing={isProcessing}
+            generatedImage={resultUrl ?? undefined}
+            errorMessage={pipelineStatus?.status === "FAILED" ? errorMessage : undefined}
+            templateName={null}
+            pipelineId={pipelineId}
+            estimatedFinishAt={estimatedFinishAt}
+            workersMissing={workersMissing}
+          />
           <div className="space-y-2">
             <h1 className="text-3xl font-bold tracking-tight">{preset.title}</h1>
             {preset.description && (
@@ -318,35 +302,14 @@ const GenerativeEditingGenerate = () => {
           ) : (
             <div className="space-y-3">
               <div className="aspect-square rounded-xl overflow-hidden border border-border bg-muted/20 relative">
-                {resultUrl ? (
-                  <img
-                    src={resultUrl}
-                    alt="Generated"
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <img
-                    src={previewUrl(photo)}
-                    alt="Your photo"
-                    className="w-full h-full object-cover opacity-90"
-                  />
-                )}
+                <img
+                  src={previewUrl(photo)}
+                  alt="Your photo"
+                  className="w-full h-full object-cover"
+                />
                 {isUploading && (
                   <div className="absolute inset-0 flex items-center justify-center bg-background/70 text-sm">
                     Uploading…
-                  </div>
-                )}
-                {resultUrl && (
-                  <div className="absolute top-2 right-2">
-                    <Button
-                      onClick={handleDownload}
-                      size="sm"
-                      variant="secondary"
-                      className="h-8 w-8 p-0 rounded-full shadow-lg"
-                      title="Download image"
-                    >
-                      <Download className="h-4 w-4" />
-                    </Button>
                   </div>
                 )}
               </div>

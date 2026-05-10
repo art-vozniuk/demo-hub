@@ -13,7 +13,7 @@ const PresetCard = ({ preset, onSelect }: PresetCardProps) => {
       onClick={() => onSelect(preset)}
       className="group text-left rounded-lg overflow-hidden border border-border bg-muted/20 hover:bg-muted/40 transition-colors focus:outline-none focus:ring-2 focus:ring-primary"
     >
-      <div className="aspect-[3/4] w-full overflow-hidden bg-black">
+      <div className="aspect-square w-full overflow-hidden bg-black">
         <img
           src={preset.preview_image_url}
           alt={preset.title}

@@ -56,16 +56,6 @@ function activeStageIndex(
   return 0;
 }
 
-function formatRemaining(seconds: number): string {
-  if (seconds <= 1) return "<1s";
-  if (seconds >= 60) {
-    const m = Math.floor(seconds / 60);
-    const s = Math.round(seconds % 60);
-    return `${m}m ${s}s`;
-  }
-  return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
-}
-
 const PipelineProgress = ({
   status,
   estimatedFinishAt,
@@ -136,11 +126,6 @@ const PipelineProgress = ({
                 ) : null}
               </span>
               <span className="flex-1">{stage.label}</span>
-              {isActive && remainingSeconds != null && (
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  ~{formatRemaining(remainingSeconds)}
-                </span>
-              )}
             </li>
           );
         })}

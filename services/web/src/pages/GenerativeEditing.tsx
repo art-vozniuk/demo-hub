@@ -58,7 +58,7 @@ const GenerativeEditing = () => {
             Image-conditioned generative editing on FLUX.2 klein. Pick a
             cinematic preset and the platform routes your photo through a
             serverless A10G on Modal — async dispatch worker, RabbitMQ
-            orchestration, ETA tracked via Redis heartbeats.
+            orchestration.
           </ExpandableDescription>
 
           <div className="flex items-center justify-center gap-3">
@@ -107,7 +107,7 @@ const GenerativeEditing = () => {
             {[0, 1, 2, 3, 4, 5].map((i) => (
               <div
                 key={i}
-                className="aspect-[3/4] rounded-lg bg-muted/40 animate-pulse"
+                className="aspect-square rounded-lg bg-muted/40 animate-pulse"
               />
             ))}
           </div>

@@ -9,10 +9,10 @@ const Navbar = () => {
   const { track } = useAnalytics();
   
   const navLinks = [
-    { to: "/", label: "Home" },
-    { to: "/face-fusion", label: "Face Swap" },
     { to: "/generative-editing", label: "Generative Editing" },
+    { to: "/face-fusion", label: "Face Swap" },
     { to: "/renderer", label: "Gaussian Splatting" },
+    { to: "/author", label: "Author" },
   ];
 
   const handleSignOut = async () => {
@@ -24,7 +24,7 @@ const Navbar = () => {
   };
 
   const handleNavClick = (to: string) => {
-    if (to === "/") {
+    if (to === "/author") {
       track({ name: 'nav_home_clicked', params: {} });
     } else if (to === "/face-fusion") {
       track({ name: 'nav_facefusion_clicked', params: {} });
@@ -39,8 +39,8 @@ const Navbar = () => {
     <nav className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md">
       <div className="container mx-auto flex h-16 items-center justify-between px-3 sm:px-6">
         <h1 className="text-base sm:text-xl font-bold tracking-tight text-gradient">
-          <span className="hidden sm:inline">Artem Vozniuk</span>
-          <span className="sm:hidden">Artem Vozniuk</span>
+          <span className="hidden sm:inline">Demo Hub</span>
+          <span className="sm:hidden">Demo Hub</span>
         </h1>
         
         <div className="flex items-center gap-3 sm:gap-8">
@@ -49,7 +49,7 @@ const Navbar = () => {
               <li key={link.to}>
                 <NavLink
                   to={link.to}
-                  end={link.to === "/"}
+                  end={link.to === "/author"}
                   onClick={() => handleNavClick(link.to)}
                   className={({ isActive }) =>
                     `relative text-xs sm:text-sm font-medium transition-colors hover:text-primary ${
