@@ -59,9 +59,7 @@ class FaceRecognitionPipeline(Pipeline):
 
     def run(self) -> dict:
         # Bake EXIF Orientation so face bboxes match what the user sees.
-        pil = ImageOps.exif_transpose(Image.open(io.BytesIO(self.image))).convert(
-            "RGB"
-        )
+        pil = ImageOps.exif_transpose(Image.open(io.BytesIO(self.image))).convert("RGB")
         faces = detect_faces(pil)
 
         out_faces: List[dict] = []
