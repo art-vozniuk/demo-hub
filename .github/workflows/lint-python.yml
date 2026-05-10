@@ -5,6 +5,7 @@ on:
     paths:
       - 'services/core/**'
       - 'services/compute/**'
+      - 'services/dispatch/**'
       - 'services/common/**'
       - '.github/workflows/lint-python.yml'
   workflow_call:
@@ -28,9 +29,9 @@ jobs:
 
       - name: run ruff check
         run: |
-          ruff check services/core services/compute services/common --exclude services/external
+          ruff check services/core services/compute services/dispatch services/common --exclude services/external
 
       - name: run ruff format check
         run: |
-          ruff format --check services/core services/compute services/common --exclude services/external
+          ruff format --check services/core services/compute services/dispatch services/common --exclude services/external
 
