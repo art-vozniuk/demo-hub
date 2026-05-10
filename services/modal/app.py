@@ -127,7 +127,6 @@ def preload_weights() -> str:
     scaledown_window=10,
     timeout=600,
     enable_memory_snapshot=True,
-    secrets=[modal.Secret.from_name("modal-proxy-auth", required_keys=[])],
 )
 @modal.concurrent(max_inputs=1)
 class FluxInference:
@@ -240,13 +239,13 @@ class FluxInference:
 
 @app.function(
     image=flux_image,
-    secrets=[modal.Secret.from_name("modal-proxy-auth", required_keys=[])],
     timeout=600,
 )
 @modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
 def generate(payload: dict[str, Any]) -> dict[str, Any]:
-    """Public HTTP entry point. Gated by Modal proxy-auth so only the
-    dispatch worker (which holds the secret pair) can invoke it."""
+    """Public HTTP entry point. Gated by Modal proxy-auth — Modal
+    validates incoming Modal-Key/Modal-Secret headers against tokens
+    issued in the dashboard at /settings/proxy-auth-tokens."""
 
     request_id = uuid.uuid4().hex[:8]
     t0 = time.perf_counter()

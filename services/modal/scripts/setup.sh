@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# One-time Modal setup: install CLI, log in, create proxy-auth secret.
+# One-time Modal setup: install CLI, log in, create huggingface secret.
 # Idempotent — safe to re-run.
+#
+# Note: proxy-auth tokens for the web endpoint are NOT created here.
+# Modal manages those server-side; create one in the dashboard at
+# https://modal.com/settings/proxy-auth-tokens and copy the Token ID +
+# Token Secret into services/dispatch/.env.docker.
 
 set -euo pipefail
 
@@ -26,19 +31,20 @@ if ! modal secret list 2>/dev/null | awk '{print $1}' | grep -qx "huggingface"; 
     fi
 fi
 
-echo "Ensuring 'modal-proxy-auth' secret exists..."
-if ! modal secret list 2>/dev/null | awk '{print $1}' | grep -qx "modal-proxy-auth"; then
-    TOKEN_ID="dh_$(openssl rand -hex 8)"
-    TOKEN_SECRET="$(openssl rand -hex 32)"
-    modal secret create modal-proxy-auth \
-        "MODAL_PROXY_AUTH_TOKEN_ID=${TOKEN_ID}" \
-        "MODAL_PROXY_AUTH_TOKEN_SECRET=${TOKEN_SECRET}"
-    echo
-    echo "Generated proxy-auth pair (also stored as a Modal Secret):"
-    echo "  MODAL_PROXY_AUTH_TOKEN_ID=${TOKEN_ID}"
-    echo "  MODAL_PROXY_AUTH_TOKEN_SECRET=${TOKEN_SECRET}"
-    echo
-    echo "Copy these into services/dispatch/.env.docker."
-fi
+cat <<'EOF'
 
-echo "Modal setup complete."
+Modal setup complete.
+
+Next: create a proxy-auth token for the web endpoint.
+
+  1. Open https://modal.com/settings/proxy-auth-tokens
+  2. Click "Create new token"
+  3. Copy the Token ID and Token Secret
+  4. Paste them into services/dispatch/.env.docker:
+
+       MODAL_PROXY_AUTH_TOKEN_ID=<Token ID from dashboard>
+       MODAL_PROXY_AUTH_TOKEN_SECRET=<Token Secret from dashboard>
+
+These are validated by Modal directly — they do NOT need to be stored
+as a Modal Secret on this side.
+EOF
