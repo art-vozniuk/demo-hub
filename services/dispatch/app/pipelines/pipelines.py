@@ -6,8 +6,11 @@ and returns a structured payload identical in shape to compute pipelines.
 from __future__ import annotations
 
 import base64
+import io
 import logging
 from typing import Any
+
+from PIL import Image, ImageOps
 
 from services.common.s3.client import S3Client
 
@@ -20,6 +23,21 @@ log = logging.getLogger(__name__)
 class AsyncPipeline:
     async def run(self) -> dict[str, Any]:
         raise NotImplementedError
+
+
+def _bake_exif_orientation(image_bytes: bytes) -> bytes:
+    # Phones save JPEGs upright with an EXIF Orientation tag instead of
+    # rotating pixels, and FLUX's PIL.Image.open downstream silently drops
+    # that tag — so the model sees the photo sideways. Bake the rotation
+    # into the pixels here, then re-encode. FLUX downscales to 1024 max
+    # side anyway, so a single JPEG round-trip is invisible.
+    with Image.open(io.BytesIO(image_bytes)) as img:
+        oriented = ImageOps.exif_transpose(img)
+        if oriented.mode != "RGB":
+            oriented = oriented.convert("RGB")
+        out = io.BytesIO()
+        oriented.save(out, format="JPEG", quality=95)
+        return out.getvalue()
 
 
 class GenerativeEditingPipeline(AsyncPipeline):
@@ -38,6 +56,8 @@ class GenerativeEditingPipeline(AsyncPipeline):
             s3_bucket=self.pipeline_input.image_bucket,
             s3_key=self.pipeline_input.image_key,
         )
+
+        image_bytes = _bake_exif_orientation(image_bytes)
 
         payload = {
             "image_b64": base64.b64encode(image_bytes).decode("ascii"),
