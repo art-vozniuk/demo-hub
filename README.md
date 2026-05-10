@@ -23,7 +23,7 @@ preset, upload a photo, get the same subject in the chosen style. The
 inference itself runs on a serverless Modal A10G; the platform side is
 an async dispatch worker draining a dedicated RabbitMQ queue.
 
-<img width="1048" height="719" alt="image" src="https://github.com/user-attachments/assets/eba782f1-dedb-4800-9a0f-c55825c3b77e" />
+<img width="1040" height="708" alt="image" src="https://github.com/user-attachments/assets/32ca50d4-a517-44e9-a89e-b05f90456e7e" />
 
 ### Face Swap
 
