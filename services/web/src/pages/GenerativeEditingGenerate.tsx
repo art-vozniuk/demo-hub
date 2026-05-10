@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { v4 as uuidv4 } from "uuid";
-import { ArrowLeft, Sparkles } from "lucide-react";
+import { ArrowLeft, Info, Sparkles, UserRoundCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import UploadDropzone from "@/components/UploadDropzone";
 import GenerationCard from "@/components/GenerationCard";
 import {
@@ -12,7 +17,7 @@ import {
   type GenerativeEditingResult,
   type PipelineStatusItem,
 } from "@/api";
-import { uploadToS3, getFileExtension } from "@/lib/s3";
+import { uploadToS3, parseS3Url, getFileExtension } from "@/lib/s3";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { toast } from "sonner";
 
@@ -35,6 +40,7 @@ const GenerativeEditingGenerate = () => {
     key: string;
   } | null>(null);
 
+  // FLUX (generative_editing) pipeline state
   const [pipelineId, setPipelineId] = useState<string | null>(null);
   const [pipelineStatus, setPipelineStatus] =
     useState<PipelineStatusItem | null>(null);
@@ -45,8 +51,23 @@ const GenerativeEditingGenerate = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Optional second pass: face_swap from user's photo onto the FLUX result
+  // so the face actually looks like the subject. Lives in its own
+  // pipeline state because the two pipelines run independently and we
+  // want both results visible side-by-side at the end.
+  const [refinePipelineId, setRefinePipelineId] = useState<string | null>(null);
+  const [refinePipelineStatus, setRefinePipelineStatus] =
+    useState<PipelineStatusItem | null>(null);
+  const [refineEstimatedFinishAt, setRefineEstimatedFinishAt] = useState<
+    string | null
+  >(null);
+  const [refineWorkersMissing, setRefineWorkersMissing] = useState(false);
+  const [isRefining, setIsRefining] = useState(false);
+
   const pollIntervalRef = useRef<number | null>(null);
   const pollTimeoutRef = useRef<number | null>(null);
+  const refinePollIntervalRef = useRef<number | null>(null);
+  const refinePollTimeoutRef = useRef<number | null>(null);
   const isMountedRef = useRef(true);
 
   const objectUrlRef = useRef<string | null>(null);
@@ -67,6 +88,7 @@ const GenerativeEditingGenerate = () => {
     return () => {
       isMountedRef.current = false;
       clearPolling();
+      clearRefinePolling();
     };
   }, []);
 
@@ -127,6 +149,17 @@ const GenerativeEditingGenerate = () => {
     }
   };
 
+  const clearRefinePolling = () => {
+    if (refinePollIntervalRef.current) {
+      clearInterval(refinePollIntervalRef.current);
+      refinePollIntervalRef.current = null;
+    }
+    if (refinePollTimeoutRef.current) {
+      clearTimeout(refinePollTimeoutRef.current);
+      refinePollTimeoutRef.current = null;
+    }
+  };
+
   const pollOnce = useCallback(async (id: string) => {
     if (!isMountedRef.current) return;
     try {
@@ -138,9 +171,6 @@ const GenerativeEditingGenerate = () => {
       if (item.status === "COMPLETED" || item.status === "FAILED") {
         setIsProcessing(false);
         clearPolling();
-        if (item.status === "FAILED") {
-          setErrorMessage(item.message ?? "Generation failed");
-        }
       }
     } catch (err) {
       if (!isMountedRef.current) return;
@@ -148,6 +178,27 @@ const GenerativeEditingGenerate = () => {
       setErrorMessage("Failed to poll status. Try again later.");
       clearPolling();
       setIsProcessing(false);
+    }
+  }, []);
+
+  const pollRefineOnce = useCallback(async (id: string) => {
+    if (!isMountedRef.current) return;
+    try {
+      const resp = await pipelinesApi.getStatus([id]);
+      const item = resp.pipelines[0];
+      if (!item || !isMountedRef.current) return;
+      setRefinePipelineStatus(item);
+
+      if (item.status === "COMPLETED" || item.status === "FAILED") {
+        setIsRefining(false);
+        clearRefinePolling();
+      }
+    } catch (err) {
+      if (!isMountedRef.current) return;
+      console.error(err);
+      toast.error("Failed to poll face-match status. Try again later.");
+      clearRefinePolling();
+      setIsRefining(false);
     }
   }, []);
 
@@ -221,12 +272,103 @@ const GenerativeEditingGenerate = () => {
     }
   }, [preset, uploadedRef, track, pollOnce]);
 
+  const handleRefineFace = useCallback(async () => {
+    if (!uploadedRef) return;
+    const fluxResultUrl = (
+      pipelineStatus?.result as GenerativeEditingResult | undefined
+    )?.result_url;
+    if (!fluxResultUrl) return;
+
+    let templateRef: { bucket: string; key: string };
+    try {
+      templateRef = parseS3Url(fluxResultUrl);
+    } catch (err) {
+      toast.error(`Cannot parse FLUX result URL: ${err}`);
+      return;
+    }
+
+    setIsRefining(true);
+    setRefinePipelineStatus(null);
+    setRefineEstimatedFinishAt(null);
+    setRefineWorkersMissing(false);
+
+    try {
+      const traceId = uuidv4();
+      const newRefineId = uuidv4();
+
+      track({
+        name: "generative_refine_face_started",
+        params: {
+          preset_slug: preset?.slug ?? "",
+          flux_pipeline_id: pipelineId ?? "",
+          refine_pipeline_id: newRefineId,
+        },
+      });
+
+      // Compute auto-detects the largest face on both source and target
+      // when bboxes are omitted (see FaceSwapPipelineInput) — that's the
+      // only sensible default here since there's no UI for face picking.
+      await pipelinesApi.queuePipelines({
+        trace_id: traceId,
+        jobs: [
+          {
+            pipeline_id: newRefineId,
+            pipeline_name: "face_swap",
+            input: {
+              source_image_bucket: uploadedRef.bucket,
+              source_image_key: uploadedRef.key,
+              template_image_bucket: templateRef.bucket,
+              template_image_key: templateRef.key,
+            },
+          },
+        ],
+      });
+
+      setRefinePipelineId(newRefineId);
+
+      pipelinesApi
+        .getEstimate(newRefineId)
+        .then((res) => {
+          if (!isMountedRef.current) return;
+          setRefineEstimatedFinishAt(
+            new Date(Date.now() + res.estimated_seconds * 1000).toISOString()
+          );
+          setRefineWorkersMissing(res.workers_missing);
+        })
+        .catch((e) => console.warn("refine estimate fetch failed:", e));
+
+      await pollRefineOnce(newRefineId);
+      refinePollIntervalRef.current = window.setInterval(
+        () => pollRefineOnce(newRefineId),
+        POLL_INTERVAL_MS
+      );
+      refinePollTimeoutRef.current = window.setTimeout(() => {
+        clearRefinePolling();
+        setIsRefining(false);
+        toast.error("Face match timed out. Please try again.");
+      }, POLL_TIMEOUT_MS);
+    } catch (err) {
+      console.error(err);
+      toast.error(`Failed to queue face match: ${err}`);
+      setIsRefining(false);
+      setRefinePipelineId(null);
+    }
+  }, [uploadedRef, pipelineStatus, pipelineId, preset, track, pollRefineOnce]);
+
   const handleReplacePhoto = () => {
     setPhoto(null);
     setUploadedRef(null);
     setPipelineId(null);
     setPipelineStatus(null);
+    setEstimatedFinishAt(null);
+    setWorkersMissing(false);
+    setRefinePipelineId(null);
+    setRefinePipelineStatus(null);
+    setRefineEstimatedFinishAt(null);
+    setRefineWorkersMissing(false);
     setErrorMessage(null);
+    clearPolling();
+    clearRefinePolling();
   };
 
   if (presetError) {
@@ -258,11 +400,18 @@ const GenerativeEditingGenerate = () => {
   const resultUrl = (pipelineStatus?.result as
     | GenerativeEditingResult
     | undefined)?.result_url;
+  const refineResultUrl = (refinePipelineStatus?.result as
+    | { result_url?: string }
+    | undefined)?.result_url;
+
   const canGenerate =
     !isProcessing && !!uploadedRef && !isUploading && !pipelineId;
+  const fluxComplete = pipelineStatus?.status === "COMPLETED" && !!resultUrl;
+  const canRefineFace =
+    fluxComplete && !refinePipelineId && !isRefining;
 
   return (
-    <main className="container mx-auto px-6 py-12 space-y-10 min-h-[calc(100vh-8rem)]">
+    <main className="container mx-auto px-6 py-12 space-y-8 min-h-[calc(100vh-8rem)]">
       <Button
         variant="ghost"
         size="sm"
@@ -272,6 +421,17 @@ const GenerativeEditingGenerate = () => {
         <ArrowLeft className="h-4 w-4" />
         Back to presets
       </Button>
+
+      <header className="max-w-5xl mx-auto space-y-2">
+        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
+          {preset.title}
+        </h1>
+        {preset.description && (
+          <p className="text-muted-foreground leading-relaxed max-w-3xl">
+            {preset.description}
+          </p>
+        )}
+      </header>
 
       <section className="max-w-5xl mx-auto grid gap-8 lg:grid-cols-2 items-start">
         <div className="space-y-6">
@@ -332,21 +492,64 @@ const GenerativeEditingGenerate = () => {
             imageUrl={preset.preview_image_url}
             isProcessing={isProcessing}
             generatedImage={resultUrl ?? undefined}
-            errorMessage={pipelineStatus?.status === "FAILED" ? errorMessage : undefined}
+            errorMessage={
+              pipelineStatus?.status === "FAILED"
+                ? (pipelineStatus.message ?? "Generation failed")
+                : undefined
+            }
             templateName={null}
             pipelineId={pipelineId}
             estimatedFinishAt={estimatedFinishAt}
             workersMissing={workersMissing}
           />
 
-          <div className="space-y-2">
-            <h1 className="text-3xl font-bold tracking-tight">{preset.title}</h1>
-            {preset.description && (
-              <p className="text-muted-foreground leading-relaxed">
-                {preset.description}
-              </p>
-            )}
-          </div>
+          {canRefineFace && (
+            <div className="flex justify-center items-center gap-2">
+              <Button
+                onClick={handleRefineFace}
+                variant="outline"
+                size="sm"
+                className="gap-2"
+              >
+                <UserRoundCheck className="h-4 w-4" />
+                Match the face to your photo
+              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="What this does"
+                    className="text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <Info className="h-4 w-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-xs">
+                  <p className="text-xs leading-relaxed">
+                    Can improve face recognizability, but may introduce
+                    artifacts — especially on heavily stylized images.
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          )}
+
+          {refinePipelineId && resultUrl && (
+            <GenerationCard
+              imageUrl={resultUrl}
+              isProcessing={isRefining}
+              generatedImage={refineResultUrl ?? undefined}
+              errorMessage={
+                refinePipelineStatus?.status === "FAILED"
+                  ? (refinePipelineStatus.message ?? "Face match failed")
+                  : undefined
+              }
+              templateName={null}
+              pipelineId={refinePipelineId}
+              estimatedFinishAt={refineEstimatedFinishAt}
+              workersMissing={refineWorkersMissing}
+            />
+          )}
         </div>
       </section>
     </main>

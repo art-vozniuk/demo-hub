@@ -20,6 +20,7 @@ export type AnalyticsEvent =
   | { name: 'nav_renderer_clicked'; params: Record<string, never> }
   | { name: 'generative_preset_opened'; params: { preset_slug: string } }
   | { name: 'generative_generate_started'; params: { preset_slug: string; pipeline_id: string } }
+  | { name: 'generative_refine_face_started'; params: { preset_slug: string; flux_pipeline_id: string; refine_pipeline_id: string } }
   | { name: 'generative_github_repo_clicked'; params: Record<string, never> }
   | { name: 'footer_link_clicked'; params: { link_name: string; url: string } }
   | { name: 'home_linkedin_clicked'; params: Record<string, never> }
