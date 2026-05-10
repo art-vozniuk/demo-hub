@@ -4,7 +4,6 @@ import { v4 as uuidv4 } from "uuid";
 import { ArrowLeft, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import UploadDropzone from "@/components/UploadDropzone";
-import PipelineProgress from "@/components/PipelineProgress";
 import GenerationCard from "@/components/GenerationCard";
 import {
   generativeApi,
@@ -275,27 +274,6 @@ const GenerativeEditingGenerate = () => {
       </Button>
 
       <section className="max-w-5xl mx-auto grid gap-8 lg:grid-cols-2 items-start">
-        <div className="space-y-4">
-          <GenerationCard
-            imageUrl={preset.preview_image_url}
-            isProcessing={isProcessing}
-            generatedImage={resultUrl ?? undefined}
-            errorMessage={pipelineStatus?.status === "FAILED" ? errorMessage : undefined}
-            templateName={null}
-            pipelineId={pipelineId}
-            estimatedFinishAt={estimatedFinishAt}
-            workersMissing={workersMissing}
-          />
-          <div className="space-y-2">
-            <h1 className="text-3xl font-bold tracking-tight">{preset.title}</h1>
-            {preset.description && (
-              <p className="text-muted-foreground leading-relaxed">
-                {preset.description}
-              </p>
-            )}
-          </div>
-        </div>
-
         <div className="space-y-6">
           {!photo ? (
             <UploadDropzone onFileSelect={setPhoto} selectedFile={photo} />
@@ -326,16 +304,6 @@ const GenerativeEditingGenerate = () => {
             </div>
           )}
 
-          {pipelineId && (
-            <div className="rounded-lg border border-border bg-card p-4">
-              <PipelineProgress
-                status={pipelineStatus}
-                estimatedFinishAt={estimatedFinishAt}
-                workersMissing={workersMissing}
-              />
-            </div>
-          )}
-
           {errorMessage && !pipelineId && (
             <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
               {errorMessage}
@@ -356,6 +324,28 @@ const GenerativeEditingGenerate = () => {
                   ? "Generating…"
                   : "Generate"}
             </Button>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <GenerationCard
+            imageUrl={preset.preview_image_url}
+            isProcessing={isProcessing}
+            generatedImage={resultUrl ?? undefined}
+            errorMessage={pipelineStatus?.status === "FAILED" ? errorMessage : undefined}
+            templateName={null}
+            pipelineId={pipelineId}
+            estimatedFinishAt={estimatedFinishAt}
+            workersMissing={workersMissing}
+          />
+
+          <div className="space-y-2">
+            <h1 className="text-3xl font-bold tracking-tight">{preset.title}</h1>
+            {preset.description && (
+              <p className="text-muted-foreground leading-relaxed">
+                {preset.description}
+              </p>
+            )}
           </div>
         </div>
       </section>
