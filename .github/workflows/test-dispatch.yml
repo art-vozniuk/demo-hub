@@ -1,0 +1,52 @@
+name: test dispatch
+
+on:
+  pull_request:
+    paths:
+      - 'services/dispatch/**'
+      - 'services/common/**'
+      - '.github/workflows/test-dispatch.yml'
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: set up python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: install uv
+        run: pip install uv
+
+      - name: install dependencies
+        run: |
+          cd services/common
+          uv pip install --system -e .
+          cd ../dispatch
+          uv pip install --system -e ".[dev]"
+
+      - name: run tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          ENV: test
+          # Importing dispatch.app.pipelines.* eagerly constructs S3
+          # config; supply dummies so module load doesn't fail. The tests
+          # themselves mock the S3 client.
+          S3_ACCESS_KEY_ID: test
+          S3_ACCESS_KEY_SECRET: test
+          S3_ENDPOINT: http://localhost:9000
+          S3_PUBLIC_BUCKETS_ENDPOINT: http://localhost:9000
+          S3_REGION: us-east-1
+          RABBITMQ_URL: amqp://guest:guest@localhost:5672/
+        run: |
+          cd services/dispatch
+          pytest tests/ -v --tb=short

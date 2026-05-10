@@ -33,7 +33,15 @@ export interface FaceSwapResult {
   result_url: string;
 }
 
-export type PipelineResult = FaceRecognitionResult | FaceSwapResult | Record<string, any>;
+export interface GenerativeEditingResult {
+  result_url: string;
+}
+
+export type PipelineResult =
+  | FaceRecognitionResult
+  | FaceSwapResult
+  | GenerativeEditingResult
+  | Record<string, any>;
 
 export interface PipelineStatusItem {
   id: string;

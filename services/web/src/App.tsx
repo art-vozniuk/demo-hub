@@ -11,6 +11,8 @@ import Footer from "./components/Footer";
 import Home from "./pages/Home";
 import FaceFusion from "./pages/FaceFusion";
 import FaceFusionGenerate from "./pages/FaceFusionGenerate";
+import GenerativeEditing from "./pages/GenerativeEditing";
+import GenerativeEditingGenerate from "./pages/GenerativeEditingGenerate";
 import Renderer from "./pages/Renderer";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
@@ -33,6 +35,8 @@ const App = () => (
                     <Route path="/" element={<Home />} />
                     <Route path="/face-fusion" element={<FaceFusion />} />
                     <Route path="/face-fusion/generate" element={<FaceFusionGenerate />} />
+                    <Route path="/generative-editing" element={<GenerativeEditing />} />
+                    <Route path="/generative-editing/generate" element={<GenerativeEditingGenerate />} />
                     <Route path="/renderer" element={<Renderer />} />
                     <Route path="/auth" element={<Auth />} />
                     <Route path="*" element={<NotFound />} />

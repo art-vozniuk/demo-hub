@@ -1,0 +1,94 @@
+# Modal — FLUX.2 klein inference
+
+Serverless GPU backend for the **Generative Editing** demo.
+Runs FLUX.2 klein 4B image-conditioned editing on a Modal A10G, fronted
+by an HTTP endpoint that the platform's [dispatch worker](../dispatch)
+calls.
+
+## What it gives you
+
+- One Modal app: `demo-hub-flux`
+- One persistent Modal Volume: `flux-models` — base weights live here
+  permanently so cold starts don't pay HuggingFace download time.
+- One web endpoint: `POST /` returning a base64-encoded PNG.
+- Memory-snapshot cold starts (pipeline already loaded onto GPU).
+- Scale-to-zero with a 120s warm window.
+
+## Setup (run once)
+
+Everything below is scripted under `scripts/`. End-to-end:
+
+```bash
+cd services/modal
+
+# 1) install Modal CLI + log in (interactive only on first run)
+./scripts/setup.sh
+
+# 2) create the named volume + populate it with FLUX.2 klein 4B weights
+#    (one-shot, runs on a Modal CPU container — no local GPU needed)
+./scripts/preload.sh
+
+# 3) deploy the inference app and print the web endpoint URL
+./scripts/deploy.sh
+```
+
+The deploy script ends by writing the resolved endpoint URL to
+`services/modal/.endpoint`. Copy it into your dispatch worker's env:
+
+```
+MODAL_GENERATIVE_ENDPOINT_URL=https://<workspace>--demo-hub-flux-generate.modal.run
+```
+
+## Secrets and proxy-auth
+
+One Modal Secret is created on this side:
+
+- `huggingface` — keys: `HF_TOKEN`. The `FLUX.2-klein-4B` repo is open
+  (Apache 2.0, no gating), so the token is optional, but having one set
+  avoids hitting anonymous HF rate limits during the preload.
+
+Proxy-auth tokens for the web endpoint are **issued by Modal directly**,
+not stored as a Secret. Create one once in the dashboard at
+[/settings/proxy-auth-tokens](https://modal.com/settings/proxy-auth-tokens),
+then put the resulting Token ID + Token Secret into
+`services/dispatch/.env.docker`:
+
+```
+MODAL_PROXY_AUTH_TOKEN_ID=<from dashboard>
+MODAL_PROXY_AUTH_TOKEN_SECRET=<from dashboard>
+```
+
+The dispatch worker sends those as `Modal-Key` / `Modal-Secret` HTTP
+headers; Modal validates against its own token table before letting the
+request reach the endpoint.
+
+`scripts/setup.sh` handles `huggingface` and prints the dashboard link
+for the proxy-auth token.
+
+## Why this design
+
+- Volume preload separates the slow one-shot `huggingface_hub.snapshot_download`
+  from the inference path. Without it, the first cold start would be
+  ~5 minutes.
+- Memory snapshots (`enable_memory_snapshot=True`) capture the
+  initialised pipeline on the GPU after the first successful start; later
+  cold starts restore RAM in under a second.
+- `scaledown_window=120` keeps the container warm two minutes after the
+  last call — typical for a portfolio demo where visitors arrive in
+  bursts.
+- A10G (24GB) is plenty for klein 4B: the model weighs ~13GB in bf16,
+  leaving comfortable headroom for activations on a 1024-side input.
+  Larger GPUs (L40S, A100) would just cost more for the same quality.
+- Klein 4B is distilled — `num_inference_steps=4` and `guidance_scale=1.0`
+  produce sub-second steady-state inference once the snapshot warms.
+
+## Cost
+
+At Modal base rates (May 2026) and the reference workload (5–20
+visitors/day, ~5s warm inference each):
+
+- Inference: ~$0.05–$0.30/month
+- Storage: ~$0.50/month for the FLUX.2 klein 4B weights volume
+- Cold-start overhead: negligible after the snapshot is built
+
+If you bump traffic 100×, expect closer to $10–$30/month.

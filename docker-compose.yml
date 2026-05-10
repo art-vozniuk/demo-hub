@@ -46,8 +46,24 @@ services:
     image: ghcr.io/art-vozniuk/compute-cpu:latest
     environment:
       RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
-      RABBITMQ_PREFETCH: "10"
       REDIS_URL: redis://redis:6379
+      RABBITMQ_PREFETCH: "10"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app_network
+    restart: unless-stopped
+
+  dispatch:
+    image: ghcr.io/art-vozniuk/dispatch:latest
+    container_name: dispatch
+    environment:
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_PREFETCH: "20"
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -100,4 +116,3 @@ volumes:
 networks:
   app_network:
     driver: bridge
-

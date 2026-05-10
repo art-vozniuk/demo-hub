@@ -18,6 +18,11 @@ class RabbitMQConfig(BaseSettings):
     queue_main: str = Field(
         default_factory=lambda: os.getenv("RABBITMQ_QUEUE_MAIN", "pipelines.queue")
     )
+    queue_dispatch: str = Field(
+        default_factory=lambda: os.getenv(
+            "RABBITMQ_QUEUE_DISPATCH", "pipelines.dispatch"
+        )
+    )
     queue_update: str = Field(
         default_factory=lambda: os.getenv("RABBITMQ_QUEUE_UPDATE", "pipelines.update")
     )
@@ -26,14 +31,24 @@ class RabbitMQConfig(BaseSettings):
             "RABBITMQ_QUEUE_MAIN_DLQ", "pipelines.queue.dlq"
         )
     )
+    queue_dispatch_dlq: str = Field(
+        default_factory=lambda: os.getenv(
+            "RABBITMQ_QUEUE_DISPATCH_DLQ", "pipelines.dispatch.dlq"
+        )
+    )
     queue_update_dlq: str = Field(
         default_factory=lambda: os.getenv(
             "RABBITMQ_QUEUE_UPDATE_DLQ", "pipelines.update.dlq"
         )
     )
 
-    routing_submit: str = Field(
+    routing_compute: str = Field(
         default_factory=lambda: os.getenv("RABBITMQ_ROUTING_SUBMIT", "pipelines.submit")
+    )
+    routing_dispatch: str = Field(
+        default_factory=lambda: os.getenv(
+            "RABBITMQ_ROUTING_DISPATCH", "pipelines.dispatch"
+        )
     )
     routing_update: str = Field(
         default_factory=lambda: os.getenv("RABBITMQ_ROUTING_UPDATE", "pipelines.update")

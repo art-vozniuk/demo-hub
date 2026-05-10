@@ -28,9 +28,11 @@ class PipelineStatusRequest(BaseModel):
 
 class PipelineStatusItem(BaseModel):
     id: UUID
+    pipeline_name: str
     status: PipelineStatus
     message: str | None = None
     result: dict[str, Any] | None = None
+    eta_seconds: float | None = None
 
     model_config = {"from_attributes": True}
 

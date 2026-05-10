@@ -20,6 +20,7 @@ jobs:
       core: ${{ steps.diff.outputs.core }}
       web: ${{ steps.diff.outputs.web }}
       compute: ${{ steps.diff.outputs.compute }}
+      dispatch: ${{ steps.diff.outputs.dispatch }}
     steps:
       - name: checkout repository
         uses: actions/checkout@v4
@@ -31,9 +32,10 @@ jobs:
         run: |
           if ! BASE=$(git rev-parse last-deploy 2>/dev/null); then
             echo "No 'last-deploy' tag found — building everything."
-            echo "core=true"    >> $GITHUB_OUTPUT
-            echo "web=true"     >> $GITHUB_OUTPUT
-            echo "compute=true" >> $GITHUB_OUTPUT
+            echo "core=true"     >> $GITHUB_OUTPUT
+            echo "web=true"      >> $GITHUB_OUTPUT
+            echo "compute=true"  >> $GITHUB_OUTPUT
+            echo "dispatch=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
@@ -43,19 +45,22 @@ jobs:
           has_core=false
           has_web=false
           has_compute=false
+          has_dispatch=false
 
           echo "$changed" | grep -qE '^services/core/|^services/common/' && has_core=true
           echo "$changed" | grep -qE '^services/web/'                    && has_web=true
           echo "$changed" | grep -qE '^services/compute/|^services/common/|^services/external/face_swap' && has_compute=true
+          echo "$changed" | grep -qE '^services/dispatch/|^services/common/' && has_dispatch=true
 
-          echo "core=$has_core"       >> $GITHUB_OUTPUT
-          echo "web=$has_web"         >> $GITHUB_OUTPUT
-          echo "compute=$has_compute" >> $GITHUB_OUTPUT
+          echo "core=$has_core"         >> $GITHUB_OUTPUT
+          echo "web=$has_web"           >> $GITHUB_OUTPUT
+          echo "compute=$has_compute"   >> $GITHUB_OUTPUT
+          echo "dispatch=$has_dispatch" >> $GITHUB_OUTPUT
 
           echo "Changed files:"
           echo "$changed"
           echo "---"
-          echo "core=$has_core web=$has_web compute=$has_compute"
+          echo "core=$has_core web=$has_web compute=$has_compute dispatch=$has_dispatch"
 
   build-core:
     needs: [check-changes]
@@ -75,6 +80,12 @@ jobs:
     uses: ./.github/workflows/build-compute-cpu.yml
     secrets: inherit
 
+  build-dispatch:
+    needs: [check-changes]
+    if: needs.check-changes.outputs.dispatch == 'true'
+    uses: ./.github/workflows/build-dispatch.yml
+    secrets: inherit
+
   # Runs in parallel with other builds. Skips the Emscripten compile when the
   # renderer submodule commit hasn't changed since the last deploy.
   build-renderer:
@@ -82,7 +93,7 @@ jobs:
     secrets: inherit
 
   deploy:
-    needs: [check-changes, build-core, build-web, build-compute-cpu, build-renderer]
+    needs: [check-changes, build-core, build-web, build-compute-cpu, build-dispatch, build-renderer]
     # Run deploy even when some builds were skipped (not needed).
     if: |
       always() &&
@@ -120,11 +131,12 @@ jobs:
           CHANGED_CORE: ${{ needs.check-changes.outputs.core }}
           CHANGED_WEB: ${{ needs.check-changes.outputs.web }}
           CHANGED_COMPUTE: ${{ needs.check-changes.outputs.compute }}
+          CHANGED_DISPATCH: ${{ needs.check-changes.outputs.dispatch }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: RABBITMQ_USER,RABBITMQ_PASSWORD,CERTBOT_EMAIL,CERTBOT_DOMAINS,GHCR_TOKEN,GH_ACTOR,GH_REPO,CHANGED_CORE,CHANGED_WEB,CHANGED_COMPUTE
+          envs: RABBITMQ_USER,RABBITMQ_PASSWORD,CERTBOT_EMAIL,CERTBOT_DOMAINS,GHCR_TOKEN,GH_ACTOR,GH_REPO,CHANGED_CORE,CHANGED_WEB,CHANGED_COMPUTE,CHANGED_DISPATCH
           script: |
             set -euo pipefail
 
@@ -160,9 +172,10 @@ jobs:
             # for a tiny core/web change. check-changes already computed
             # which services moved — re-use those flags here.
             services_to_pull=""
-            [ "${CHANGED_CORE:-true}"    = "true" ] && services_to_pull="$services_to_pull core"
-            [ "${CHANGED_WEB:-true}"     = "true" ] && services_to_pull="$services_to_pull web"
-            [ "${CHANGED_COMPUTE:-true}" = "true" ] && services_to_pull="$services_to_pull compute"
+            [ "${CHANGED_CORE:-true}"     = "true" ] && services_to_pull="$services_to_pull core"
+            [ "${CHANGED_WEB:-true}"      = "true" ] && services_to_pull="$services_to_pull web"
+            [ "${CHANGED_COMPUTE:-true}"  = "true" ] && services_to_pull="$services_to_pull compute"
+            [ "${CHANGED_DISPATCH:-true}" = "true" ] && services_to_pull="$services_to_pull dispatch"
             if [ -n "$services_to_pull" ]; then
               echo "Pulling images for changed services:$services_to_pull"
               docker compose pull $services_to_pull

@@ -83,6 +83,20 @@ services:
     networks:
       - app_network
 
+  dispatch:
+    build:
+      context: .
+      dockerfile: services/dispatch/Dockerfile
+    volumes:
+      - ./services/dispatch/.env.docker:/app/.env:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app_network
+
   web:
     build:
       context: .

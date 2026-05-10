@@ -19,6 +19,8 @@ from .schemas import (
 )
 from . import service
 from .estimation import estimate_pipeline
+from .input_resolution import resolve_pipeline_input
+from .routing import get_routing_key, known_pipeline_names
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +81,16 @@ async def queue_pipelines(
                 f"Must be between 1 and {config.MAX_PIPELINES_PER_REQUEST}.",
             )
 
+        for job in request.jobs:
+            if job.pipeline_name not in known_pipeline_names():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Unknown pipeline_name: {job.pipeline_name!r}",
+                )
+
         connection = await get_connection()
+        # Legacy gauge — only counts the compute pool. Per-pipeline ETAs
+        # via /pipelines/{id}/estimate are the actual UX signal.
         queue_length = await connection.get_queue_length(rabbitmq_config.queue_main)
 
         pipeline_ids = []
@@ -88,10 +99,11 @@ async def queue_pipelines(
         for job in request.jobs:
             pipeline_id = job.pipeline_id
             pipeline_name = job.pipeline_name
+            routing_key = get_routing_key(pipeline_name)
 
             context_pipeline_id.set(str(pipeline_id))
 
-            log.info(f"Creating pipeline: {pipeline_name}")
+            log.info(f"Creating pipeline: {pipeline_name} -> {routing_key}")
 
             await service.create_pipeline(
                 db=db,
@@ -100,16 +112,18 @@ async def queue_pipelines(
                 pipeline_name=pipeline_name,
             )
 
+            resolved_input = await resolve_pipeline_input(db, pipeline_name, job.input)
+
             message = {
                 "trace_id": str(trace_id),
                 "pipeline_id": str(pipeline_id),
                 "pipeline_name": pipeline_name,
-                "input": job.input,
+                "input": resolved_input,
                 "enqueued_at": datetime.utcnow().isoformat(),
             }
 
             await publisher.publish(
-                routing_key=rabbitmq_config.routing_submit,
+                routing_key=routing_key,
                 message=message,
                 trace_id=str(trace_id),
                 pipeline_id=str(pipeline_id),

@@ -16,7 +16,11 @@ export type AnalyticsEvent =
   | { name: 'back_to_templates'; params: { source: string } }
   | { name: 'nav_home_clicked'; params: Record<string, never> }
   | { name: 'nav_facefusion_clicked'; params: Record<string, never> }
+  | { name: 'nav_generative_clicked'; params: Record<string, never> }
   | { name: 'nav_renderer_clicked'; params: Record<string, never> }
+  | { name: 'generative_preset_opened'; params: { preset_slug: string } }
+  | { name: 'generative_generate_started'; params: { preset_slug: string; pipeline_id: string } }
+  | { name: 'generative_github_repo_clicked'; params: Record<string, never> }
   | { name: 'footer_link_clicked'; params: { link_name: string; url: string } }
   | { name: 'home_linkedin_clicked'; params: Record<string, never> }
   | { name: 'home_github_clicked'; params: Record<string, never> }
