@@ -161,4 +161,4 @@ deploy-web:
 	docker compose -f docker-compose.local.yml up --build web --detach
 
 deploy-services:
-	docker compose -f docker-compose.local.yml up --build web core compute --detach
+	docker compose -f docker-compose.local.yml up --build web core compute dispatch --detach

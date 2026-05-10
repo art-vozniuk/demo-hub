@@ -131,14 +131,15 @@ def preload_weights() -> str:
 @modal.concurrent(max_inputs=1)
 class FluxInference:
     @modal.enter(snap=True)
-    def load(self) -> None:
-        """Cold-start hook: loads pipeline weights from the volume onto
-        the GPU. Modal snapshots RAM after this returns, so later cold
-        starts skip the heavy disk + GPU upload and restore in ~1s."""
+    def load_to_cpu(self) -> None:
+        """Snapshot hook: runs ONCE on a CPU-only container before Modal
+        captures the memory snapshot. Loads pipeline weights from the
+        volume into RAM. The snapshot freezes RAM at this point, so all
+        future cold starts skip this expensive disk read."""
 
         log.info(
-            "cold-start: load() begin; this runs the FIRST time after a "
-            "deploy or after the warm window expires"
+            "snapshot-load: load_to_cpu() begin; runs once during snapshot "
+            "creation on a CPU container (no GPU attached here yet)"
         )
         t0 = time.perf_counter()
 
@@ -148,19 +149,28 @@ class FluxInference:
         )
         from_pretrained_ms = (time.perf_counter() - t0) * 1000
         log.info(
-            f"cold-start: from_pretrained({MODEL_LOCAL_DIR}) "
-            f"finished in {from_pretrained_ms:.0f}ms"
+            f"snapshot-load: from_pretrained({MODEL_LOCAL_DIR}) "
+            f"finished in {from_pretrained_ms:.0f}ms; "
+            "Modal will snapshot RAM after this returns"
         )
 
-        t1 = time.perf_counter()
-        self.pipe.to("cuda")
-        to_cuda_ms = (time.perf_counter() - t1) * 1000
+    @modal.enter(snap=False)
+    def move_to_gpu(self) -> None:
+        """Post-restore hook: runs on every cold start AFTER snapshot
+        restore (or fresh start), this time on the real GPU container.
+        Cheap because weights are already in RAM — we just shuttle them
+        across PCIe to the A10G."""
 
-        total_ms = (time.perf_counter() - t0) * 1000
         log.info(
-            f"cold-start: pipe.to(cuda) finished in {to_cuda_ms:.0f}ms; "
-            f"load() total {total_ms:.0f}ms; ready to serve. "
-            "Modal will snapshot RAM after this point."
+            "post-restore: move_to_gpu() begin; runs after each container "
+            "start, with the GPU now attached"
+        )
+        t0 = time.perf_counter()
+        self.pipe.to("cuda")
+        to_cuda_ms = (time.perf_counter() - t0) * 1000
+        log.info(
+            f"post-restore: pipe.to(cuda) finished in {to_cuda_ms:.0f}ms; "
+            "ready to serve"
         )
 
     @modal.method()
