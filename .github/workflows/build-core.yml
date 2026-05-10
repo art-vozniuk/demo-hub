@@ -39,8 +39,8 @@ jobs:
           S3_ENDPOINT=${{ secrets.S3_ENDPOINT }}
           S3_PUBLIC_BUCKETS_ENDPOINT=${{ secrets.S3_PUBLIC_BUCKETS_ENDPOINT }}
           S3_REGION=${{ secrets.S3_REGION }}
-          TEST_USER_EMAIL=${{ secrets.TEST_USER_EMAIL }}
-          TEST_USER_PASSWORD=${{ secrets.TEST_USER_PASSWORD }}
+          WALLET_COOKIE_SECRET=${{ secrets.WALLET_COOKIE_SECRET }}
+          TURNSTILE_SECRET=${{ secrets.TURNSTILE_SECRET }}
           EOF
 
       - name: login to GHCR
