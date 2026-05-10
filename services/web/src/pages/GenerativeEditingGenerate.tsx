@@ -446,8 +446,11 @@ const GenerativeEditingGenerate = () => {
                   className="w-full h-full object-cover"
                 />
                 {isUploading && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-background/70 text-sm">
-                    Uploading…
+                  <div className="absolute inset-0 flex items-center justify-center bg-background/80">
+                    <div className="text-center">
+                      <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-primary border-r-transparent mb-2" />
+                      <p className="text-sm text-muted-foreground">Uploading…</p>
+                    </div>
                   </div>
                 )}
               </div>
@@ -469,22 +472,6 @@ const GenerativeEditingGenerate = () => {
               {errorMessage}
             </div>
           )}
-
-          <div className="flex justify-center">
-            <Button
-              size="lg"
-              disabled={!canGenerate}
-              onClick={handleGenerate}
-              className="hover-glow text-base font-semibold px-10 py-5 shadow-elegant"
-            >
-              <Sparkles className="mr-2 h-5 w-5" />
-              {isUploading
-                ? "Uploading…"
-                : isProcessing
-                  ? "Generating…"
-                  : "Generate"}
-            </Button>
-          </div>
         </div>
 
         <div className="space-y-4">
@@ -502,6 +489,20 @@ const GenerativeEditingGenerate = () => {
             estimatedFinishAt={estimatedFinishAt}
             workersMissing={workersMissing}
           />
+
+          {!isProcessing && !pipelineId && (
+            <div className="flex justify-center animate-fade-in">
+              <Button
+                size="lg"
+                disabled={!canGenerate}
+                onClick={handleGenerate}
+                className="hover-glow text-base font-semibold px-10 py-5 shadow-elegant"
+              >
+                <Sparkles className="mr-2 h-5 w-5" />
+                {isUploading ? "Uploading…" : "Generate"}
+              </Button>
+            </div>
+          )}
 
           {canRefineFace && (
             <div className="flex justify-center items-center gap-2">
