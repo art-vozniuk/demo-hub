@@ -49,7 +49,9 @@ function activeStageIndex(
     if (remaining > 2) return 2;
     return 3;
   }
-  if (status.status === "COMPLETED") return 4;
+  // Past every stage so all entries (including "Done") render as completed
+  // — not as the active spinner. Comparison-friendly sentinel.
+  if (status.status === "COMPLETED") return Number.POSITIVE_INFINITY;
   if (status.status === "FAILED") return -1;
   return 0;
 }
@@ -95,6 +97,7 @@ const PipelineProgress = ({
       : null;
 
   const failed = status?.status === "FAILED";
+  const completed = status?.status === "COMPLETED";
   const active = activeStageIndex(status, remainingSeconds);
 
   return (
@@ -156,9 +159,13 @@ const PipelineProgress = ({
       )}
 
       {/* Overall progress bar — proxy via the elapsed/total ratio when an
-          estimate is present, otherwise a slim indeterminate shimmer. */}
+          estimate is present, otherwise a slim indeterminate shimmer.
+          Snaps to 100% on completion so a wrong-low estimate doesn't
+          leave the bar stuck partway after the result is already in. */}
       <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
-        {remainingSeconds != null && target != null ? (
+        {completed ? (
+          <div className="h-full w-full bg-primary" />
+        ) : remainingSeconds != null && target != null ? (
           <div
             className="h-full bg-primary transition-[width] duration-300 ease-out"
             style={{

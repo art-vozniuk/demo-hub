@@ -336,8 +336,21 @@ const GenerativeEditingGenerate = () => {
                     Uploading…
                   </div>
                 )}
+                {resultUrl && (
+                  <div className="absolute top-2 right-2">
+                    <Button
+                      onClick={handleDownload}
+                      size="sm"
+                      variant="secondary"
+                      className="h-8 w-8 p-0 rounded-full shadow-lg"
+                      title="Download image"
+                    >
+                      <Download className="h-4 w-4" />
+                    </Button>
+                  </div>
+                )}
               </div>
-              <div className="flex justify-between gap-2">
+              {!pipelineId && (
                 <Button
                   variant="ghost"
                   size="sm"
@@ -346,12 +359,7 @@ const GenerativeEditingGenerate = () => {
                 >
                   Replace photo
                 </Button>
-                {resultUrl && (
-                  <Button variant="outline" size="sm" onClick={handleDownload}>
-                    <Download className="mr-2 h-4 w-4" /> Download
-                  </Button>
-                )}
-              </div>
+              )}
             </div>
           )}
 
