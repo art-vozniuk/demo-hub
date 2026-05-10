@@ -4,10 +4,10 @@ import { v4 as uuidv4 } from "uuid";
 import { ArrowLeft, Info, Sparkles, UserRoundCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import UploadDropzone from "@/components/UploadDropzone";
 import GenerationCard from "@/components/GenerationCard";
 import {
@@ -514,8 +514,8 @@ const GenerativeEditingGenerate = () => {
                 <UserRoundCheck className="h-4 w-4" />
                 Match the face to your photo
               </Button>
-              <Tooltip>
-                <TooltipTrigger asChild>
+              <Popover>
+                <PopoverTrigger asChild>
                   <button
                     type="button"
                     aria-label="What this does"
@@ -523,14 +523,17 @@ const GenerativeEditingGenerate = () => {
                   >
                     <Info className="h-4 w-4" />
                   </button>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-xs">
+                </PopoverTrigger>
+                <PopoverContent
+                  side="top"
+                  className="max-w-xs w-auto p-3"
+                >
                   <p className="text-xs leading-relaxed">
                     Can improve face recognizability, but may introduce
                     artifacts — especially on heavily stylized images.
                   </p>
-                </TooltipContent>
-              </Tooltip>
+                </PopoverContent>
+              </Popover>
             </div>
           )}
 
