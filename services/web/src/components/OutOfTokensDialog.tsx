@@ -41,12 +41,6 @@ const OutOfTokensDialog = ({ open, onOpenChange }: OutOfTokensDialogProps) => {
                 LinkedIn
               </a>
             </Button>
-            <Button variant="outline" size="sm" asChild>
-              <a href={CONTACT_EMAIL}>
-                <Mail className="mr-2 h-4 w-4" />
-                Email
-              </a>
-            </Button>
           </div>
           <Button onClick={() => onOpenChange(false)}>Close</Button>
         </DialogFooter>
