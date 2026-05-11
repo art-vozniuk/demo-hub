@@ -41,9 +41,7 @@ async def verify_turnstile(request: Request) -> bool:
             )
             data = resp.json()
             if not data.get("success"):
-                log.warning(
-                    f"Turnstile rejected: {data.get('error-codes')}"
-                )
+                log.warning(f"Turnstile rejected: {data.get('error-codes')}")
                 return False
             return True
     except Exception as e:

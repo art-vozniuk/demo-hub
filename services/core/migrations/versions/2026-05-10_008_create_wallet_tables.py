@@ -45,9 +45,7 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("name", name="uq_pipeline_types_name"),
-        sa.CheckConstraint(
-            "base_cost >= 0", name="ck_pipeline_types_base_cost_nonneg"
-        ),
+        sa.CheckConstraint("base_cost >= 0", name="ck_pipeline_types_base_cost_nonneg"),
     )
 
     pipeline_types_tbl = sa.table(
@@ -121,9 +119,7 @@ def upgrade() -> None:
         "token_transactions",
         ["user_id"],
         unique=True,
-        postgresql_where=sa.text(
-            "reason = 'signup_grant' AND user_id IS NOT NULL"
-        ),
+        postgresql_where=sa.text("reason = 'signup_grant' AND user_id IS NOT NULL"),
     )
     # Idempotency: at most one anon_grant per anon cookie.
     op.create_index(
@@ -131,9 +127,7 @@ def upgrade() -> None:
         "token_transactions",
         ["anon_id"],
         unique=True,
-        postgresql_where=sa.text(
-            "reason = 'anon_grant' AND anon_id IS NOT NULL"
-        ),
+        postgresql_where=sa.text("reason = 'anon_grant' AND anon_id IS NOT NULL"),
     )
 
 
@@ -150,9 +144,7 @@ def downgrade() -> None:
         "uq_token_transactions_pipeline_reason",
         table_name="token_transactions",
     )
-    op.drop_index(
-        "ix_token_transactions_pipeline_id", table_name="token_transactions"
-    )
+    op.drop_index("ix_token_transactions_pipeline_id", table_name="token_transactions")
     op.drop_index(
         "ix_token_transactions_anon_id_created_at",
         table_name="token_transactions",

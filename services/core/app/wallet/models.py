@@ -22,9 +22,7 @@ class PipelineType(Base, TimeStampMixin):
 
     __table_args__ = (
         UniqueConstraint("name", name="uq_pipeline_types_name"),
-        CheckConstraint(
-            "base_cost >= 0", name="ck_pipeline_types_base_cost_nonneg"
-        ),
+        CheckConstraint("base_cost >= 0", name="ck_pipeline_types_base_cost_nonneg"),
     )
 
 
@@ -37,9 +35,7 @@ class TokenTransaction(Base):
     user_id = Column(UUID(as_uuid=True), nullable=True)
     anon_id = Column(UUID(as_uuid=True), nullable=True)
     pipeline_id = Column(UUID(as_uuid=True), nullable=True)
-    pipeline_type_id = Column(
-        Integer, ForeignKey("pipeline_types.id"), nullable=True
-    )
+    pipeline_type_id = Column(Integer, ForeignKey("pipeline_types.id"), nullable=True)
     delta = Column(Integer, nullable=False)
     reason = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False)

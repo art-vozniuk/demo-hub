@@ -125,9 +125,7 @@ async def queue_pipelines(
             await wallet_service.grant_signup_if_needed(db, user_uuid)
             existing_anon = read_anon_id(http_request)
             if existing_anon is not None:
-                await wallet_service.migrate_anon_to_user(
-                    db, user_uuid, existing_anon
-                )
+                await wallet_service.migrate_anon_to_user(db, user_uuid, existing_anon)
 
         connection = await get_connection()
         # Legacy gauge — only counts the compute pool. Per-pipeline ETAs
@@ -147,9 +145,7 @@ async def queue_pipelines(
             ptype = await wallet_service.get_pipeline_type(db, pipeline_name)
             if ptype is None:
                 # Missing seed row = config drift, not a user error.
-                log.error(
-                    f"pipeline_types missing seed row for {pipeline_name!r}"
-                )
+                log.error(f"pipeline_types missing seed row for {pipeline_name!r}")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Pipeline pricing not configured",
@@ -168,8 +164,7 @@ async def queue_pipelines(
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail=(
-                        "Out of tokens. Sign in for more, or contact the "
-                        "site author."
+                        "Out of tokens. Sign in for more, or contact the site author."
                     ),
                 )
 

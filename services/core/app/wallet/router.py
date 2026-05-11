@@ -37,9 +37,7 @@ async def get_balance(
     (+200 user / +15 anon) and migrating anon→user after sign-in."""
 
     # Bundle the cost catalog so the frontend never hardcodes prices.
-    types_result = await db.execute(
-        select(PipelineType.name, PipelineType.base_cost)
-    )
+    types_result = await db.execute(select(PipelineType.name, PipelineType.base_cost))
     pipeline_costs = {name: cost for name, cost in types_result.all()}
     turnstile_required = bool(config.TURNSTILE_SECRET)
 

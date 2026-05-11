@@ -62,12 +62,8 @@ async def get_anon_balance(db: AsyncSession, anon_id: UUID) -> int:
     return int(result.scalar_one())
 
 
-async def get_pipeline_type(
-    db: AsyncSession, name: str
-) -> Optional[PipelineType]:
-    result = await db.execute(
-        select(PipelineType).where(PipelineType.name == name)
-    )
+async def get_pipeline_type(db: AsyncSession, name: str) -> Optional[PipelineType]:
+    result = await db.execute(select(PipelineType).where(PipelineType.name == name))
     return result.scalar_one_or_none()
 
 
@@ -82,9 +78,7 @@ async def grant_signup_if_needed(db: AsyncSession, user_id: UUID) -> None:
         )
         .on_conflict_do_nothing(
             index_elements=["user_id"],
-            index_where=text(
-                "reason = 'signup_grant' AND user_id IS NOT NULL"
-            ),
+            index_where=text("reason = 'signup_grant' AND user_id IS NOT NULL"),
         )
     )
     result = await db.execute(stmt)
@@ -103,9 +97,7 @@ async def grant_anon_if_needed(db: AsyncSession, anon_id: UUID) -> None:
         )
         .on_conflict_do_nothing(
             index_elements=["anon_id"],
-            index_where=text(
-                "reason = 'anon_grant' AND anon_id IS NOT NULL"
-            ),
+            index_where=text("reason = 'anon_grant' AND anon_id IS NOT NULL"),
         )
     )
     result = await db.execute(stmt)
