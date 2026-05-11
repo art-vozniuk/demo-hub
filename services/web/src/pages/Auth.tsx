@@ -47,9 +47,8 @@ const Auth = () => {
         <div className="space-y-4">
           <h1 className="text-4xl font-bold">Sign in</h1>
           <p className="text-base text-muted-foreground leading-relaxed">
-            This demo runs GPU pipelines on Modal, which costs money. To
-            prevent abuse, generations are gated by tokens. Sign in to
-            receive 200 tokens — enough to fully explore the demos.
+            To prevent abuse, generations are gated by tokens.
+            Sign in with Google to add 200 tokens to your balance and keep generating.
           </p>
         </div>
 

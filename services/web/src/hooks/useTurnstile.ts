@@ -62,6 +62,9 @@ export function useTurnstile(enabled: boolean = true) {
   const pendingResolve = useRef<((token: string | null) => void) | null>(null);
   const isReadyRef = useRef(false);
   const readyWaitersRef = useRef<Array<() => void>>([]);
+  // Serializes concurrent getToken() callers — execute() on a widget that's
+  // already running is rejected by Turnstile (and drops the prior pending token).
+  const inFlightRef = useRef<Promise<string | null> | null>(null);
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
@@ -145,7 +148,10 @@ export function useTurnstile(enabled: boolean = true) {
 
     if (!widgetIdRef.current || !window.turnstile) return null;
 
-    return new Promise<string | null>((resolve) => {
+    const prior = inFlightRef.current;
+    if (prior) await prior.catch(() => null);
+
+    const promise = new Promise<string | null>((resolve) => {
       let timer: ReturnType<typeof setTimeout> | null = null;
       const settle = (token: string | null) => {
         if (timer) clearTimeout(timer);
@@ -164,6 +170,11 @@ export function useTurnstile(enabled: boolean = true) {
         settle(null);
       }
     });
+    inFlightRef.current = promise;
+    void promise.finally(() => {
+      if (inFlightRef.current === promise) inFlightRef.current = null;
+    });
+    return promise;
   }, [enabled, siteKey]);
 
   return { getToken, isReady };

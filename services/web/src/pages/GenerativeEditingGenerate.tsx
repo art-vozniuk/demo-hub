@@ -369,6 +369,11 @@ const GenerativeEditingGenerate = () => {
       return;
     }
 
+    // Mount the refine card synchronously so the user sees the source photo +
+    // spinner immediately, instead of staring at an empty slot while Turnstile
+    // and queueing run under the hood.
+    const newRefineId = uuidv4();
+    setRefinePipelineId(newRefineId);
     setIsRefining(true);
     setRefinePipelineStatus(null);
     setRefineEstimatedFinishAt(null);
@@ -376,7 +381,6 @@ const GenerativeEditingGenerate = () => {
 
     try {
       const traceId = uuidv4();
-      const newRefineId = uuidv4();
 
       track({
         name: "generative_refine_face_started",
@@ -423,13 +427,13 @@ const GenerativeEditingGenerate = () => {
             setOutOfTokensDialogOpen(true);
           }
           setIsRefining(false);
+          setRefinePipelineId(null);
           return;
         }
         throw err;
       }
 
       refreshBalance();
-      setRefinePipelineId(newRefineId);
 
       pipelinesApi
         .getEstimate(newRefineId)
@@ -625,7 +629,7 @@ const GenerativeEditingGenerate = () => {
           )}
 
           {canRefineFace && (
-            <div className="flex justify-center items-center gap-2">
+            <div className="flex justify-center items-center gap-2 flex-wrap">
               <Button
                 onClick={handleRefineFace}
                 variant="outline"
@@ -635,6 +639,7 @@ const GenerativeEditingGenerate = () => {
                 <UserRoundCheck className="h-4 w-4" />
                 Match the face to your photo
               </Button>
+              {faceSwapCost !== undefined && <CostBadge cost={faceSwapCost} />}
               <Popover>
                 <PopoverTrigger asChild>
                   <button

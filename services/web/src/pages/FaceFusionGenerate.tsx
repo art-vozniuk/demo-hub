@@ -255,9 +255,13 @@ const FaceFusionGenerate = () => {
 
   useEffect(() => {
     if (selfieS3 && selfieRecognition.status === "idle") {
-      selfieRecognition.run({ bucket: selfieS3.bucket, key: selfieS3.key });
+      selfieRecognition.run({
+        bucket: selfieS3.bucket,
+        key: selfieS3.key,
+        getTurnstileToken: isAnonymous ? turnstile.getToken : undefined,
+      });
     }
-  }, [selfieS3, selfieRecognition]);
+  }, [selfieS3, selfieRecognition, isAnonymous, turnstile]);
 
   // Template upload → S3 → kick face_recognition (custom mode only).
   useEffect(() => {
@@ -292,9 +296,10 @@ const FaceFusionGenerate = () => {
       templateRecognition.run({
         bucket: templateS3.bucket,
         key: templateS3.key,
+        getTurnstileToken: isAnonymous ? turnstile.getToken : undefined,
       });
     }
-  }, [isCustom, templateS3, templateRecognition]);
+  }, [isCustom, templateS3, templateRecognition, isAnonymous, turnstile]);
 
   const pollPipelineStatuses = useCallback(
     async (ids: string[]) => {

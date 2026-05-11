@@ -36,33 +36,25 @@ const FaceFusion = () => {
 
     const loadTemplates = async () => {
       try {
-        console.log("Fetching templates from API...");
         const templates = await recastApi.getTemplates();
-        console.log(`Received ${templates.length} templates from API`);
-        
+
         let loadedCount = 0;
         let initialLoadingCompleted = false;
 
-        templates.forEach((template, index) => {
+        templates.forEach((template) => {
           const img = new Image();
-          
+
           const handleLoad = () => {
             loadedCount++;
-            console.log(`Template ${index + 1}/${templates.length} loaded: ${template.name} (${loadedCount} total)`);
-            
-            setLoadedTemplates((prev) => {
-              console.log(`Adding template to state. Previous count: ${prev.length}, New count: ${prev.length + 1}`);
-              return [...prev, template];
-            });
-            
+            setLoadedTemplates((prev) => [...prev, template]);
+
             if (loadedCount === MIN_TEMPLATES_TO_SHOW && !initialLoadingCompleted) {
               initialLoadingCompleted = true;
-              console.log(`Reached ${MIN_TEMPLATES_TO_SHOW} loaded templates - showing page`);
               setIsInitialLoading(false);
               track({ name: 'template_viewed', params: { template_count: MIN_TEMPLATES_TO_SHOW } });
             }
           };
-          
+
           img.onload = handleLoad;
           img.onerror = handleLoad;
           img.src = template.url;

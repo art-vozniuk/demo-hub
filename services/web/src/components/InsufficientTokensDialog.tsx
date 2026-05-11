@@ -51,8 +51,8 @@ const InsufficientTokensDialog = ({
             Need {cost} tokens, you have {balance}
           </DialogTitle>
           <DialogDescription className="pt-2 leading-relaxed">
-            Sign in with Google to add 200 tokens to your balance and keep
-            generating. Free, no card required.
+            To prevent abuse, generations are gated by tokens.
+            Sign in with Google to add 200 tokens to your balance and keep generating.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter className="gap-2 sm:gap-0">
