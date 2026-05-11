@@ -2,7 +2,7 @@ import io
 import logging
 from typing import List, Optional, Sequence
 
-from PIL import Image
+from PIL import Image, ImageOps
 from insightface.app.common import Face
 
 from services.external.face_swap.reactor_api import (
@@ -58,7 +58,8 @@ class FaceRecognitionPipeline(Pipeline):
         self.image = image
 
     def run(self) -> dict:
-        pil = Image.open(io.BytesIO(self.image)).convert("RGB")
+        # Bake EXIF Orientation so face bboxes match what the user sees.
+        pil = ImageOps.exif_transpose(Image.open(io.BytesIO(self.image))).convert("RGB")
         faces = detect_faces(pil)
 
         out_faces: List[dict] = []
@@ -97,8 +98,12 @@ class FaceSwapPipeline(Pipeline):
         self.target_face_bbox = target_face_bbox
 
     def run(self) -> dict:
-        source = Image.open(io.BytesIO(self.source_image)).convert("RGB")
-        target = Image.open(io.BytesIO(self.target_image)).convert("RGB")
+        source = ImageOps.exif_transpose(
+            Image.open(io.BytesIO(self.source_image))
+        ).convert("RGB")
+        target = ImageOps.exif_transpose(
+            Image.open(io.BytesIO(self.target_image))
+        ).convert("RGB")
 
         source_faces = detect_faces(source)
         target_faces = detect_faces(target)

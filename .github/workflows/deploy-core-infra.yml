@@ -191,7 +191,9 @@ jobs:
 
             echo "Testing ACME challenge path (must return 200)..."
             docker compose exec -T nginx sh -lc 'mkdir -p /var/www/letsencrypt/.well-known/acme-challenge && echo ok > /var/www/letsencrypt/.well-known/acme-challenge/test.txt'
-            curl -fsS "http://artemv.tech/.well-known/acme-challenge/test.txt" | grep -qx "ok"
+            # --retry-connrefused absorbs the gap between `compose up` returning
+            # and jonasal/nginx-certbot's init scripts actually binding port 80.
+            curl -fsS --retry 12 --retry-delay 5 --retry-connrefused "http://artemv.tech/.well-known/acme-challenge/test.txt" | grep -qx "ok"
 
             echo "Attempting certbot renew (safe to run every deploy)..."
             docker compose exec -T nginx certbot renew || true
