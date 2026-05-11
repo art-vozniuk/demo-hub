@@ -1,19 +1,36 @@
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { Button } from "@/components/ui/button";
-import { User, LogOut } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { User, LogOut, ChevronDown } from "lucide-react";
+
+type NavItem = { to: string; label: string; end?: boolean };
 
 const Navbar = () => {
   const { user, signOut } = useAuth();
   const { track } = useAnalytics();
-  
-  const navLinks = [
+  const location = useLocation();
+
+  const primaryLinks: NavItem[] = [
     { to: "/generative-editing", label: "Generative Editing" },
-    { to: "/face-fusion", label: "Face Swap" },
-    { to: "/renderer", label: "Gaussian Splatting" },
-    { to: "/author", label: "Author" },
   ];
+
+  const moreLinks: NavItem[] = [
+    { to: "/renderer", label: "Gaussian Splatting" },
+    { to: "/face-fusion", label: "Face Swap" },
+    { to: "/author", label: "Author", end: true },
+  ];
+
+  const isLinkActive = (link: NavItem) =>
+    link.end ? location.pathname === link.to : location.pathname.startsWith(link.to);
+
+  const isMoreActive = moreLinks.some(isLinkActive);
 
   const handleSignOut = async () => {
     try {
@@ -35,34 +52,65 @@ const Navbar = () => {
     }
   };
 
+  const navLinkClassName = ({ isActive }: { isActive: boolean }) =>
+    `relative whitespace-nowrap text-xs sm:text-sm font-medium transition-colors hover:text-primary ${
+      isActive ? "text-primary" : "text-muted-foreground"
+    } after:absolute after:-bottom-1 after:left-0 after:h-0.5 after:w-full after:origin-left after:scale-x-0 after:bg-primary after:transition-transform after:duration-300 ${
+      isActive ? "after:scale-x-100" : "hover:after:scale-x-100"
+    }`;
+
   return (
     <nav className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md">
       <div className="container mx-auto flex h-16 items-center justify-between px-3 sm:px-6">
         <h1 className="text-base sm:text-xl font-bold tracking-tight text-gradient">
-          <span className="hidden sm:inline">Demo Hub</span>
-          <span className="sm:hidden">Demo Hub</span>
+          Demo Hub
         </h1>
-        
+
         <div className="flex items-center gap-3 sm:gap-8">
-          <ul className="flex gap-3 sm:gap-8">
-            {navLinks.map((link) => (
+          <ul className="flex items-center gap-3 sm:gap-8">
+            {primaryLinks.map((link) => (
               <li key={link.to}>
                 <NavLink
                   to={link.to}
-                  end={link.to === "/author"}
+                  end={link.end}
                   onClick={() => handleNavClick(link.to)}
-                  className={({ isActive }) =>
-                    `relative text-xs sm:text-sm font-medium transition-colors hover:text-primary ${
-                      isActive ? "text-primary" : "text-muted-foreground"
-                    } after:absolute after:-bottom-1 after:left-0 after:h-0.5 after:w-full after:origin-left after:scale-x-0 after:bg-primary after:transition-transform after:duration-300 ${
-                      isActive ? "after:scale-x-100" : "hover:after:scale-x-100"
-                    }`
-                  }
+                  className={navLinkClassName}
                 >
                   {link.label}
                 </NavLink>
               </li>
             ))}
+            <li>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  aria-label="More navigation"
+                  className={`group relative flex items-center gap-1 whitespace-nowrap text-xs sm:text-sm font-medium outline-none transition-colors hover:text-primary data-[state=open]:text-primary ${
+                    isMoreActive ? "text-primary" : "text-muted-foreground"
+                  } after:absolute after:-bottom-1 after:left-0 after:h-0.5 after:w-full after:origin-left after:scale-x-0 after:bg-primary after:transition-transform after:duration-300 ${
+                    isMoreActive ? "after:scale-x-100" : "hover:after:scale-x-100"
+                  }`}
+                >
+                  More
+                  <ChevronDown className="h-3.5 w-3.5 sm:h-4 sm:w-4 transition-transform duration-200 group-data-[state=open]:rotate-180" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-[10rem]">
+                  {moreLinks.map((link) => (
+                    <DropdownMenuItem key={link.to} asChild>
+                      <NavLink
+                        to={link.to}
+                        end={link.end}
+                        onClick={() => handleNavClick(link.to)}
+                        className={({ isActive }) =>
+                          `w-full cursor-pointer ${isActive ? "text-primary font-medium" : ""}`
+                        }
+                      >
+                        {link.label}
+                      </NavLink>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </li>
           </ul>
 
           {user && (
