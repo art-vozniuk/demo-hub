@@ -31,10 +31,10 @@ const TokenBalance = () => {
         <button
           type="button"
           className={cn(
-            "inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-full border text-xs sm:text-sm font-medium transition-colors hover:bg-amber-500/10",
+            "inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-full border text-xs sm:text-sm font-medium transition-colors hover:bg-primary/10",
             lowBalance
               ? "border-destructive/40 text-destructive"
-              : "border-amber-500/40 text-amber-300",
+              : "border-primary/40 text-primary",
           )}
           aria-label={`${balance} tokens — click for details`}
         >

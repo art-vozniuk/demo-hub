@@ -13,7 +13,7 @@ const CostBadge = ({ cost, size = "sm", className }: CostBadgeProps) => {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-300",
+        "inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 text-primary",
         isCompact ? "px-2 py-0.5 text-xs" : "px-3 py-1 text-sm",
         className,
       )}
