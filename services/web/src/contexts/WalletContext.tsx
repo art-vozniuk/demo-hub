@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 
 import { walletApi, type BalanceResponse, ApiError } from '@/api';
 import { useAuth } from '@/contexts/AuthContext';
@@ -21,20 +21,29 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
   const [isAnonymous, setIsAnonymous] = useState<boolean | null>(null);
   const [costs, setCosts] = useState<Record<string, number> | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  // Coalesce concurrent /me/balance calls so StrictMode + auth state
+  // churn don't each create their own anon cookie/grant.
+  const inFlightRef = useRef<Promise<void> | null>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      const resp: BalanceResponse = await walletApi.getBalance();
-      setBalance(resp.tokens);
-      setIsAnonymous(resp.is_anonymous);
-      setCosts(resp.pipeline_costs);
-    } catch (err) {
-      if (!(err instanceof ApiError) || err.status !== 401) {
-        console.warn('balance refresh failed:', err);
+  const refresh = useCallback((): Promise<void> => {
+    if (inFlightRef.current) return inFlightRef.current;
+    const promise = (async () => {
+      try {
+        const resp: BalanceResponse = await walletApi.getBalance();
+        setBalance(resp.tokens);
+        setIsAnonymous(resp.is_anonymous);
+        setCosts(resp.pipeline_costs);
+      } catch (err) {
+        if (!(err instanceof ApiError) || err.status !== 401) {
+          console.warn('balance refresh failed:', err);
+        }
+      } finally {
+        setIsLoading(false);
+        inFlightRef.current = null;
       }
-    } finally {
-      setIsLoading(false);
-    }
+    })();
+    inFlightRef.current = promise;
+    return promise;
   }, []);
 
   useEffect(() => {

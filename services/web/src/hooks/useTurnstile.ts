@@ -49,14 +49,19 @@ const loadScript = (): Promise<void> => {
   return scriptPromise;
 };
 
+const READY_WAIT_MS = 10_000;
+const EXECUTE_TIMEOUT_MS = 15_000;
+
 // Invisible Turnstile widget; getToken() resolves a fresh challenge.
-// Returns null tokens when disabled or VITE_TURNSTILE_SITE_KEY is unset.
+// Returns null tokens when disabled or VITE_TURNSTILE_SITE_KEY is unset,
+// or when the widget fails to produce a token within the timeout.
 export function useTurnstile(enabled: boolean = true) {
   const siteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const widgetIdRef = useRef<string | null>(null);
-  const pendingResolve = useRef<((token: string) => void) | null>(null);
-  const pendingReject = useRef<((err: Error) => void) | null>(null);
+  const pendingResolve = useRef<((token: string | null) => void) | null>(null);
+  const isReadyRef = useRef(false);
+  const readyWaitersRef = useRef<Array<() => void>>([]);
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
@@ -83,20 +88,21 @@ export function useTurnstile(enabled: boolean = true) {
           callback: (token: string) => {
             const resolve = pendingResolve.current;
             pendingResolve.current = null;
-            pendingReject.current = null;
             resolve?.(token);
           },
           'error-callback': () => {
-            const reject = pendingReject.current;
+            const resolve = pendingResolve.current;
             pendingResolve.current = null;
-            pendingReject.current = null;
-            reject?.(new Error('turnstile error'));
+            resolve?.(null);
           },
           'expired-callback': () => {
             // Harmless: next execute() mints a fresh token.
           },
         });
+        isReadyRef.current = true;
         setIsReady(true);
+        readyWaitersRef.current.forEach((r) => r());
+        readyWaitersRef.current = [];
       })
       .catch((err) => {
         console.warn('turnstile load failed:', err);
@@ -116,29 +122,49 @@ export function useTurnstile(enabled: boolean = true) {
         container.remove();
         containerRef.current = null;
       }
+      isReadyRef.current = false;
       setIsReady(false);
     };
   }, [enabled, siteKey]);
 
-  const getToken = useCallback((): Promise<string | null> => {
-    if (!enabled || !siteKey) return Promise.resolve(null);
-    if (!isReady || !widgetIdRef.current || !window.turnstile) {
-      return Promise.resolve(null);
+  const getToken = useCallback(async (): Promise<string | null> => {
+    if (!enabled || !siteKey) return null;
+
+    // Wait until the widget is mounted, in case the user clicks Generate
+    // before the script finished loading. Bounded so we never hang.
+    if (!isReadyRef.current) {
+      const ready = await new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => resolve(false), READY_WAIT_MS);
+        readyWaitersRef.current.push(() => {
+          clearTimeout(timer);
+          resolve(true);
+        });
+      });
+      if (!ready) return null;
     }
 
-    return new Promise((resolve, reject) => {
-      pendingResolve.current = resolve as (token: string) => void;
-      pendingReject.current = reject;
+    if (!widgetIdRef.current || !window.turnstile) return null;
+
+    return new Promise<string | null>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const settle = (token: string | null) => {
+        if (timer) clearTimeout(timer);
+        pendingResolve.current = null;
+        resolve(token);
+      };
+      pendingResolve.current = settle;
+      timer = setTimeout(() => {
+        if (pendingResolve.current === settle) settle(null);
+      }, EXECUTE_TIMEOUT_MS);
       try {
         window.turnstile!.reset(widgetIdRef.current!);
         window.turnstile!.execute(widgetIdRef.current!);
       } catch (err) {
-        pendingResolve.current = null;
-        pendingReject.current = null;
-        reject(err as Error);
+        console.warn('turnstile execute failed:', err);
+        settle(null);
       }
     });
-  }, [enabled, siteKey, isReady]);
+  }, [enabled, siteKey]);
 
   return { getToken, isReady };
 }
