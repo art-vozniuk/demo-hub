@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from services.common.auth.models import User
 from services.common.database import DbSession
 from services.common.rabbitmq import RabbitMQPublisher, RabbitMQConnection
-from services.common.rabbitmq.config import rabbitmq_config
 from services.common.redis.rate_limit import rate_limit
 from services.core.app.config import config
 
@@ -16,7 +15,8 @@ from .schemas import (
     PipelineStatusRequest,
     PipelineStatusResponse,
     PipelineStatusItem,
-    PipelineEstimateResponse, PipelineJobInput,
+    PipelineEstimateResponse,
+    PipelineJobInput,
 )
 from . import service
 from .estimation import estimate_pipeline
@@ -40,7 +40,7 @@ async def get_connection() -> RabbitMQConnection:
     return await get_rabbitmq_connection()
 
 
-async def get_publisher() -> pipeline:
+async def get_publisher() -> RabbitMQPublisher:
     from services.core.app.dependencies import get_rabbitmq_publisher
 
     return await get_rabbitmq_publisher()
@@ -51,12 +51,13 @@ def _get_user_dep():
 
     return get_current_user
 
+
 async def _process_pipeline(
-        pipeline: PipelineJobInput,
-        publisher: RabbitMQPublisher,
-        db: DbSession,
-        user_uuid: UUID,
-        trace_id: UUID
+    pipeline: PipelineJobInput,
+    publisher: RabbitMQPublisher,
+    db: DbSession,
+    user_uuid: UUID,
+    trace_id: UUID,
 ) -> UUID:
     from services.common.logging.config import context_pipeline_id
 
@@ -157,16 +158,17 @@ async def queue_pipelines(
     await wallet_service.grant_signup_if_needed(db, user_uuid)
 
     publisher = await get_publisher()
-    pipeline_ids = [await _process_pipeline(job, publisher, db, user_uuid, trace_id) for job in request.jobs]
+    pipeline_ids = [
+        await _process_pipeline(job, publisher, db, user_uuid, trace_id)
+        for job in request.jobs
+    ]
 
-    log.info(
-        f"Successfully queued {len(pipeline_ids)} pipelines."
-    )
+    log.info(f"Successfully queued {len(pipeline_ids)} pipelines.")
 
     return QueuePipelinesResponse(
         trace_id=trace_id,
         pipeline_ids=pipeline_ids,
-        queue_length=0, # not used
+        queue_length=0,  # not used
     )
 
 
