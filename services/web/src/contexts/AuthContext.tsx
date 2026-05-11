@@ -37,10 +37,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const signInWithGoogle = async (redirectTo?: string) => {
-    // Defaults to current path so OAuth lands users back where they were.
-    const base = import.meta.env.VITE_APP_URL ?? window.location.origin;
     const path = redirectTo ?? `${window.location.pathname}${window.location.search}`;
-    const redirectUrl = `${base}${path.startsWith('/') ? path : `/${path}`}`;
+    const redirectUrl = `${window.location.origin}${path.startsWith('/') ? path : `/${path}`}`;
 
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
