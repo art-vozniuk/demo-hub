@@ -88,7 +88,7 @@ app.add_middleware(
     allow_origins=config.cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-Turnstile-Token"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 app.add_middleware(ExceptionMiddleware)

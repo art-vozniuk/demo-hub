@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { v4 as uuidv4 } from "uuid";
 import { ArrowLeft, Info, Sparkles, UserRoundCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -21,9 +21,8 @@ import {
 import { uploadToS3, parseS3Url, getFileExtension } from "@/lib/s3";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { useWallet } from "@/contexts/WalletContext";
-import { useTurnstile } from "@/hooks/useTurnstile";
+import { useAuth } from "@/contexts/AuthContext";
 import CostBadge from "@/components/CostBadge";
-import InsufficientTokensDialog from "@/components/InsufficientTokensDialog";
 import OutOfTokensDialog from "@/components/OutOfTokensDialog";
 import { toast } from "sonner";
 
@@ -32,24 +31,30 @@ const POLL_TIMEOUT_MS = 240_000;
 
 const GenerativeEditingGenerate = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { track } = useAnalytics();
   const [searchParams] = useSearchParams();
   const presetSlug = searchParams.get("preset") ?? "";
 
+  const { user, loading: authLoading } = useAuth();
   const {
     balance,
-    isAnonymous,
     getCost,
-    turnstileRequired,
     refresh: refreshBalance,
   } = useWallet();
   const fluxCost = getCost("generative_editing");
   const faceSwapCost = getCost("face_swap");
-  // Mount Turnstile only when backend will actually check for the token.
-  const turnstile = useTurnstile(isAnonymous === true && turnstileRequired);
 
-  const [insufficientDialogOpen, setInsufficientDialogOpen] = useState(false);
-  const [insufficientDialogCost, setInsufficientDialogCost] = useState(0);
+  // Auth-only flow: bounce to /auth and return after sign-in.
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate(`/auth?redirect=${encodeURIComponent(location.pathname + location.search)}`, {
+        replace: true,
+      });
+    }
+  }, [authLoading, user, navigate, location.pathname, location.search]);
+
   const [outOfTokensDialogOpen, setOutOfTokensDialogOpen] = useState(false);
 
   const [preset, setPreset] = useState<GenerativePresetRead | null>(null);
@@ -234,12 +239,7 @@ const GenerativeEditingGenerate = () => {
 
     // Pre-flight gate; server-side charge is still authoritative.
     if (balance !== null && balance < fluxCost) {
-      if (isAnonymous) {
-        setInsufficientDialogCost(fluxCost);
-        setInsufficientDialogOpen(true);
-      } else {
-        setOutOfTokensDialogOpen(true);
-      }
+      setOutOfTokensDialogOpen(true);
       return;
     }
 
@@ -258,37 +258,25 @@ const GenerativeEditingGenerate = () => {
         params: { preset_slug: preset.slug, pipeline_id: newPipelineId },
       });
 
-      const turnstileToken = isAnonymous
-        ? (await turnstile.getToken().catch(() => null)) ?? undefined
-        : undefined;
-
       try {
-        await pipelinesApi.queuePipelines(
-          {
-            trace_id: traceId,
-            jobs: [
-              {
-                pipeline_id: newPipelineId,
-                pipeline_name: "generative_editing",
-                input: {
-                  image_bucket: uploadedRef.bucket,
-                  image_key: uploadedRef.key,
-                  preset_slug: preset.slug,
-                },
+        await pipelinesApi.queuePipelines({
+          trace_id: traceId,
+          jobs: [
+            {
+              pipeline_id: newPipelineId,
+              pipeline_name: "generative_editing",
+              input: {
+                image_bucket: uploadedRef.bucket,
+                image_key: uploadedRef.key,
+                preset_slug: preset.slug,
               },
-            ],
-          },
-          turnstileToken,
-        );
+            },
+          ],
+        });
       } catch (err) {
         if (err instanceof ApiError && err.status === 402) {
           await refreshBalance();
-          if (isAnonymous) {
-            setInsufficientDialogCost(fluxCost);
-            setInsufficientDialogOpen(true);
-          } else {
-            setOutOfTokensDialogOpen(true);
-          }
+          setOutOfTokensDialogOpen(true);
           setIsProcessing(false);
           return;
         }
@@ -337,8 +325,6 @@ const GenerativeEditingGenerate = () => {
     track,
     pollOnce,
     balance,
-    isAnonymous,
-    turnstile,
     refreshBalance,
     fluxCost,
   ]);
@@ -352,12 +338,7 @@ const GenerativeEditingGenerate = () => {
     if (!fluxResultUrl) return;
 
     if (balance !== null && balance < faceSwapCost) {
-      if (isAnonymous) {
-        setInsufficientDialogCost(faceSwapCost);
-        setInsufficientDialogOpen(true);
-      } else {
-        setOutOfTokensDialogOpen(true);
-      }
+      setOutOfTokensDialogOpen(true);
       return;
     }
 
@@ -370,8 +351,8 @@ const GenerativeEditingGenerate = () => {
     }
 
     // Mount the refine card synchronously so the user sees the source photo +
-    // spinner immediately, instead of staring at an empty slot while Turnstile
-    // and queueing run under the hood.
+    // spinner immediately, instead of staring at an empty slot while queueing
+    // runs under the hood.
     const newRefineId = uuidv4();
     setRefinePipelineId(newRefineId);
     setIsRefining(true);
@@ -391,41 +372,29 @@ const GenerativeEditingGenerate = () => {
         },
       });
 
-      const turnstileToken = isAnonymous
-        ? (await turnstile.getToken().catch(() => null)) ?? undefined
-        : undefined;
-
       // Compute auto-detects the largest face on both source and target
       // when bboxes are omitted (see FaceSwapPipelineInput) — that's the
       // only sensible default here since there's no UI for face picking.
       try {
-        await pipelinesApi.queuePipelines(
-          {
-            trace_id: traceId,
-            jobs: [
-              {
-                pipeline_id: newRefineId,
-                pipeline_name: "face_swap",
-                input: {
-                  source_image_bucket: uploadedRef.bucket,
-                  source_image_key: uploadedRef.key,
-                  template_image_bucket: templateRef.bucket,
-                  template_image_key: templateRef.key,
-                },
+        await pipelinesApi.queuePipelines({
+          trace_id: traceId,
+          jobs: [
+            {
+              pipeline_id: newRefineId,
+              pipeline_name: "face_swap",
+              input: {
+                source_image_bucket: uploadedRef.bucket,
+                source_image_key: uploadedRef.key,
+                template_image_bucket: templateRef.bucket,
+                template_image_key: templateRef.key,
               },
-            ],
-          },
-          turnstileToken,
-        );
+            },
+          ],
+        });
       } catch (err) {
         if (err instanceof ApiError && err.status === 402) {
           await refreshBalance();
-          if (isAnonymous) {
-            setInsufficientDialogCost(faceSwapCost);
-            setInsufficientDialogOpen(true);
-          } else {
-            setOutOfTokensDialogOpen(true);
-          }
+          setOutOfTokensDialogOpen(true);
           setIsRefining(false);
           setRefinePipelineId(null);
           return;
@@ -470,8 +439,6 @@ const GenerativeEditingGenerate = () => {
     track,
     pollRefineOnce,
     balance,
-    isAnonymous,
-    turnstile,
     refreshBalance,
     faceSwapCost,
   ]);
@@ -682,12 +649,6 @@ const GenerativeEditingGenerate = () => {
         </div>
       </section>
 
-      <InsufficientTokensDialog
-        open={insufficientDialogOpen}
-        onOpenChange={setInsufficientDialogOpen}
-        cost={insufficientDialogCost}
-        balance={balance ?? 0}
-      />
       <OutOfTokensDialog
         open={outOfTokensDialogOpen}
         onOpenChange={setOutOfTokensDialogOpen}

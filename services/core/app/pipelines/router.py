@@ -1,8 +1,7 @@
 import logging
 from datetime import datetime
-from typing import Optional
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from services.common.auth.models import User
 from services.common.database import DbSession
@@ -29,8 +28,6 @@ from .routing import (
     names_in_same_pool,
 )
 from ..wallet import service as wallet_service
-from ..wallet.cookies import issue_anon_id, read_anon_id
-from ..wallet.turnstile import verify_turnstile
 
 log = logging.getLogger(__name__)
 
@@ -49,10 +46,10 @@ async def get_publisher() -> RabbitMQPublisher:
     return await get_rabbitmq_publisher()
 
 
-def _get_optional_user_dep():
-    from ..dependencies import get_current_user_optional
+def _get_user_dep():
+    from ..dependencies import get_current_user
 
-    return get_current_user_optional
+    return get_current_user
 
 
 @router.post(
@@ -62,10 +59,8 @@ def _get_optional_user_dep():
 )
 async def queue_pipelines(
     request: QueuePipelinesRequest,
-    http_request: Request,
-    http_response: Response,
     db: DbSession,
-    user: Optional[User] = Depends(_get_optional_user_dep()),
+    user: User = Depends(_get_user_dep()),
 ) -> QueuePipelinesResponse:
     from services.common.logging.config import (
         context_trace_id,
@@ -96,25 +91,8 @@ async def queue_pipelines(
                 detail=f"Unknown pipeline_name: {job.pipeline_name!r}",
             )
 
-    # Anonymous: gate via Turnstile and resolve / mint cookie.
-    # Authenticated: lazily grant +200, lazily migrate anon if any.
-    user_uuid: Optional[UUID] = UUID(user.id) if user else None
-    anon_id: Optional[UUID] = None
-    if user is None:
-        if not await verify_turnstile(http_request):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Turnstile verification failed",
-            )
-        anon_id = read_anon_id(http_request)
-        if anon_id is None:
-            anon_id = issue_anon_id(http_response)
-        await wallet_service.grant_anon_if_needed(db, anon_id)
-    else:
-        await wallet_service.grant_signup_if_needed(db, user_uuid)
-        existing_anon = read_anon_id(http_request)
-        if existing_anon is not None:
-            await wallet_service.migrate_anon_to_user(db, user_uuid, existing_anon)
+    user_uuid: UUID = UUID(user.id)
+    await wallet_service.grant_signup_if_needed(db, user_uuid)
 
     connection = await get_connection()
     # Legacy gauge — only counts the compute pool. Per-pipeline ETAs
@@ -147,14 +125,11 @@ async def queue_pipelines(
                 pipeline_type_id=ptype.id,
                 cost=ptype.base_cost,
                 user_id=user_uuid,
-                anon_id=anon_id,
             )
         except wallet_service.InsufficientFunds:
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail=(
-                    "Out of tokens. Sign in for more, or contact the site author."
-                ),
+                detail="Out of tokens. Contact the site author.",
             )
 
         log.info(f"Creating pipeline: {pipeline_name} -> {routing_key}")

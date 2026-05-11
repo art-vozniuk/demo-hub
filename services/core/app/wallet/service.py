@@ -1,6 +1,6 @@
-"""Wallet service. Balance = SUM(token_transactions.delta) for an
-owner; per-owner pg_advisory_xact_lock serializes charges. Grants and
-charges/refunds are idempotent via partial UNIQUE indexes."""
+"""Wallet service. Balance = SUM(token_transactions.delta) for a user;
+per-user pg_advisory_xact_lock serializes charges. Grants/charges/refunds
+are idempotent via partial UNIQUE indexes."""
 
 import logging
 from datetime import datetime, timezone
@@ -16,12 +16,11 @@ from .models import PipelineType, TokenTransaction
 log = logging.getLogger(__name__)
 
 
+# Single source of truth for the post-signup grant. Exposed through
+# /me/balance so the frontend never hardcodes it.
 SIGNUP_GRANT = 200
-ANON_GRANT = 15
 
-# Namespaces keep user-id and anon-id locks from colliding on hash.
 _USER_LOCK_NS = "wallet:user:"
-_ANON_LOCK_NS = "wallet:anon:"
 
 
 class InsufficientFunds(Exception):
@@ -36,27 +35,10 @@ async def _acquire_user_lock(db: AsyncSession, user_id: UUID) -> None:
     )
 
 
-async def _acquire_anon_lock(db: AsyncSession, anon_id: UUID) -> None:
-    await db.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext(:k))").bindparams(
-            k=f"{_ANON_LOCK_NS}{anon_id}"
-        )
-    )
-
-
 async def get_user_balance(db: AsyncSession, user_id: UUID) -> int:
     result = await db.execute(
         select(func.coalesce(func.sum(TokenTransaction.delta), 0)).where(
             TokenTransaction.user_id == user_id
-        )
-    )
-    return int(result.scalar_one())
-
-
-async def get_anon_balance(db: AsyncSession, anon_id: UUID) -> int:
-    result = await db.execute(
-        select(func.coalesce(func.sum(TokenTransaction.delta), 0)).where(
-            TokenTransaction.anon_id == anon_id
         )
     )
     return int(result.scalar_one())
@@ -86,88 +68,21 @@ async def grant_signup_if_needed(db: AsyncSession, user_id: UUID) -> None:
         log.info(f"granted signup +{SIGNUP_GRANT} to user {user_id}")
 
 
-async def grant_anon_if_needed(db: AsyncSession, anon_id: UUID) -> None:
-    stmt = (
-        pg_insert(TokenTransaction)
-        .values(
-            anon_id=anon_id,
-            delta=ANON_GRANT,
-            reason="anon_grant",
-            created_at=datetime.now(timezone.utc),
-        )
-        .on_conflict_do_nothing(
-            index_elements=["anon_id"],
-            index_where=text("reason = 'anon_grant' AND anon_id IS NOT NULL"),
-        )
-    )
-    result = await db.execute(stmt)
-    if result.rowcount > 0:
-        log.info(f"granted anon +{ANON_GRANT} to anon {anon_id}")
-
-
-async def migrate_anon_to_user(
-    db: AsyncSession,
-    user_id: UUID,
-    anon_id: UUID,
-) -> int:
-    """Move remaining anon balance into user. Idempotent per anon_id."""
-    existing = await db.execute(
-        select(TokenTransaction.id)
-        .where(TokenTransaction.anon_id == anon_id)
-        .where(TokenTransaction.reason == "anon_migration")
-        .limit(1)
-    )
-    if existing.scalar_one_or_none() is not None:
-        return 0
-
-    await _acquire_anon_lock(db, anon_id)
-    balance = await get_anon_balance(db, anon_id)
-    if balance <= 0:
-        return 0
-
-    now = datetime.now(timezone.utc)
-    await db.execute(
-        TokenTransaction.__table__.insert().values(
-            anon_id=anon_id,
-            delta=-balance,
-            reason="anon_migration",
-            created_at=now,
-        )
-    )
-    await db.execute(
-        TokenTransaction.__table__.insert().values(
-            user_id=user_id,
-            anon_id=anon_id,
-            delta=balance,
-            reason="anon_migration",
-            created_at=now,
-        )
-    )
-    log.info(f"migrated +{balance} from anon {anon_id} to user {user_id}")
-    return balance
-
-
 async def charge(
     db: AsyncSession,
     *,
     pipeline_id: UUID,
     pipeline_type_id: int,
     cost: int,
-    user_id: Optional[UUID],
-    anon_id: Optional[UUID],
+    user_id: UUID,
 ) -> None:
-    """Charge under per-owner lock. Raises InsufficientFunds if balance
+    """Charge under per-user lock. Raises InsufficientFunds if balance
     would go negative; duplicate pipeline_id calls no-op."""
     if cost <= 0:
         return
 
-    if user_id is not None:
-        await _acquire_user_lock(db, user_id)
-        balance = await get_user_balance(db, user_id)
-    else:
-        assert anon_id is not None, "charge needs user_id or anon_id"
-        await _acquire_anon_lock(db, anon_id)
-        balance = await get_anon_balance(db, anon_id)
+    await _acquire_user_lock(db, user_id)
+    balance = await get_user_balance(db, user_id)
 
     if balance < cost:
         raise InsufficientFunds()
@@ -176,7 +91,6 @@ async def charge(
         pg_insert(TokenTransaction)
         .values(
             user_id=user_id,
-            anon_id=anon_id,
             pipeline_id=pipeline_id,
             pipeline_type_id=pipeline_type_id,
             delta=-cost,
@@ -208,7 +122,6 @@ async def refund(db: AsyncSession, pipeline_id: UUID) -> None:
         pg_insert(TokenTransaction)
         .values(
             user_id=charge_obj.user_id,
-            anon_id=charge_obj.anon_id,
             pipeline_id=pipeline_id,
             pipeline_type_id=charge_obj.pipeline_type_id,
             delta=-charge_obj.delta,  # flip sign of the charge

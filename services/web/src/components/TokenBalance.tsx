@@ -6,14 +6,16 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { useAuth } from "@/contexts/AuthContext";
 import { useWallet } from "@/contexts/WalletContext";
 import { cn } from "@/lib/utils";
 
 const TokenBalance = () => {
-  const { balance, isAnonymous, isLoading } = useWallet();
+  const { user } = useAuth();
+  const { balance, signupGrant, isLoading } = useWallet();
 
   // Suppress flicker before first fetch resolves; once we know, we
-  // always show the chip so users notice the bonus they got.
+  // always show the chip so users notice their balance.
   if (isLoading || balance === null) {
     return (
       <div className="hidden sm:inline-flex items-center gap-1 px-2 py-1 rounded-full border border-border text-xs text-muted-foreground">
@@ -23,7 +25,8 @@ const TokenBalance = () => {
     );
   }
 
-  const lowBalance = balance <= 0;
+  const isSignedIn = !!user;
+  const lowBalance = isSignedIn && balance <= 0;
 
   return (
     <Popover>
@@ -51,7 +54,7 @@ const TokenBalance = () => {
         <p className="text-muted-foreground">
           Generations on this site consume tokens to limit GPU abuse.
         </p>
-        {isAnonymous ? (
+        {!isSignedIn && signupGrant !== null ? (
           <p className="text-muted-foreground mt-2">
             <Link
               to="/auth"
@@ -59,7 +62,7 @@ const TokenBalance = () => {
             >
               Sign in
             </Link>{" "}
-            to add 200 tokens to your balance.
+            to get {signupGrant} tokens.
           </p>
         ) : null}
       </PopoverContent>

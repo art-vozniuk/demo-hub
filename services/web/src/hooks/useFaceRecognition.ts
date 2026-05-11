@@ -23,9 +23,6 @@ const initialState: State = {
 interface RunArgs {
   bucket: string;
   key: string;
-  // Resolved lazily so status flips to "running" before we await the challenge,
-  // giving the UI immediate feedback after upload.
-  getTurnstileToken?: () => Promise<string | null | undefined>;
 }
 
 /**
@@ -75,31 +72,24 @@ export function useFaceRecognition() {
   }, []);
 
   const run = useCallback(
-    async ({ bucket, key, getTurnstileToken }: RunArgs) => {
+    async ({ bucket, key }: RunArgs) => {
       clearTimers();
       setState({ ...initialState, status: "running" });
 
       const pipelineId = uuidv4();
       const traceId = uuidv4();
 
-      const turnstileToken = getTurnstileToken
-        ? (await getTurnstileToken().catch(() => null)) ?? undefined
-        : undefined;
-
       try {
-        await pipelinesApi.queuePipelines(
-          {
-            trace_id: traceId,
-            jobs: [
-              {
-                pipeline_id: pipelineId,
-                pipeline_name: "face_recognition",
-                input: { image_bucket: bucket, image_key: key },
-              },
-            ],
-          },
-          turnstileToken,
-        );
+        await pipelinesApi.queuePipelines({
+          trace_id: traceId,
+          jobs: [
+            {
+              pipeline_id: pipelineId,
+              pipeline_name: "face_recognition",
+              input: { image_bucket: bucket, image_key: key },
+            },
+          ],
+        });
       } catch (error) {
         if (!isMountedRef.current) return;
         const message =

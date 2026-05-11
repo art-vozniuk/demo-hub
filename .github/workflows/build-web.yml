@@ -31,7 +31,6 @@ jobs:
           VITE_RENDERER_URL=/renderer/Sandbox.html
           VITE_SENTRY_DSN=${{ secrets.SENTRY_DSN }}
           VITE_SENTRY_ENV=${{ secrets.ENV }}
-          VITE_TURNSTILE_SITE_KEY=${{ secrets.VITE_TURNSTILE_SITE_KEY }}
           VITE_BUILD_TAG=${{ github.sha }}
           EOF
 

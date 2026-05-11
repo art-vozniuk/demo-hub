@@ -1,13 +1,14 @@
 import { apiClient } from "../client";
 
 export interface BalanceResponse {
+  // 0 when caller is not authenticated.
   tokens: number;
-  is_anonymous: boolean;
   // pipeline_name -> base_cost. Source of truth lives in pipeline_types
   // (DB); the frontend never hardcodes prices.
   pipeline_costs: Record<string, number>;
-  // Backend wants a Turnstile token from anon callers when true.
-  turnstile_required: boolean;
+  // One-time grant a user receives on first sign-in. Source of truth lives
+  // in services/core/app/wallet/service.py — the frontend never hardcodes it.
+  signup_grant: number;
 }
 
 export const walletApi = {

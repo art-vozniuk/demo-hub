@@ -1,19 +1,27 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
+import { useWallet } from '@/contexts/WalletContext';
 import { useAnalytics } from '@/hooks/useAnalytics';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 const Auth = () => {
   const { user, loading: authLoading, signInWithGoogle } = useAuth();
+  const { signupGrant } = useWallet();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const { track } = useAnalytics();
   const [isSigningIn, setIsSigningIn] = useState(false);
 
-  const returnPath = location.state?.returnPath || '/face-fusion';
+  // Prefer ?redirect= query param (set when Generate pages bounce
+  // unauthenticated users here); fall back to state for older callers.
+  const returnPath =
+    searchParams.get('redirect') ||
+    location.state?.returnPath ||
+    '/face-fusion';
 
   useEffect(() => {
     if (!authLoading && user) {
@@ -48,7 +56,9 @@ const Auth = () => {
           <h1 className="text-4xl font-bold">Sign in</h1>
           <p className="text-base text-muted-foreground leading-relaxed">
             To prevent abuse, generations are gated by tokens.
-            Sign in with Google to add 200 tokens to your balance and keep generating.
+            {signupGrant !== null
+              ? ` Sign in with Google to add ${signupGrant} tokens to your balance and keep generating.`
+              : ' Sign in with Google to get tokens and start generating.'}
           </p>
         </div>
 

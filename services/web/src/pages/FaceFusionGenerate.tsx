@@ -9,11 +9,10 @@ import UploadDropzone from "@/components/UploadDropzone";
 import GenerationCard from "@/components/GenerationCard";
 import FaceSelectionOverlay from "@/components/FaceSelectionOverlay";
 import CostBadge from "@/components/CostBadge";
-import InsufficientTokensDialog from "@/components/InsufficientTokensDialog";
 import OutOfTokensDialog from "@/components/OutOfTokensDialog";
 import { useFaceRecognition } from "@/hooks/useFaceRecognition";
-import { useTurnstile } from "@/hooks/useTurnstile";
 import { useWallet } from "@/contexts/WalletContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
 import { useAnalytics } from "@/hooks/useAnalytics";
@@ -114,18 +113,25 @@ const FaceFusionGenerate = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { track } = useAnalytics();
+  const { user, loading: authLoading } = useAuth();
   const {
     balance,
-    isAnonymous,
     getCost,
-    turnstileRequired,
     refresh: refreshBalance,
   } = useWallet();
   const faceSwapCost = getCost("face_swap");
-  const turnstile = useTurnstile(isAnonymous === true && turnstileRequired);
-  const [insufficientDialogOpen, setInsufficientDialogOpen] = useState(false);
-  const [insufficientDialogCost, setInsufficientDialogCost] = useState(0);
   const [outOfTokensDialogOpen, setOutOfTokensDialogOpen] = useState(false);
+
+  // Auth-only flow: anyone hitting this page without a session is bounced
+  // to /auth and brought back after sign-in.
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate(`/auth?redirect=${encodeURIComponent(location.pathname + location.search)}`, {
+        replace: true,
+      });
+    }
+  }, [authLoading, user, navigate, location.pathname, location.search]);
 
   const [initialState] = useState(() => {
     const persisted = loadPersisted();
@@ -258,10 +264,9 @@ const FaceFusionGenerate = () => {
       selfieRecognition.run({
         bucket: selfieS3.bucket,
         key: selfieS3.key,
-        getTurnstileToken: isAnonymous ? turnstile.getToken : undefined,
       });
     }
-  }, [selfieS3, selfieRecognition, isAnonymous, turnstile]);
+  }, [selfieS3, selfieRecognition]);
 
   // Template upload → S3 → kick face_recognition (custom mode only).
   useEffect(() => {
@@ -296,10 +301,9 @@ const FaceFusionGenerate = () => {
       templateRecognition.run({
         bucket: templateS3.bucket,
         key: templateS3.key,
-        getTurnstileToken: isAnonymous ? turnstile.getToken : undefined,
       });
     }
-  }, [isCustom, templateS3, templateRecognition, isAnonymous, turnstile]);
+  }, [isCustom, templateS3, templateRecognition]);
 
   const pollPipelineStatuses = useCallback(
     async (ids: string[]) => {
@@ -390,12 +394,7 @@ const FaceFusionGenerate = () => {
     const jobCount = isCustom ? 1 : selectedTemplates.length;
     const totalCost = jobCount * faceSwapCost;
     if (balance !== null && balance < totalCost) {
-      if (isAnonymous) {
-        setInsufficientDialogCost(totalCost);
-        setInsufficientDialogOpen(true);
-      } else {
-        setOutOfTokensDialogOpen(true);
-      }
+      setOutOfTokensDialogOpen(true);
       return;
     }
 
@@ -444,24 +443,12 @@ const FaceFusionGenerate = () => {
       const ids = jobs.map((j) => j.pipeline_id);
       setPipelineIds(ids);
 
-      const turnstileToken = isAnonymous
-        ? (await turnstile.getToken().catch(() => null)) ?? undefined
-        : undefined;
-
       try {
-        await pipelinesApi.queuePipelines(
-          { trace_id: traceId, jobs },
-          turnstileToken,
-        );
+        await pipelinesApi.queuePipelines({ trace_id: traceId, jobs });
       } catch (err) {
         if (err instanceof ApiError && err.status === 402) {
           await refreshBalance();
-          if (isAnonymous) {
-            setInsufficientDialogCost(jobs.length * faceSwapCost);
-            setInsufficientDialogOpen(true);
-          } else {
-            setOutOfTokensDialogOpen(true);
-          }
+          setOutOfTokensDialogOpen(true);
           setIsProcessing(false);
           setPipelineIds([]);
           return;
@@ -540,9 +527,7 @@ const FaceFusionGenerate = () => {
     clearPolling,
     track,
     balance,
-    isAnonymous,
     faceSwapCost,
-    turnstile,
     refreshBalance,
   ]);
 
@@ -989,12 +974,6 @@ const FaceFusionGenerate = () => {
         </>
       )}
 
-      <InsufficientTokensDialog
-        open={insufficientDialogOpen}
-        onOpenChange={setInsufficientDialogOpen}
-        cost={insufficientDialogCost}
-        balance={balance ?? 0}
-      />
       <OutOfTokensDialog
         open={outOfTokensDialogOpen}
         onOpenChange={setOutOfTokensDialogOpen}
