@@ -16,7 +16,6 @@ interface OutOfTokensDialogProps {
 }
 
 const LINKEDIN_URL = "https://www.linkedin.com/in/artem-vozniuk-ai/";
-const CONTACT_EMAIL = "mailto:hi@artemv.tech";
 
 const OutOfTokensDialog = ({ open, onOpenChange }: OutOfTokensDialogProps) => {
   return (
