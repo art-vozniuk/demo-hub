@@ -8,6 +8,7 @@ from sqlalchemy import select
 from services.common.auth.models import User
 from services.common.database import DbSession
 
+from ..config import config
 from . import service
 from .cookies import issue_anon_id, read_anon_id
 from .models import PipelineType
@@ -40,6 +41,7 @@ async def get_balance(
         select(PipelineType.name, PipelineType.base_cost)
     )
     pipeline_costs = {name: cost for name, cost in types_result.all()}
+    turnstile_required = bool(config.TURNSTILE_SECRET)
 
     if user is not None:
         user_uuid = UUID(user.id)
@@ -52,6 +54,7 @@ async def get_balance(
             tokens=balance,
             is_anonymous=False,
             pipeline_costs=pipeline_costs,
+            turnstile_required=turnstile_required,
         )
 
     anon_id = read_anon_id(request)
@@ -63,4 +66,5 @@ async def get_balance(
         tokens=balance,
         is_anonymous=True,
         pipeline_costs=pipeline_costs,
+        turnstile_required=turnstile_required,
     )

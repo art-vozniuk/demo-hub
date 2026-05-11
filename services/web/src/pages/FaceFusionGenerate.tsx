@@ -114,9 +114,15 @@ const FaceFusionGenerate = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { track } = useAnalytics();
-  const { balance, isAnonymous, getCost, refresh: refreshBalance } = useWallet();
+  const {
+    balance,
+    isAnonymous,
+    getCost,
+    turnstileRequired,
+    refresh: refreshBalance,
+  } = useWallet();
   const faceSwapCost = getCost("face_swap");
-  const turnstile = useTurnstile(isAnonymous === true);
+  const turnstile = useTurnstile(isAnonymous === true && turnstileRequired);
   const [insufficientDialogOpen, setInsufficientDialogOpen] = useState(false);
   const [insufficientDialogCost, setInsufficientDialogCost] = useState(0);
   const [outOfTokensDialogOpen, setOutOfTokensDialogOpen] = useState(false);

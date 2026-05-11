@@ -6,6 +6,8 @@ export interface BalanceResponse {
   // pipeline_name -> base_cost. Source of truth lives in pipeline_types
   // (DB); the frontend never hardcodes prices.
   pipeline_costs: Record<string, number>;
+  // Backend wants a Turnstile token from anon callers when true.
+  turnstile_required: boolean;
 }
 
 export const walletApi = {

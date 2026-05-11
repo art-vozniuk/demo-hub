@@ -10,6 +10,8 @@ interface WalletContextType {
   // pipeline_name -> base_cost, sourced from the DB via /me/balance.
   costs: Record<string, number> | null;
   getCost: (pipelineName: string) => number | undefined;
+  // True when backend requires a Turnstile token for anon /pipelines/queue.
+  turnstileRequired: boolean;
   refresh: () => Promise<void>;
 }
 
@@ -20,6 +22,7 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
   const [balance, setBalance] = useState<number | null>(null);
   const [isAnonymous, setIsAnonymous] = useState<boolean | null>(null);
   const [costs, setCosts] = useState<Record<string, number> | null>(null);
+  const [turnstileRequired, setTurnstileRequired] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   // Coalesce concurrent /me/balance calls so StrictMode + auth state
   // churn don't each create their own anon cookie/grant.
@@ -33,6 +36,7 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
         setBalance(resp.tokens);
         setIsAnonymous(resp.is_anonymous);
         setCosts(resp.pipeline_costs);
+        setTurnstileRequired(resp.turnstile_required);
       } catch (err) {
         if (!(err instanceof ApiError) || err.status !== 401) {
           console.warn('balance refresh failed:', err);
@@ -66,7 +70,15 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
 
   return (
     <WalletContext.Provider
-      value={{ balance, isAnonymous, isLoading, costs, getCost, refresh }}
+      value={{
+        balance,
+        isAnonymous,
+        isLoading,
+        costs,
+        getCost,
+        turnstileRequired,
+        refresh,
+      }}
     >
       {children}
     </WalletContext.Provider>

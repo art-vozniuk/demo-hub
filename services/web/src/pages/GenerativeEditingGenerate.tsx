@@ -36,11 +36,17 @@ const GenerativeEditingGenerate = () => {
   const [searchParams] = useSearchParams();
   const presetSlug = searchParams.get("preset") ?? "";
 
-  const { balance, isAnonymous, getCost, refresh: refreshBalance } = useWallet();
+  const {
+    balance,
+    isAnonymous,
+    getCost,
+    turnstileRequired,
+    refresh: refreshBalance,
+  } = useWallet();
   const fluxCost = getCost("generative_editing");
   const faceSwapCost = getCost("face_swap");
-  // Render Turnstile only for anon callers; widget unmounts once authed.
-  const turnstile = useTurnstile(isAnonymous === true);
+  // Mount Turnstile only when backend will actually check for the token.
+  const turnstile = useTurnstile(isAnonymous === true && turnstileRequired);
 
   const [insufficientDialogOpen, setInsufficientDialogOpen] = useState(false);
   const [insufficientDialogCost, setInsufficientDialogCost] = useState(0);
