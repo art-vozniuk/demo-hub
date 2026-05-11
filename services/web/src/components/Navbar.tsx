@@ -19,10 +19,10 @@ const Navbar = () => {
 
   const primaryLinks: NavItem[] = [
     { to: "/generative-editing", label: "Generative Editing" },
-    { to: "/renderer", label: "Gaussian Splatting" },
   ];
 
   const moreLinks: NavItem[] = [
+    { to: "/renderer", label: "Gaussian Splatting" },
     { to: "/face-fusion", label: "Face Swap" },
     { to: "/author", label: "Author", end: true },
   ];
