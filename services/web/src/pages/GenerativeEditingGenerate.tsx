@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { v4 as uuidv4 } from "uuid";
 import { ArrowLeft, Info, Sparkles, UserRoundCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -13,12 +13,17 @@ import GenerationCard from "@/components/GenerationCard";
 import {
   generativeApi,
   pipelinesApi,
+  ApiError,
   type GenerativePresetRead,
   type GenerativeEditingResult,
   type PipelineStatusItem,
 } from "@/api";
 import { uploadToS3, parseS3Url, getFileExtension } from "@/lib/s3";
 import { useAnalytics } from "@/hooks/useAnalytics";
+import { useWallet } from "@/contexts/WalletContext";
+import { useAuth } from "@/contexts/AuthContext";
+import CostBadge from "@/components/CostBadge";
+import OutOfTokensDialog from "@/components/OutOfTokensDialog";
 import { toast } from "sonner";
 
 const POLL_INTERVAL_MS = 1000;
@@ -26,9 +31,31 @@ const POLL_TIMEOUT_MS = 240_000;
 
 const GenerativeEditingGenerate = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { track } = useAnalytics();
   const [searchParams] = useSearchParams();
   const presetSlug = searchParams.get("preset") ?? "";
+
+  const { user, loading: authLoading } = useAuth();
+  const {
+    balance,
+    getCost,
+    refresh: refreshBalance,
+  } = useWallet();
+  const fluxCost = getCost("generative_editing");
+  const faceSwapCost = getCost("face_swap");
+
+  // Auth-only flow: bounce to /auth and return after sign-in.
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      navigate(`/auth?redirect=${encodeURIComponent(location.pathname + location.search)}`, {
+        replace: true,
+      });
+    }
+  }, [authLoading, user, navigate, location.pathname, location.search]);
+
+  const [outOfTokensDialogOpen, setOutOfTokensDialogOpen] = useState(false);
 
   const [preset, setPreset] = useState<GenerativePresetRead | null>(null);
   const [presetError, setPresetError] = useState<string | null>(null);
@@ -171,6 +198,9 @@ const GenerativeEditingGenerate = () => {
       if (item.status === "COMPLETED" || item.status === "FAILED") {
         setIsProcessing(false);
         clearPolling();
+        // FAILED triggers a refund server-side; pull it into the UI so
+        // users see the credit return without a page reload.
+        if (item.status === "FAILED") refreshBalance();
       }
     } catch (err) {
       if (!isMountedRef.current) return;
@@ -179,7 +209,7 @@ const GenerativeEditingGenerate = () => {
       clearPolling();
       setIsProcessing(false);
     }
-  }, []);
+  }, [refreshBalance]);
 
   const pollRefineOnce = useCallback(async (id: string) => {
     if (!isMountedRef.current) return;
@@ -192,6 +222,7 @@ const GenerativeEditingGenerate = () => {
       if (item.status === "COMPLETED" || item.status === "FAILED") {
         setIsRefining(false);
         clearRefinePolling();
+        if (item.status === "FAILED") refreshBalance();
       }
     } catch (err) {
       if (!isMountedRef.current) return;
@@ -200,10 +231,17 @@ const GenerativeEditingGenerate = () => {
       clearRefinePolling();
       setIsRefining(false);
     }
-  }, []);
+  }, [refreshBalance]);
 
   const handleGenerate = useCallback(async () => {
     if (!preset || !uploadedRef) return;
+    if (fluxCost === undefined) return;
+
+    // Pre-flight gate; server-side charge is still authoritative.
+    if (balance !== null && balance < fluxCost) {
+      setOutOfTokensDialogOpen(true);
+      return;
+    }
 
     setIsProcessing(true);
     setErrorMessage(null);
@@ -220,21 +258,32 @@ const GenerativeEditingGenerate = () => {
         params: { preset_slug: preset.slug, pipeline_id: newPipelineId },
       });
 
-      await pipelinesApi.queuePipelines({
-        trace_id: traceId,
-        jobs: [
-          {
-            pipeline_id: newPipelineId,
-            pipeline_name: "generative_editing",
-            input: {
-              image_bucket: uploadedRef.bucket,
-              image_key: uploadedRef.key,
-              preset_slug: preset.slug,
+      try {
+        await pipelinesApi.queuePipelines({
+          trace_id: traceId,
+          jobs: [
+            {
+              pipeline_id: newPipelineId,
+              pipeline_name: "generative_editing",
+              input: {
+                image_bucket: uploadedRef.bucket,
+                image_key: uploadedRef.key,
+                preset_slug: preset.slug,
+              },
             },
-          },
-        ],
-      });
+          ],
+        });
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 402) {
+          await refreshBalance();
+          setOutOfTokensDialogOpen(true);
+          setIsProcessing(false);
+          return;
+        }
+        throw err;
+      }
 
+      refreshBalance();
       setPipelineId(newPipelineId);
 
       // Fire one estimate request as soon as we have an id; capture the
@@ -270,14 +319,28 @@ const GenerativeEditingGenerate = () => {
       setIsProcessing(false);
       setPipelineId(null);
     }
-  }, [preset, uploadedRef, track, pollOnce]);
+  }, [
+    preset,
+    uploadedRef,
+    track,
+    pollOnce,
+    balance,
+    refreshBalance,
+    fluxCost,
+  ]);
 
   const handleRefineFace = useCallback(async () => {
     if (!uploadedRef) return;
+    if (faceSwapCost === undefined) return;
     const fluxResultUrl = (
       pipelineStatus?.result as GenerativeEditingResult | undefined
     )?.result_url;
     if (!fluxResultUrl) return;
+
+    if (balance !== null && balance < faceSwapCost) {
+      setOutOfTokensDialogOpen(true);
+      return;
+    }
 
     let templateRef: { bucket: string; key: string };
     try {
@@ -287,6 +350,11 @@ const GenerativeEditingGenerate = () => {
       return;
     }
 
+    // Mount the refine card synchronously so the user sees the source photo +
+    // spinner immediately, instead of staring at an empty slot while queueing
+    // runs under the hood.
+    const newRefineId = uuidv4();
+    setRefinePipelineId(newRefineId);
     setIsRefining(true);
     setRefinePipelineStatus(null);
     setRefineEstimatedFinishAt(null);
@@ -294,7 +362,6 @@ const GenerativeEditingGenerate = () => {
 
     try {
       const traceId = uuidv4();
-      const newRefineId = uuidv4();
 
       track({
         name: "generative_refine_face_started",
@@ -308,23 +375,34 @@ const GenerativeEditingGenerate = () => {
       // Compute auto-detects the largest face on both source and target
       // when bboxes are omitted (see FaceSwapPipelineInput) — that's the
       // only sensible default here since there's no UI for face picking.
-      await pipelinesApi.queuePipelines({
-        trace_id: traceId,
-        jobs: [
-          {
-            pipeline_id: newRefineId,
-            pipeline_name: "face_swap",
-            input: {
-              source_image_bucket: uploadedRef.bucket,
-              source_image_key: uploadedRef.key,
-              template_image_bucket: templateRef.bucket,
-              template_image_key: templateRef.key,
+      try {
+        await pipelinesApi.queuePipelines({
+          trace_id: traceId,
+          jobs: [
+            {
+              pipeline_id: newRefineId,
+              pipeline_name: "face_swap",
+              input: {
+                source_image_bucket: uploadedRef.bucket,
+                source_image_key: uploadedRef.key,
+                template_image_bucket: templateRef.bucket,
+                template_image_key: templateRef.key,
+              },
             },
-          },
-        ],
-      });
+          ],
+        });
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 402) {
+          await refreshBalance();
+          setOutOfTokensDialogOpen(true);
+          setIsRefining(false);
+          setRefinePipelineId(null);
+          return;
+        }
+        throw err;
+      }
 
-      setRefinePipelineId(newRefineId);
+      refreshBalance();
 
       pipelinesApi
         .getEstimate(newRefineId)
@@ -353,7 +431,17 @@ const GenerativeEditingGenerate = () => {
       setIsRefining(false);
       setRefinePipelineId(null);
     }
-  }, [uploadedRef, pipelineStatus, pipelineId, preset, track, pollRefineOnce]);
+  }, [
+    uploadedRef,
+    pipelineStatus,
+    pipelineId,
+    preset,
+    track,
+    pollRefineOnce,
+    balance,
+    refreshBalance,
+    faceSwapCost,
+  ]);
 
   const handleReplacePhoto = () => {
     setPhoto(null);
@@ -423,9 +511,12 @@ const GenerativeEditingGenerate = () => {
       </Button>
 
       <header className="max-w-5xl mx-auto space-y-2">
-        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
-          {preset.title}
-        </h1>
+        <div className="flex items-center gap-3 flex-wrap">
+          <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
+            {preset.title}
+          </h1>
+          {fluxCost !== undefined && <CostBadge cost={fluxCost} />}
+        </div>
         {preset.description && (
           <p className="text-muted-foreground leading-relaxed max-w-3xl">
             {preset.description}
@@ -505,7 +596,7 @@ const GenerativeEditingGenerate = () => {
           )}
 
           {canRefineFace && (
-            <div className="flex justify-center items-center gap-2">
+            <div className="flex justify-center items-center gap-2 flex-wrap">
               <Button
                 onClick={handleRefineFace}
                 variant="outline"
@@ -515,6 +606,7 @@ const GenerativeEditingGenerate = () => {
                 <UserRoundCheck className="h-4 w-4" />
                 Match the face to your photo
               </Button>
+              {faceSwapCost !== undefined && <CostBadge cost={faceSwapCost} />}
               <Popover>
                 <PopoverTrigger asChild>
                   <button
@@ -556,6 +648,11 @@ const GenerativeEditingGenerate = () => {
           )}
         </div>
       </section>
+
+      <OutOfTokensDialog
+        open={outOfTokensDialogOpen}
+        onOpenChange={setOutOfTokensDialogOpen}
+      />
     </main>
   );
 };

@@ -64,9 +64,12 @@ export interface PipelineEstimateResponse {
 
 export const pipelinesApi = {
   queuePipelines: async (
-    request: QueuePipelinesRequest
+    request: QueuePipelinesRequest,
   ): Promise<QueuePipelinesResponse> => {
-    return apiClient.post<QueuePipelinesResponse>("/pipelines/queue", request);
+    return apiClient.post<QueuePipelinesResponse>(
+      "/pipelines/queue",
+      request,
+    );
   },
 
   getStatus: async (pipelineIds: string[]): Promise<PipelineStatusResponse> => {

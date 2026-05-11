@@ -16,8 +16,6 @@ class Config(BaseSettings):
 
     MAX_PIPELINES_PER_REQUEST: int = 3
 
-    TEST_USER_EMAIL: str | None = None
-
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",")]

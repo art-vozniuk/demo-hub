@@ -1,4 +1,4 @@
-import { NavLink, useLocation } from "react-router-dom";
+import { Link, NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { User, LogOut, ChevronDown } from "lucide-react";
+import TokenBalance from "@/components/TokenBalance";
 
 type NavItem = { to: string; label: string; end?: boolean };
 
@@ -113,22 +114,34 @@ const Navbar = () => {
             </li>
           </ul>
 
-          {user && (
-            <div className="flex items-center gap-2 sm:gap-3 pl-2 sm:pl-4 border-l border-border">
-              <div className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm text-muted-foreground">
-                <User className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                <span className="hidden sm:inline">{user.email?.split('@')[0]}</span>
-              </div>
+          <div className="flex items-center gap-2 sm:gap-3 pl-2 sm:pl-4 border-l border-border">
+            <TokenBalance />
+            {user ? (
+              <>
+                <div className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm text-muted-foreground">
+                  <User className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                  <span className="hidden sm:inline">{user.email?.split('@')[0]}</span>
+                </div>
+                <Button
+                  onClick={handleSignOut}
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 sm:h-8 px-1.5 sm:px-2"
+                >
+                  <LogOut className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                </Button>
+              </>
+            ) : (
               <Button
-                onClick={handleSignOut}
-                variant="ghost"
+                asChild
+                variant="outline"
                 size="sm"
-                className="h-7 sm:h-8 px-1.5 sm:px-2"
+                className="h-7 sm:h-8 px-2 sm:px-3 text-xs sm:text-sm"
               >
-                <LogOut className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                <Link to="/auth">Sign in</Link>
               </Button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
     </nav>

@@ -11,6 +11,8 @@ import type { AnalyticsEvent } from "@/types/analytics";
 import "./masonry.css";
 import {Tooltip, TooltipContent, TooltipTrigger} from "@/components/ui/tooltip.tsx";
 import { ExpandableDescription } from "@/components/ExpandableDescription";
+import CostBadge from "@/components/CostBadge";
+import { useWallet } from "@/contexts/WalletContext";
 
 const MAX_SELECTION = 3;
 const MIN_TEMPLATES_TO_SHOW = 6;
@@ -18,6 +20,8 @@ const MIN_TEMPLATES_TO_SHOW = 6;
 const FaceFusion = () => {
   const navigate = useNavigate();
   const { track } = useAnalytics();
+  const { getCost } = useWallet();
+  const faceSwapCost = getCost("face_swap");
   const [selectedTemplates, setSelectedTemplates] = useState<RecastTemplateRead[]>([]);
   const [isSticky, setIsSticky] = useState(false);
   const counterRef = useRef<HTMLDivElement>(null);
@@ -32,33 +36,25 @@ const FaceFusion = () => {
 
     const loadTemplates = async () => {
       try {
-        console.log("Fetching templates from API...");
         const templates = await recastApi.getTemplates();
-        console.log(`Received ${templates.length} templates from API`);
-        
+
         let loadedCount = 0;
         let initialLoadingCompleted = false;
 
-        templates.forEach((template, index) => {
+        templates.forEach((template) => {
           const img = new Image();
-          
+
           const handleLoad = () => {
             loadedCount++;
-            console.log(`Template ${index + 1}/${templates.length} loaded: ${template.name} (${loadedCount} total)`);
-            
-            setLoadedTemplates((prev) => {
-              console.log(`Adding template to state. Previous count: ${prev.length}, New count: ${prev.length + 1}`);
-              return [...prev, template];
-            });
-            
+            setLoadedTemplates((prev) => [...prev, template]);
+
             if (loadedCount === MIN_TEMPLATES_TO_SHOW && !initialLoadingCompleted) {
               initialLoadingCompleted = true;
-              console.log(`Reached ${MIN_TEMPLATES_TO_SHOW} loaded templates - showing page`);
               setIsInitialLoading(false);
               track({ name: 'template_viewed', params: { template_count: MIN_TEMPLATES_TO_SHOW } });
             }
           };
-          
+
           img.onload = handleLoad;
           img.onerror = handleLoad;
           img.src = template.url;
@@ -158,8 +154,11 @@ const FaceFusion = () => {
     <main className="container mx-auto px-6 py-16 space-y-12 min-h-[calc(100vh-8rem)]">
       <section className="max-w-4xl mx-auto space-y-6 text-center animate-fade-in">
         <div className="space-y-4">
-          <h1 className="text-5xl font-bold tracking-tight sm:text-6xl">
+          <h1 className="text-5xl font-bold tracking-tight sm:text-6xl flex items-center justify-center gap-3 flex-wrap">
             <span className="text-gradient">Face Swap</span>
+            {faceSwapCost !== undefined && (
+              <CostBadge cost={faceSwapCost} size="md" />
+            )}
           </h1>
 
           <ExpandableDescription>

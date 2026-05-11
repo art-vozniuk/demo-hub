@@ -1,7 +1,6 @@
 import { supabase } from '@/lib/supabase';
 
 const API_BASE_URL = import.meta.env.VITE_CORE_API_URL;
-console.log("API_BASE_URL:", API_BASE_URL);
 
 if (!API_BASE_URL) {
   throw new Error("VITE_CORE_API_URL is not defined in environment variables");
@@ -63,6 +62,7 @@ export const apiClient = {
       const response = await fetch(`${API_BASE_URL}${path}`, {
         method: "GET",
         headers,
+        credentials: "include",
       });
       return handleResponse<T>(response);
     } catch (error) {
@@ -72,13 +72,22 @@ export const apiClient = {
     }
   },
 
-  post: async <T, D = unknown>(path: string, data?: D): Promise<T> => {
+  post: async <T, D = unknown>(
+    path: string,
+    data?: D,
+    extraHeaders?: Record<string, string>,
+  ): Promise<T> => {
     try {
       const headers = await getAuthHeaders();
+      const merged: Record<string, string> = {
+        ...(headers as Record<string, string>),
+        ...(extraHeaders ?? {}),
+      };
       const response = await fetch(`${API_BASE_URL}${path}`, {
         method: "POST",
-        headers,
+        headers: merged,
         body: data ? JSON.stringify(data) : undefined,
+        credentials: "include",
       });
       return handleResponse<T>(response);
     } catch (error) {
@@ -95,6 +104,7 @@ export const apiClient = {
         method: "PUT",
         headers,
         body: data ? JSON.stringify(data) : undefined,
+        credentials: "include",
       });
       return handleResponse<T>(response);
     } catch (error) {
@@ -110,6 +120,7 @@ export const apiClient = {
       const response = await fetch(`${API_BASE_URL}${path}`, {
         method: "DELETE",
         headers,
+        credentials: "include",
       });
       return handleResponse<T>(response);
     } catch (error) {
