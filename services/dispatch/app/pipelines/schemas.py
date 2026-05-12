@@ -16,3 +16,13 @@ class GenerativeEditingPipelineInput(PipelineInput):
     image_key: str
     preset_slug: str
     prompt: str
+
+
+class SharpPipelineInput(PipelineInput):
+    """User-supplied photo. SHARP needs nothing else — single forward pass,
+    no preset, no prompt, no params. We forward only the S3 location of
+    the uploaded image.
+    """
+
+    image_bucket: str
+    image_key: str

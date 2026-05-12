@@ -1,4 +1,10 @@
-"""Thin async client for the Modal-hosted FLUX inference endpoint."""
+"""Thin async clients for Modal-hosted inference endpoints.
+
+One callable per deployed Modal app (FLUX generative editing, SHARP).
+Shared header + timeout logic lives in `_post_to_modal` — each public
+wrapper just resolves the right endpoint URL from config and forwards
+the payload through.
+"""
 
 from __future__ import annotations
 
@@ -16,13 +22,14 @@ class ModalInferenceError(RuntimeError):
     pass
 
 
-async def invoke_generative_editing(
+async def _post_to_modal(
+    endpoint_label: str,
+    url: str | None,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    url = config.MODAL_GENERATIVE_ENDPOINT_URL
     if not url:
         raise ModalInferenceError(
-            "MODAL_GENERATIVE_ENDPOINT_URL not configured. "
+            f"{endpoint_label} not configured. "
             "See services/modal/README.md for deployment steps."
         )
 
@@ -44,3 +51,23 @@ async def invoke_generative_editing(
             return resp.json()
         except ValueError as e:
             raise ModalInferenceError(f"Modal returned non-JSON body: {e}")
+
+
+async def invoke_generative_editing(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    return await _post_to_modal(
+        "MODAL_GENERATIVE_ENDPOINT_URL",
+        config.MODAL_GENERATIVE_ENDPOINT_URL,
+        payload,
+    )
+
+
+async def invoke_sharp(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    return await _post_to_modal(
+        "MODAL_SHARP_ENDPOINT_URL",
+        config.MODAL_SHARP_ENDPOINT_URL,
+        payload,
+    )

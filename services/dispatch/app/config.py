@@ -9,6 +9,7 @@ class Config(BaseSettings):
     SENTRY_DSN: str | None = None
 
     MODAL_GENERATIVE_ENDPOINT_URL: str | None = None
+    MODAL_SHARP_ENDPOINT_URL: str | None = None
     MODAL_PROXY_AUTH_TOKEN_ID: str | None = None
     MODAL_PROXY_AUTH_TOKEN_SECRET: str | None = None
 

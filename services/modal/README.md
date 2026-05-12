@@ -1,4 +1,15 @@
-# Modal — FLUX.2 klein inference
+# Modal — serverless GPU inference
+
+Two independent Modal apps live in this directory, one per demo. They
+share the same A10G + memory-snapshot pattern but use separate volumes,
+endpoints, and proxy-auth tokens.
+
+| App | Demo | Entry file | Volume | Endpoint env var |
+|---|---|---|---|---|
+| `demo-hub-flux` | Generative Editing | `app.py` | `flux-models` | `MODAL_GENERATIVE_ENDPOINT_URL` |
+| `demo-hub-sharp` | SHARP (single-image → 3DGS) | `sharp_app.py` | `sharp-models` | `MODAL_SHARP_ENDPOINT_URL` |
+
+## FLUX.2 klein — Generative Editing
 
 Serverless GPU backend for the **Generative Editing** demo.
 Runs FLUX.2 klein 4B image-conditioned editing on a Modal A10G, fronted
@@ -92,3 +103,60 @@ visitors/day, ~5s warm inference each):
 - Cold-start overhead: negligible after the snapshot is built
 
 If you bump traffic 100×, expect closer to $10–$30/month.
+
+## SHARP — single-image → 3DGS
+
+Serverless GPU backend for the **SHARP** demo. Takes one image, returns
+a `.splat` blob plus an auto-framed initial camera. Wraps Apple's
+[ml-sharp](https://github.com/apple/ml-sharp) feed-forward predictor —
+single forward pass on A10G, ~1–3s steady-state.
+
+### Setup
+
+```bash
+cd services/modal
+
+# 1) Modal CLI + login (shared with FLUX; skip if already done)
+./scripts/setup.sh
+
+# 2) populate the sharp-models volume with Apple's checkpoint
+#    (downloads ~1.4 GB from ml-site.cdn-apple.com on the Modal side)
+./scripts/preload-sharp.sh
+
+# 3) deploy the inference app
+./scripts/deploy-sharp.sh
+```
+
+The deploy script writes the endpoint URL to
+`services/modal/.endpoint-sharp`. Set it on the dispatch worker:
+
+```
+MODAL_SHARP_ENDPOINT_URL=https://<workspace>--demo-hub-sharp-generate.modal.run
+```
+
+### Endpoint contract
+
+`POST /` accepts `{"image_b64": "<base64-encoded JPEG/PNG>"}` and returns:
+
+```json
+{
+  "splat_b64": "<base64 of 32-byte/gaussian .splat blob>",
+  "gaussian_count": 1234567,
+  "camera_eye": [x, y, z],
+  "camera_fwd": [x, y, z]
+}
+```
+
+`camera_eye`/`camera_fwd` are auto-framed from the gaussian point cloud
+(centroid + AABB radius, pulled back along -z). SHARP follows OpenCV
+convention with the scene around (0, 0, +z).
+
+### License caveats
+
+ml-sharp ships under a dual license — code under
+[LICENSE](https://github.com/apple/ml-sharp/blob/main/LICENSE) and model
+weights under a separate
+[LICENSE_MODEL](https://github.com/apple/ml-sharp/blob/main/LICENSE_MODEL).
+Review both before shipping anything beyond a personal demo. The
+checkpoint URL is hard-coded in `sharp_app.py:CHECKPOINT_URL` — pin to a
+specific commit/release of ml-sharp once Apple cuts one.

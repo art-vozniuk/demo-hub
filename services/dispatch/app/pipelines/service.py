@@ -14,8 +14,12 @@ from pydantic_core._pydantic_core import ValidationError
 
 from services.common.s3.client import S3Client
 
-from .pipelines import AsyncPipeline, GenerativeEditingPipeline
-from .schemas import GenerativeEditingPipelineInput, PipelineInput
+from .pipelines import AsyncPipeline, GenerativeEditingPipeline, SharpPipeline
+from .schemas import (
+    GenerativeEditingPipelineInput,
+    PipelineInput,
+    SharpPipelineInput,
+)
 
 log = logging.getLogger(__name__)
 
@@ -57,6 +61,16 @@ class GenerativeEditingService(Service):
         )
 
 
+class SharpService(Service):
+    async def prepare_pipeline(self) -> AsyncPipeline:
+        if not isinstance(self.pipeline_input, SharpPipelineInput):
+            raise ValueError("Invalid pipeline input for SharpService")
+        return SharpPipeline(
+            s3=self.s3,
+            pipeline_input=self.pipeline_input,
+        )
+
+
 class PipelineType:
     def __init__(
         self,
@@ -76,6 +90,14 @@ pipeline_templates: dict[str, PipelineType] = {
         service_type=GenerativeEditingService,
         input_type=GenerativeEditingPipelineInput,
         estimated_time_ms=30_000,
+    ),
+    "sharp": PipelineType(
+        service_type=SharpService,
+        input_type=SharpPipelineInput,
+        # SHARP itself runs in ~1-3s on A10G, but cold start + S3 upload
+        # bring the warm p50 closer to 5-8s. Pessimistic baseline; the
+        # heartbeat tick will overwrite this with measured wall time.
+        estimated_time_ms=8_000,
     ),
 }
 

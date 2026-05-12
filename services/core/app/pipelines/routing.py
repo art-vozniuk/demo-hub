@@ -21,6 +21,7 @@ _ROUTES: dict[str, str] = {
     "face_recognition": rabbitmq_config.routing_compute,
     "face_swap": rabbitmq_config.routing_compute,
     "generative_editing": rabbitmq_config.routing_dispatch,
+    "sharp": rabbitmq_config.routing_dispatch,
 }
 
 
