@@ -6,8 +6,14 @@ endpoints, and proxy-auth tokens.
 
 | App | Demo | Entry file | Volume | Endpoint env var |
 |---|---|---|---|---|
-| `demo-hub-flux` | Generative Editing | `app.py` | `flux-models` | `MODAL_GENERATIVE_ENDPOINT_URL` |
-| `demo-hub-sharp` | SHARP (single-image → 3DGS) | `sharp_app.py` | `sharp-models` | `MODAL_SHARP_ENDPOINT_URL` |
+| `demo-hub-flux` | Generative Editing | `apps/flux.py` | `flux-models` | `MODAL_GENERATIVE_ENDPOINT_URL` |
+| `demo-hub-sharp` | SHARP (single-image → 3DGS) | `apps/sharp.py` | `sharp-models` | `MODAL_SHARP_ENDPOINT_URL` |
+
+Each app boots through `apps/_common.py` for the byte-identical
+bootstrap (logging config, `modal.App` + `modal.Volume` pair, model
+dir). The per-app scripts under `scripts/` are thin wrappers around
+shared helpers in `scripts/_lib.sh` (`run_deploy`, `run_preload`,
+`run_destroy`).
 
 ## FLUX.2 klein — Generative Editing
 
@@ -25,29 +31,33 @@ calls.
 - Memory-snapshot cold starts (pipeline already loaded onto GPU).
 - Scale-to-zero with a 120s warm window.
 
-## Setup (run once)
-
-Everything below is scripted under `scripts/`. End-to-end:
+## Setup
 
 ```bash
 cd services/modal
 
-# 1) install Modal CLI + log in (interactive only on first run)
+# 1) install Modal CLI + log in (interactive only on first run; shared)
 ./scripts/setup.sh
 
-# 2) create the named volume + populate it with FLUX.2 klein 4B weights
-#    (one-shot, runs on a Modal CPU container — no local GPU needed)
-./scripts/preload.sh
+# 2) populate the per-app volume with weights (CPU container, idempotent)
+./scripts/preload-flux.sh
+./scripts/preload-sharp.sh
 
-# 3) deploy the inference app and print the web endpoint URL
-./scripts/deploy.sh
+# 3) deploy each app and print its endpoint URL
+./scripts/deploy-flux.sh
+./scripts/deploy-sharp.sh
+
+# tear down (volume + secrets kept)
+./scripts/destroy-flux.sh
+./scripts/destroy-sharp.sh
 ```
 
-The deploy script ends by writing the resolved endpoint URL to
-`services/modal/.endpoint`. Copy it into your dispatch worker's env:
+Each deploy writes its endpoint URL to a sibling `.endpoint-flux` /
+`.endpoint-sharp`. Copy into the dispatch worker's env:
 
 ```
 MODAL_GENERATIVE_ENDPOINT_URL=https://<workspace>--demo-hub-flux-generate.modal.run
+MODAL_SHARP_ENDPOINT_URL=https://<workspace>--demo-hub-sharp-generate.modal.run
 ```
 
 ## Secrets and proxy-auth
@@ -111,28 +121,9 @@ a `.splat` blob plus an auto-framed initial camera. Wraps Apple's
 [ml-sharp](https://github.com/apple/ml-sharp) feed-forward predictor —
 single forward pass on A10G, ~1–3s steady-state.
 
-### Setup
-
-```bash
-cd services/modal
-
-# 1) Modal CLI + login (shared with FLUX; skip if already done)
-./scripts/setup.sh
-
-# 2) populate the sharp-models volume with Apple's checkpoint
-#    (downloads ~1.4 GB from ml-site.cdn-apple.com on the Modal side)
-./scripts/preload-sharp.sh
-
-# 3) deploy the inference app
-./scripts/deploy-sharp.sh
-```
-
-The deploy script writes the endpoint URL to
-`services/modal/.endpoint-sharp`. Set it on the dispatch worker:
-
-```
-MODAL_SHARP_ENDPOINT_URL=https://<workspace>--demo-hub-sharp-generate.modal.run
-```
+Setup uses the same `./scripts/{preload,deploy,destroy}-sharp.sh`
+commands documented above. The checkpoint download is ~1.4 GB from
+`ml-site.cdn-apple.com` and runs Modal-side during `preload-sharp.sh`.
 
 ### Endpoint contract
 
@@ -167,5 +158,5 @@ ml-sharp ships under a dual license — code under
 weights under a separate
 [LICENSE_MODEL](https://github.com/apple/ml-sharp/blob/main/LICENSE_MODEL).
 Review both before shipping anything beyond a personal demo. The
-checkpoint URL is hard-coded in `sharp_app.py:CHECKPOINT_URL` — pin to a
-specific commit/release of ml-sharp once Apple cuts one.
+checkpoint URL is hard-coded in `apps/sharp.py:CHECKPOINT_URL` — pin
+to a specific commit/release of ml-sharp once Apple cuts one.

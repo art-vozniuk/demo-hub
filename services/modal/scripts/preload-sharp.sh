@@ -3,8 +3,7 @@
 # Runs on a Modal CPU container (no local GPU needed). Idempotent.
 
 set -euo pipefail
-
 cd "$(dirname "$0")/.."
+source scripts/_lib.sh
 
-modal run ./apps/sharp.py::preload_weights
-echo "Volume populated successfully."
+run_preload ./apps/sharp.py

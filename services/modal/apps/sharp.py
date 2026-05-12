@@ -2,15 +2,13 @@
 
 GPU inference only — PLY→splat, auto-frame and S3 upload run on
 dispatch. Endpoint: POST {image_b64, f_px} → {ply_b64, ply_size_bytes}.
-Mirrors services/modal/app.py (FLUX); see services/modal/README.md
-for deploy/preload commands.
+Deploy / preload via services/modal/scripts/{deploy,preload}-sharp.sh.
 """
 
 from __future__ import annotations
 
 import base64
 import io
-import logging
 import os
 import tempfile
 import time
@@ -20,23 +18,15 @@ from typing import Any
 
 import modal
 
+from _common import MODEL_DIR, configure_logging, make_app
 
-APP_NAME = "demo-hub-sharp"
-VOLUME_NAME = "sharp-models"
-MODEL_DIR = "/models"
+
 CHECKPOINT_URL = "https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh.pt"
 CHECKPOINT_LOCAL_PATH = f"{MODEL_DIR}/sharp_2572gikvuh.pt"
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-log = logging.getLogger("sharp")
-
-
-app = modal.App(APP_NAME)
-volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
+log = configure_logging("sharp")
+app, volume = make_app("demo-hub-sharp", "sharp-models")
 
 
 # ml-sharp recommends Python 3.13; torch 2.5.x has 3.13 wheels.

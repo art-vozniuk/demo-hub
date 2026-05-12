@@ -1,17 +1,12 @@
 """Modal app: FLUX.2 klein image-conditioned editing on A10G.
 
-Deploy:
-    modal deploy services/modal/app.py
-
-Preload weights into the volume (one-shot):
-    modal run services/modal/app.py::preload_weights
+Deploy / preload via services/modal/scripts/{deploy,preload}-flux.sh.
 """
 
 from __future__ import annotations
 
 import base64
 import io
-import logging
 import os
 import time
 import uuid
@@ -19,25 +14,15 @@ from typing import Any
 
 import modal
 
+from _common import MODEL_DIR, configure_logging, make_app
 
-APP_NAME = "demo-hub-flux"
-VOLUME_NAME = "flux-models"
-MODEL_DIR = "/models"
+
 MODEL_REPO = "black-forest-labs/FLUX.2-klein-4B"
 MODEL_LOCAL_DIR = f"{MODEL_DIR}/flux2-klein-4b"
 
 
-# Stdout is captured by Modal and shown in the dashboard "Logs" tab,
-# so plain logging is enough — no extra sink needed.
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-log = logging.getLogger("flux")
-
-
-app = modal.App(APP_NAME)
-volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
+log = configure_logging("flux")
+app, volume = make_app("demo-hub-flux", "flux-models")
 
 
 # Image: built once, cached forever, reused across deploys.
