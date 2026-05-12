@@ -20,5 +20,6 @@ export type {
   FaceRecognitionResult,
   FaceSwapResult,
   GenerativeEditingResult,
+  SharpResult,
   PipelineResult,
 } from "./core/pipelines";

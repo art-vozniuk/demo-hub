@@ -18,6 +18,8 @@ export type AnalyticsEvent =
   | { name: 'nav_facefusion_clicked'; params: Record<string, never> }
   | { name: 'nav_generative_clicked'; params: Record<string, never> }
   | { name: 'nav_renderer_clicked'; params: Record<string, never> }
+  | { name: 'nav_sharp_clicked'; params: Record<string, never> }
+  | { name: 'sharp_generate_started'; params: { pipeline_id: string } }
   | { name: 'generative_preset_opened'; params: { preset_slug: string } }
   | { name: 'generative_generate_started'; params: { preset_slug: string; pipeline_id: string } }
   | { name: 'generative_refine_face_started'; params: { preset_slug: string; flux_pipeline_id: string; refine_pipeline_id: string } }

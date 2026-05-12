@@ -23,6 +23,7 @@ const Navbar = () => {
   ];
 
   const moreLinks: NavItem[] = [
+    { to: "/sharp", label: "SHARP" },
     { to: "/renderer", label: "Gaussian Splatting" },
     { to: "/face-fusion", label: "Face Swap" },
     { to: "/author", label: "Author", end: true },
@@ -50,6 +51,8 @@ const Navbar = () => {
       track({ name: 'nav_generative_clicked', params: {} });
     } else if (to === "/renderer") {
       track({ name: 'nav_renderer_clicked', params: {} });
+    } else if (to === "/sharp") {
+      track({ name: 'nav_sharp_clicked', params: {} });
     }
   };
 

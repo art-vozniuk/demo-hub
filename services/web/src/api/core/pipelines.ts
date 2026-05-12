@@ -37,10 +37,18 @@ export interface GenerativeEditingResult {
   result_url: string;
 }
 
+export interface SharpResult {
+  result_url: string;
+  camera_eye: [number, number, number];
+  camera_fwd: [number, number, number];
+  gaussian_count?: number;
+}
+
 export type PipelineResult =
   | FaceRecognitionResult
   | FaceSwapResult
   | GenerativeEditingResult
+  | SharpResult
   | Record<string, any>;
 
 export interface PipelineStatusItem {

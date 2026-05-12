@@ -15,6 +15,7 @@ import FaceFusionGenerate from "./pages/FaceFusionGenerate";
 import GenerativeEditing from "./pages/GenerativeEditing";
 import GenerativeEditingGenerate from "./pages/GenerativeEditingGenerate";
 import Renderer from "./pages/Renderer";
+import Sharp from "./pages/Sharp";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
 
@@ -41,6 +42,7 @@ const App = () => (
                       <Route path="/generative-editing" element={<GenerativeEditing />} />
                       <Route path="/generative-editing/generate" element={<GenerativeEditingGenerate />} />
                       <Route path="/renderer" element={<Renderer />} />
+                      <Route path="/sharp" element={<Sharp />} />
                       <Route path="/auth" element={<Auth />} />
                       <Route path="*" element={<NotFound />} />
                     </Routes>
