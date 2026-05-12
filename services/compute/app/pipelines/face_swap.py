@@ -1,3 +1,7 @@
+"""Swap a chosen source face onto a target image using the Reactor pipeline."""
+
+from __future__ import annotations
+
 import io
 import logging
 from typing import List, Optional, Sequence
@@ -10,15 +14,10 @@ from services.external.face_swap.reactor_api import (
     swap_specific_face,
 )
 
+from .base import Pipeline
+
+
 log = logging.getLogger(__name__)
-
-
-class Pipeline:
-    def __init__(self):
-        pass
-
-    def run(self) -> dict:
-        raise NotImplementedError
 
 
 def _bbox_iou(a: Sequence[float], b: Sequence[float]) -> float:
@@ -52,37 +51,6 @@ def _pick_face_by_bbox(
     return best
 
 
-class FaceRecognitionPipeline(Pipeline):
-    def __init__(self, image: bytes):
-        Pipeline.__init__(self)
-        self.image = image
-
-    def run(self) -> dict:
-        # Bake EXIF Orientation so face bboxes match what the user sees.
-        pil = ImageOps.exif_transpose(Image.open(io.BytesIO(self.image))).convert("RGB")
-        faces = detect_faces(pil)
-
-        out_faces: List[dict] = []
-        for i, face in enumerate(faces):
-            det_score = getattr(face, "det_score", None)
-            out_faces.append(
-                {
-                    "id": f"f{i}",
-                    "bbox": [float(v) for v in face.bbox],
-                    "det_score": float(det_score) if det_score is not None else None,
-                }
-            )
-
-        width, height = pil.size
-        return {
-            "payload": {
-                "image_width": width,
-                "image_height": height,
-                "faces": out_faces,
-            }
-        }
-
-
 class FaceSwapPipeline(Pipeline):
     def __init__(
         self,
@@ -90,8 +58,8 @@ class FaceSwapPipeline(Pipeline):
         target_image: bytes,
         source_face_bbox: Optional[Sequence[float]] = None,
         target_face_bbox: Optional[Sequence[float]] = None,
-    ):
-        Pipeline.__init__(self)
+    ) -> None:
+        super().__init__()
         self.source_image = source_image
         self.target_image = target_image
         self.source_face_bbox = source_face_bbox

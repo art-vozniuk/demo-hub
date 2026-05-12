@@ -14,12 +14,14 @@ from pydantic_core._pydantic_core import ValidationError
 
 from services.common.s3.client import S3Client
 
-from .pipelines import AsyncPipeline, GenerativeEditingPipeline, SharpPipeline
+from .base import AsyncPipeline
+from .generative_editing import GenerativeEditingPipeline
 from .schemas import (
     GenerativeEditingPipelineInput,
     PipelineInput,
     SharpPipelineInput,
 )
+from .sharp import SharpPipeline
 
 log = logging.getLogger(__name__)
 

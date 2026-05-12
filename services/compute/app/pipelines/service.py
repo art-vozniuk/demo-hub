@@ -5,11 +5,9 @@ import time
 from pydantic_core._pydantic_core import ValidationError
 
 from services.common.s3.client import S3Client
-from services.compute.app.pipelines.pipelines import (
-    Pipeline,
-    FaceRecognitionPipeline,
-    FaceSwapPipeline,
-)
+from services.compute.app.pipelines.base import Pipeline
+from services.compute.app.pipelines.face_recognition import FaceRecognitionPipeline
+from services.compute.app.pipelines.face_swap import FaceSwapPipeline
 from services.compute.app.pipelines.schemas import (
     PipelineInput,
     FaceRecognitionPipelineInput,
