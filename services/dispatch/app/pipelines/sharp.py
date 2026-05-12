@@ -1,24 +1,12 @@
 """User photo → Apple ml-sharp 3DGS prediction on Modal.
 
-Modal runs the GPU forward pass and returns a standard 3DGS PLY.
-Everything else — PLY → 32-byte/gaussian .splat packing, initial-camera
-auto-framing from the gaussian point cloud, and the S3 upload — happens
-here on CPU. Keeps the Modal image lean and reuses the plyfile/numpy
-stack we already need on the dispatch side.
+Modal returns a 3DGS PLY; PLY→splat, auto-frame and S3 upload run here.
+CPU-bound steps go through asyncio.to_thread (~hundreds of ms each)
+so they don't block the event loop. NumPy releases the GIL — threads
+parallelize fine, no need for a process pool.
 
-All CPU-bound steps (EXIF re-encode, PLY parse, splat pack, auto-frame)
-run inside `asyncio.to_thread` so they don't block the dispatch event
-loop. For ~2.4M-gaussian SHARP outputs the combined CPU time is a few
-hundred ms — small enough to be tempting to inline, big enough to
-starve RabbitMQ heartbeats and concurrent pipelines if we did. NumPy
-releases the GIL during the heavy ops, so a thread (not a process) is
-the right tool: no IPC pickle of the 50 MB splat buffer.
-
-No SplatScene catalog row is created; SHARP results are transient,
-keyed by the pipeline id. The frontend reads result_url + camera
-vectors out of the pipeline result JSON and renders the splat directly
-in an iframe pointed at the WASM viewer with
-`?scene_url=...&eye=...&fwd=...`.
+Result is transient: no SplatScene catalog row, the frontend renders
+the .splat URL straight in an iframe via `?scene_url=&eye=&fwd=`.
 """
 
 from __future__ import annotations
@@ -44,14 +32,12 @@ log = logging.getLogger(__name__)
 
 
 def _prepare_image_for_modal(image_bytes: bytes) -> tuple[bytes, float]:
-    """Bake EXIF + read width to compute f_px. Pure-CPU; called in a thread."""
+    """Bake EXIF + compute f_px from image width. CPU-only, runs in a thread."""
 
     image_bytes = bake_exif_orientation(image_bytes)
     with Image.open(io.BytesIO(image_bytes)) as img:
         width = img.size[0]
-    # SHARP's predictor needs a focal length in pixels. EXIF is usually
-    # stripped on web-uploaded photos, so we fall back to ~62° horizontal
-    # FOV (typical phone main lens).
+    # No EXIF f_px on most web uploads; default to ~62° FOV (phone main lens).
     f_px = float(width) * 0.9
     return image_bytes, f_px
 
@@ -59,12 +45,7 @@ def _prepare_image_for_modal(image_bytes: bytes) -> tuple[bytes, float]:
 def _ply_to_splat_and_frame(
     ply_bytes: bytes,
 ) -> tuple[bytes, int, list[float], list[float]]:
-    """Pack splat + compute auto-frame in one thread hop.
-
-    Combined into one to_thread call because (a) both touch the same
-    big numpy arrays so cache locality helps, and (b) it's one round
-    trip into the executor instead of two.
-    """
+    """Pack splat + auto-frame in one thread hop (shared numpy arrays)."""
 
     splat_bytes, gaussian_count = ply_bytes_to_splat_bytes(ply_bytes)
     camera_eye, camera_fwd = auto_frame_camera(splat_bytes, gaussian_count)

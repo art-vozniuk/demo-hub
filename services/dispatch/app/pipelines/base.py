@@ -1,10 +1,5 @@
-"""Shared base for async dispatch pipelines.
-
-Each Pipeline is purely IO-bound — it fetches inputs, calls a remote
-inference service, uploads the result, and returns a structured payload
-identical in shape to compute pipelines. Concrete pipelines live in
-sibling modules (`generative_editing.py`, `sharp.py`).
-"""
+"""Shared base for async dispatch pipelines. Concrete classes live in
+sibling modules (generative_editing.py, sharp.py)."""
 
 from __future__ import annotations
 
@@ -20,12 +15,8 @@ class AsyncPipeline:
 
 
 def bake_exif_orientation(image_bytes: bytes) -> bytes:
-    """Apply EXIF Orientation and re-encode as JPEG.
-
-    Most remote inference backends (FLUX, SHARP) open images via PIL and
-    drop the Orientation tag, so phone-portrait JPEGs arrive sideways
-    unless we bake the rotation in here. Cheap to do on dispatch.
-    """
+    """Apply EXIF Orientation and re-encode JPEG — backends drop the tag,
+    leaving phone-portrait shots sideways unless we bake it in here."""
 
     with Image.open(io.BytesIO(image_bytes)) as img:
         oriented = ImageOps.exif_transpose(img)

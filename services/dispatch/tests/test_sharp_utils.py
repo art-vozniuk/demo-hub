@@ -1,9 +1,5 @@
-"""Smoke tests for the CPU SHARP post-processing helpers.
-
-The math itself is a direct port of compress_splat.py — these tests
-just lock in the I/O contract (struct layout, byte size, sensible
-camera framing) so a future refactor can't silently shift the format
-the WASM viewer consumes.
+"""Lock in the splat byte layout + camera framing so a refactor can't
+silently shift the format the WASM viewer consumes.
 """
 
 from __future__ import annotations

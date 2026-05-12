@@ -22,14 +22,9 @@ const POLL_INTERVAL_MS = 1000;
 const POLL_TIMEOUT_MS = 120_000;
 const RENDERER_URL = import.meta.env.VITE_RENDERER_URL as string | undefined;
 
-/** Build the WASM-viewer iframe URL for an ad-hoc SHARP result.
- *
- * The viewer page (`Sandbox.html`) already understands these query
- * params from the catalog flow in Renderer.tsx — `scene_url` triggers an
- * emscripten_fetch, `eye`/`fwd` seed the initial camera pose. We just
- * point at the pipeline's transient .splat blob in S3 instead of a
- * catalogued SplatScene row.
- */
+/** Build the WASM viewer iframe URL for a transient SHARP result.
+ * scene_url/eye/fwd are the same query params Renderer.tsx uses for
+ * catalog scenes; here they point at the pipeline's .splat in S3. */
 function buildResultIframeSrc(result: SharpResult): string {
   if (!RENDERER_URL) return "";
   const url = new URL(RENDERER_URL, window.location.origin);
@@ -86,9 +81,8 @@ const Sharp = () => {
     };
   }, []);
 
-  // Drop the previous uploaded reference whenever the user picks a new
-  // file so we don't accidentally submit the wrong S3 key against the
-  // freshly selected photo.
+  // Reset uploadedRef when a new file is picked so we don't submit
+  // the stale S3 key against the newly chosen photo.
   useEffect(() => {
     if (!photo || uploadedRef) return;
     let alive = true;
@@ -139,8 +133,7 @@ const Sharp = () => {
         if (item.status === "COMPLETED" || item.status === "FAILED") {
           setIsProcessing(false);
           clearPolling();
-          // FAILED triggers a server-side refund — reflect it in the UI
-          // without forcing a reload.
+          // FAILED triggers a server-side refund; pull it into the UI.
           if (item.status === "FAILED") refreshBalance();
         }
       } catch (err) {

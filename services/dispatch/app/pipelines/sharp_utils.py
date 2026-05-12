@@ -1,14 +1,8 @@
-"""CPU post-processing for SHARP outputs.
+"""CPU post-processing for SHARP outputs: 3DGS PLY → .splat + auto-frame.
 
-Modal returns a standard 3DGS PLY. Everything past that — packing into
-the 32-byte/gaussian .splat layout and choosing an initial camera —
-is plain numpy and runs here on the dispatch worker, keeping the GPU
-container focused on inference.
-
-The PLY → splat math mirrors
-`services/gs-training-local/pipeline/compress_splat.py`. Inlined here
-because pulling gs-training-local into dispatch's dep graph would drag
-in torch and the COLMAP helpers we don't need. Keep the two in sync.
+PLY→splat math is a copy of services/gs-training-local/pipeline/
+compress_splat.py; that package would drag torch into dispatch, so we
+inline the ~50 lines here. Keep the two in sync.
 """
 
 from __future__ import annotations
@@ -23,8 +17,7 @@ from plyfile import PlyData
 log = logging.getLogger(__name__)
 
 
-# Spherical-harmonics Y_0^0 — the DC term used by 3DGS PLYs to encode
-# the base RGB color before per-direction view-dependent terms.
+# SH Y_0^0 — DC term 3DGS PLYs use to encode base RGB.
 SH_C0 = 0.28209479177387814
 
 
@@ -91,20 +84,16 @@ def ply_bytes_to_splat_bytes(ply_bytes: bytes) -> tuple[bytes, int]:
 def auto_frame_camera(
     splat_bytes: bytes, gaussian_count: int
 ) -> tuple[list[float], list[float]]:
-    """Pick an initial (eye, fwd) so the user sees something on first load.
+    """Initial (eye, fwd) for a transient SHARP scene.
 
-    SHARP follows OpenCV convention with the reconstructed scene
-    centered around (0, 0, +z). Centroid + AABB half-extent (max-axis,
-    not full-distance — quieter to single-gaussian outliers), then a
-    2.5×radius pull-back along -z. Good enough for transient SHARP
-    results where there's no curated camera in the catalog.
+    OpenCV convention, scene around (0, 0, +z). Centroid + max-axis
+    half-extent (outlier-quiet), then 2.5×radius pull-back along -z.
     """
 
     if gaussian_count == 0:
         return [0.0, 0.0, 0.0], [0.0, 0.0, 1.0]
 
-    # Re-interpret the first 12 bytes of each 32-byte record as xyz
-    # floats without copying the rest of the blob.
+    # Reinterpret first 12 bytes of each record as xyz floats; no copy.
     raw = np.frombuffer(splat_bytes, dtype=np.uint8).reshape(gaussian_count, 32)
     xyz = raw[:, :12].view(np.float32).reshape(gaussian_count, 3)
 

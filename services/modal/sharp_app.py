@@ -1,29 +1,9 @@
 """Modal app: Apple ml-sharp single-image → 3DGS on A10G.
 
-Deploy:
-    modal deploy services/modal/sharp_app.py
-
-Preload weights into the volume (one-shot):
-    modal run services/modal/sharp_app.py::preload_weights
-
-Mirrors services/modal/app.py (FLUX generative editing) — same A10G +
-memory-snapshot + FastAPI-endpoint pattern, swapped pipeline.
-
-Scope: GPU inference only. The Modal container deliberately stops at
-producing a standard 3DGS PLY (which save_ply has to live here anyway
-since it needs the `sharp` package and the predictor's tensor outputs).
-All downstream post-processing — PLY → 32-byte/gaussian .splat
-packing, initial-camera auto-framing, S3 upload — runs on dispatch
-CPU. Keeps the Modal image lean and the GPU container holding the
-weights, nothing else.
-
-Input schema:
-
-    { "image_b64": str, "f_px": float }      # f_px supplied by caller
-
-Output schema:
-
-    { "ply_b64": str, "ply_size_bytes": int }
+GPU inference only — PLY→splat, auto-frame and S3 upload run on
+dispatch. Endpoint: POST {image_b64, f_px} → {ply_b64, ply_size_bytes}.
+Mirrors services/modal/app.py (FLUX); see services/modal/README.md
+for deploy/preload commands.
 """
 
 from __future__ import annotations
@@ -59,8 +39,7 @@ app = modal.App(APP_NAME)
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
 
-# Apple's ml-sharp recommends Python 3.13 (per its README). Modal supports it,
-# and torch 2.5.x has 3.13 wheels.
+# ml-sharp recommends Python 3.13; torch 2.5.x has 3.13 wheels.
 sharp_image = (
     modal.Image.debian_slim(python_version="3.13")
     .apt_install("git", "libgl1", "libglib2.0-0")
@@ -72,8 +51,7 @@ sharp_image = (
         "click",
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
-        # ml-sharp is published only on GitHub; no PyPI release. Pull from
-        # main — pin to a commit once Apple cuts a tagged release.
+        # ml-sharp is GitHub-only; pin to a commit once Apple ships a release.
         "git+https://github.com/apple/ml-sharp.git",
     )
 )
@@ -88,12 +66,7 @@ with sharp_image.imports():
 
 
 def _ensure_checkpoint() -> str:
-    """Download the SHARP checkpoint into the Modal volume if not present.
-
-    Idempotent: subsequent calls return the cached path. Called from both
-    `preload_weights` (explicit one-shot setup) and the `@modal.enter` hook
-    (in case preload was skipped — keeps cold starts self-healing).
-    """
+    """Download the SHARP checkpoint into the volume on first call. Idempotent."""
 
     if os.path.exists(CHECKPOINT_LOCAL_PATH):
         log.info(f"checkpoint cached at {CHECKPOINT_LOCAL_PATH}")
@@ -102,8 +75,7 @@ def _ensure_checkpoint() -> str:
     log.info(f"downloading checkpoint from {CHECKPOINT_URL} -> {CHECKPOINT_LOCAL_PATH}")
     os.makedirs(MODEL_DIR, exist_ok=True)
     t0 = time.perf_counter()
-    # Stream to a sibling .tmp file then rename — partial downloads don't
-    # leave a half-broken file in the cache on container kill.
+    # Tmp + rename so a killed container can't leave a half-file in the cache.
     tmp = CHECKPOINT_LOCAL_PATH + ".tmp"
     urllib.request.urlretrieve(CHECKPOINT_URL, tmp)
     os.replace(tmp, CHECKPOINT_LOCAL_PATH)
@@ -123,11 +95,7 @@ def _ensure_checkpoint() -> str:
     memory=8192,
 )
 def preload_weights() -> str:
-    """Download the SHARP checkpoint into the persistent volume.
-
-    Run once: `modal run services/modal/sharp_app.py::preload_weights`.
-    Re-running is a no-op when the file is already present.
-    """
+    """One-shot: populate the sharp-models volume. Re-running is a no-op."""
 
     path = _ensure_checkpoint()
     volume.commit()
@@ -147,9 +115,7 @@ def preload_weights() -> str:
 class SharpInference:
     @modal.enter(snap=True)
     def load_to_cpu(self) -> None:
-        """Snapshot hook: load predictor weights into CPU RAM once, before
-        Modal freezes the memory snapshot. Future cold starts skip the disk
-        read — the RAM image is restored straight from the snapshot."""
+        """Snapshot hook: load weights into CPU RAM once; cold starts restore from RAM."""
 
         log.info("snapshot-load: load_to_cpu() begin (CPU-only container)")
         t0 = time.perf_counter()
@@ -171,8 +137,7 @@ class SharpInference:
 
     @modal.enter(snap=False)
     def move_to_gpu(self) -> None:
-        """Post-restore hook: weights are already in RAM (from snapshot or
-        from the load_to_cpu hook on first start), just shuttle to GPU."""
+        """Post-restore hook: shuttle preloaded weights to the GPU."""
 
         log.info("post-restore: move_to_gpu() begin (GPU now attached)")
         t0 = time.perf_counter()
@@ -190,10 +155,7 @@ class SharpInference:
         log.info(f"[{request_id}] inference: start; f_px={f_px:.1f}")
         t0 = time.perf_counter()
 
-        # Decode straight into a numpy array — the image bytes arrive
-        # already EXIF-baked from the dispatch side, so there's nothing
-        # to fix up here. RGB conversion is cheap and unavoidable
-        # because the predictor consumes a float HWC tensor.
+        # Image arrives EXIF-baked from dispatch; just decode to an HWC numpy.
         raw = base64.b64decode(image_b64)
         pil = Image.open(io.BytesIO(raw)).convert("RGB")
         arr = np.array(pil)
@@ -208,12 +170,8 @@ class SharpInference:
             f"{inference_ms:.0f}ms"
         )
 
-        # Write the standard 3DGS PLY and ship raw bytes back. save_ply
-        # is part of the `sharp` package and needs the predictor's
-        # internal coord conventions (linearRGB→sRGB, opacity→logit), so
-        # it has to live on the Modal side. Everything past this — PLY
-        # parsing, splat packing, auto-framing, S3 upload — runs on
-        # dispatch CPU.
+        # save_ply stays here — it needs the `sharp` package's linearRGB→sRGB
+        # and opacity→logit conversions tied to the predictor's tensors.
         with tempfile.TemporaryDirectory() as td:
             ply_path = f"{td}/scene.ply"
             t_save = time.perf_counter()
@@ -238,15 +196,8 @@ class SharpInference:
 
     @torch.no_grad()
     def _run_inference(self, image: "np.ndarray", f_px: float) -> Any:
-        """Reproduces sharp.cli.predict.predict_image() inline.
-
-        Inlined instead of imported to avoid a click-CLI dependency at
-        runtime — SHARP's predict_image isn't a publicly committed API
-        (lives under cli/), so calling it directly couples us to internal
-        layout. The preprocessing/postprocessing pipeline below mirrors
-        upstream as of the pinned ml-sharp main; revisit when Apple ships
-        a stable `sharp` Python API.
-        """
+        """Inlined copy of sharp.cli.predict.predict_image — that lives under
+        cli/ and isn't a stable API. Revisit when Apple ships one."""
 
         import torch.nn.functional as F  # noqa: N812
         from sharp.utils.gaussians import unproject_gaussians
@@ -296,9 +247,7 @@ class SharpInference:
 )
 @modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
 def generate(payload: dict[str, Any]) -> dict[str, Any]:
-    """Public HTTP entry point. Gated by Modal proxy-auth — Modal validates
-    incoming Modal-Key/Modal-Secret headers against tokens issued in the
-    dashboard at /settings/proxy-auth-tokens."""
+    """Public HTTP entry point; proxy-auth gated by Modal."""
 
     request_id = uuid.uuid4().hex[:8]
     t0 = time.perf_counter()
