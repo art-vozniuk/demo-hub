@@ -96,10 +96,8 @@ def _ensure_checkpoint() -> str:
     """
 
     if os.path.exists(CHECKPOINT_LOCAL_PATH):
-        log.info(f"checkpoint cached at {CHECKPOINT_LOCAL_PATH}")
         return CHECKPOINT_LOCAL_PATH
 
-    log.info(f"downloading checkpoint from {CHECKPOINT_URL} -> {CHECKPOINT_LOCAL_PATH}")
     os.makedirs(MODEL_DIR, exist_ok=True)
     t0 = time.perf_counter()
     # Stream to a sibling .tmp file then rename — partial downloads don't
@@ -108,10 +106,7 @@ def _ensure_checkpoint() -> str:
     urllib.request.urlretrieve(CHECKPOINT_URL, tmp)
     os.replace(tmp, CHECKPOINT_LOCAL_PATH)
     size_mb = os.path.getsize(CHECKPOINT_LOCAL_PATH) / (1024 * 1024)
-    log.info(
-        f"checkpoint downloaded ({size_mb:.1f} MB) "
-        f"in {(time.perf_counter() - t0):.1f}s"
-    )
+    log.info(f"checkpoint downloaded {size_mb:.1f}MB in {(time.perf_counter()-t0):.1f}s")
     return CHECKPOINT_LOCAL_PATH
 
 
@@ -131,7 +126,7 @@ def preload_weights() -> str:
 
     path = _ensure_checkpoint()
     volume.commit()
-    log.info(f"volume.commit done; checkpoint at {path}")
+    log.info(f"preload done: {path}")
     return path
 
 
@@ -151,34 +146,22 @@ class SharpInference:
         Modal freezes the memory snapshot. Future cold starts skip the disk
         read — the RAM image is restored straight from the snapshot."""
 
-        log.info("snapshot-load: load_to_cpu() begin (CPU-only container)")
         t0 = time.perf_counter()
-
         ckpt_path = _ensure_checkpoint()
         state_dict = torch.load(ckpt_path, weights_only=True, map_location="cpu")
-        load_ms = (time.perf_counter() - t0) * 1000
-        log.info(f"snapshot-load: torch.load done in {load_ms:.0f}ms")
-
-        t1 = time.perf_counter()
         self.predictor = create_predictor(PredictorParams())
         self.predictor.load_state_dict(state_dict)
         self.predictor.eval()
-        init_ms = (time.perf_counter() - t1) * 1000
-        log.info(
-            f"snapshot-load: create_predictor + load_state_dict done "
-            f"in {init_ms:.0f}ms"
-        )
+        log.info(f"snap-load: predictor ready in {(time.perf_counter()-t0)*1000:.0f}ms")
 
     @modal.enter(snap=False)
     def move_to_gpu(self) -> None:
         """Post-restore hook: weights are already in RAM (from snapshot or
         from the load_to_cpu hook on first start), just shuttle to GPU."""
 
-        log.info("post-restore: move_to_gpu() begin (GPU now attached)")
         t0 = time.perf_counter()
         self.predictor.to("cuda")
-        to_cuda_ms = (time.perf_counter() - t0) * 1000
-        log.info(f"post-restore: predictor.to(cuda) done in {to_cuda_ms:.0f}ms")
+        log.info(f"post-restore: to(cuda) in {(time.perf_counter()-t0)*1000:.0f}ms")
 
     @modal.method()
     def generate(
@@ -187,50 +170,33 @@ class SharpInference:
         request_id: str,
         f_px: float,
     ) -> dict[str, Any]:
-        log.info(f"[{request_id}] inference: start; f_px={f_px:.1f}")
         t0 = time.perf_counter()
 
-        # Decode straight into a numpy array — the image bytes arrive
-        # already EXIF-baked from the dispatch side, so there's nothing
-        # to fix up here. RGB conversion is cheap and unavoidable
-        # because the predictor consumes a float HWC tensor.
+        # Image bytes arrive EXIF-baked from dispatch; just decode straight
+        # to the numpy HWC tensor the predictor consumes.
         raw = base64.b64decode(image_b64)
         pil = Image.open(io.BytesIO(raw)).convert("RGB")
         arr = np.array(pil)
         height, width = arr.shape[:2]
-        log.info(f"[{request_id}] input: {width}x{height}, {len(raw)} bytes")
 
         t_inf = time.perf_counter()
         gaussians = self._run_inference(arr, f_px)
         inference_ms = (time.perf_counter() - t_inf) * 1000
-        log.info(
-            f"[{request_id}] inference: predict_image done in "
-            f"{inference_ms:.0f}ms"
-        )
 
-        # Write the standard 3DGS PLY and ship raw bytes back. save_ply
-        # is part of the `sharp` package and needs the predictor's
-        # internal coord conventions (linearRGB→sRGB, opacity→logit), so
-        # it has to live on the Modal side. Everything past this — PLY
-        # parsing, splat packing, auto-framing, S3 upload — runs on
+        # save_ply is part of the `sharp` package and needs the predictor's
+        # internal coord conventions (linearRGB→sRGB, opacity→logit), so it
+        # stays here. PLY → splat, auto-frame and the S3 upload run on
         # dispatch CPU.
         with tempfile.TemporaryDirectory() as td:
             ply_path = f"{td}/scene.ply"
-            t_save = time.perf_counter()
             save_ply(gaussians, f_px, (height, width), ply_path)
             ply_bytes = open(ply_path, "rb").read()
-            log.info(
-                f"[{request_id}] save_ply done in "
-                f"{(time.perf_counter() - t_save) * 1000:.0f}ms; "
-                f"size={len(ply_bytes) / (1024 * 1024):.1f} MB"
-            )
 
         total_ms = (time.perf_counter() - t0) * 1000
         log.info(
-            f"[{request_id}] inference: done in {total_ms:.0f}ms "
-            f"(inference={inference_ms:.0f}ms)"
+            f"[{request_id}] {width}x{height} → {len(ply_bytes)/1e6:.1f}MB PLY in "
+            f"{total_ms:.0f}ms (inference {inference_ms:.0f}ms)"
         )
-
         return {
             "ply_b64": base64.b64encode(ply_bytes).decode("ascii"),
             "ply_size_bytes": len(ply_bytes),
@@ -305,16 +271,12 @@ def generate(payload: dict[str, Any]) -> dict[str, Any]:
 
     image_b64 = payload.get("image_b64")
     f_px = payload.get("f_px")
-    log.info(
-        f"[{request_id}] endpoint: POST received; "
-        f"image_b64_len={len(image_b64) if image_b64 else 0} f_px={f_px}"
-    )
 
     if not image_b64:
-        log.warning(f"[{request_id}] endpoint: rejecting; missing image_b64")
+        log.warning(f"[{request_id}] missing image_b64")
         return {"error": "image_b64 is required"}
     if f_px is None:
-        log.warning(f"[{request_id}] endpoint: rejecting; missing f_px")
+        log.warning(f"[{request_id}] missing f_px")
         return {"error": "f_px is required"}
 
     inference = SharpInference()
@@ -324,9 +286,5 @@ def generate(payload: dict[str, Any]) -> dict[str, Any]:
         f_px=float(f_px),
     )
 
-    total_ms = (time.perf_counter() - t0) * 1000
-    log.info(
-        f"[{request_id}] endpoint: done; total_ms={total_ms:.0f} "
-        f"ply_bytes={result.get('ply_size_bytes') if isinstance(result, dict) else 0}"
-    )
+    log.info(f"[{request_id}] endpoint done in {(time.perf_counter()-t0)*1000:.0f}ms")
     return result
