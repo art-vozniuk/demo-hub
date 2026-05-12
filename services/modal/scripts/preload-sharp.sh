@@ -6,5 +6,5 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-modal run sharp_app.py::preload_weights
+modal run ./apps/sharp.py::preload_weights
 echo "Volume populated successfully."

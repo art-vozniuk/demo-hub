@@ -5,8 +5,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-echo "Deploying $(basename "$PWD")/sharp_app.py..."
-modal deploy sharp_app.py | tee /tmp/modal-deploy-sharp.out
+echo "Deploying $(basename "$PWD")/./apps/sharp.py..."
+modal deploy ./apps/sharp.py | tee /tmp/modal-deploy-sharp.out
 
 URL="$(grep -Eo 'https://[^[:space:]]+\.modal\.run' /tmp/modal-deploy-sharp.out | head -n1 || true)"
 if [ -z "${URL}" ]; then
