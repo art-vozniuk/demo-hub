@@ -9,14 +9,21 @@ Preload weights into the volume (one-shot):
 Mirrors services/modal/app.py (FLUX generative editing) — same A10G +
 memory-snapshot + FastAPI-endpoint pattern, swapped pipeline.
 
-Output schema (returned from the HTTP endpoint):
+Scope: GPU inference only. The Modal container deliberately stops at
+producing a standard 3DGS PLY (which save_ply has to live here anyway
+since it needs the `sharp` package and the predictor's tensor outputs).
+All downstream post-processing — PLY → 32-byte/gaussian .splat
+packing, initial-camera auto-framing, S3 upload — runs on dispatch
+CPU. Keeps the Modal image lean and the GPU container holding the
+weights, nothing else.
 
-    {
-        "splat_b64": str,        # base64 of 32-byte-per-gaussian .splat blob
-        "gaussian_count": int,   # number of gaussians in the splat
-        "camera_eye": [x, y, z], # auto-framed initial camera position
-        "camera_fwd": [x, y, z], # camera forward direction
-    }
+Input schema:
+
+    { "image_b64": str, "f_px": float }      # f_px supplied by caller
+
+Output schema:
+
+    { "ply_b64": str, "ply_size_bytes": int }
 """
 
 from __future__ import annotations
@@ -40,15 +47,6 @@ MODEL_DIR = "/models"
 CHECKPOINT_URL = "https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh.pt"
 CHECKPOINT_LOCAL_PATH = f"{MODEL_DIR}/sharp_2572gikvuh.pt"
 
-# Hard cap on splat size to stay under Supabase Storage's 50 MB-per-object
-# limit (matches services/gs-training-local/pipeline/compress_splat.py).
-# At 32 bytes/gaussian that's ~1.5M gaussians.
-MAX_SPLAT_BYTES = 50 * 1024 * 1024
-MAX_GAUSSIANS = MAX_SPLAT_BYTES // 32
-
-# Constant SH basis Y_0^0 — used by 3DGS PLYs to encode the DC RGB term.
-SH_C0 = 0.28209479177387814
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,7 +69,6 @@ sharp_image = (
         "torchvision==0.20.1",
         "numpy",
         "Pillow==11.0.0",
-        "plyfile",
         "click",
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
@@ -85,8 +82,7 @@ sharp_image = (
 with sharp_image.imports():
     import numpy as np
     import torch
-    from PIL import Image, ImageOps
-    from plyfile import PlyData
+    from PIL import Image
     from sharp.models import PredictorParams, create_predictor
     from sharp.utils.gaussians import save_ply
 
@@ -189,30 +185,21 @@ class SharpInference:
         self,
         image_b64: str,
         request_id: str,
+        f_px: float,
     ) -> dict[str, Any]:
-        log.info(f"[{request_id}] inference: start")
+        log.info(f"[{request_id}] inference: start; f_px={f_px:.1f}")
         t0 = time.perf_counter()
 
-        # 1. Decode + orient input
+        # Decode straight into a numpy array — the image bytes arrive
+        # already EXIF-baked from the dispatch side, so there's nothing
+        # to fix up here. RGB conversion is cheap and unavoidable
+        # because the predictor consumes a float HWC tensor.
         raw = base64.b64decode(image_b64)
-        pil = Image.open(io.BytesIO(raw))
-        # Bake phone-portrait EXIF rotation in — SHARP's preprocessing drops
-        # it, so without this a portrait photo arrives at the model sideways.
-        pil = ImageOps.exif_transpose(pil)
-        if pil.mode != "RGB":
-            pil = pil.convert("RGB")
+        pil = Image.open(io.BytesIO(raw)).convert("RGB")
         arr = np.array(pil)
         height, width = arr.shape[:2]
         log.info(f"[{request_id}] input: {width}x{height}, {len(raw)} bytes")
 
-        # SHARP needs a focal length in pixels. EXIF on web-uploaded photos
-        # is often stripped, so use a sensible default for phone-camera FOV
-        # (~62° horizontal). Picking too small under-projects the scene
-        # (everything bunches near origin); too large blows the scene up.
-        # 0.9 * width is a reasonable midpoint for "typical phone photo".
-        f_px = float(width) * 0.9
-
-        # 2. Inference
         t_inf = time.perf_counter()
         gaussians = self._run_inference(arr, f_px)
         inference_ms = (time.perf_counter() - t_inf) * 1000
@@ -221,33 +208,22 @@ class SharpInference:
             f"{inference_ms:.0f}ms"
         )
 
-        # 3. Save to standard 3DGS PLY (handles linearRGB→sRGB +
-        # opacity-to-logit conversions for us), then re-pack into our
-        # 32-byte-per-gaussian .splat layout.
+        # Write the standard 3DGS PLY and ship raw bytes back. save_ply
+        # is part of the `sharp` package and needs the predictor's
+        # internal coord conventions (linearRGB→sRGB, opacity→logit), so
+        # it has to live on the Modal side. Everything past this — PLY
+        # parsing, splat packing, auto-framing, S3 upload — runs on
+        # dispatch CPU.
         with tempfile.TemporaryDirectory() as td:
             ply_path = f"{td}/scene.ply"
             t_save = time.perf_counter()
             save_ply(gaussians, f_px, (height, width), ply_path)
+            ply_bytes = open(ply_path, "rb").read()
             log.info(
                 f"[{request_id}] save_ply done in "
                 f"{(time.perf_counter() - t_save) * 1000:.0f}ms; "
-                f"size={os.path.getsize(ply_path) / (1024 * 1024):.1f} MB"
+                f"size={len(ply_bytes) / (1024 * 1024):.1f} MB"
             )
-
-            t_pack = time.perf_counter()
-            splat_bytes, gaussian_count = _ply_to_splat_bytes(ply_path)
-            pack_ms = (time.perf_counter() - t_pack) * 1000
-            log.info(
-                f"[{request_id}] pack splat done in {pack_ms:.0f}ms; "
-                f"{gaussian_count} gaussians, "
-                f"{len(splat_bytes) / (1024 * 1024):.1f} MB"
-            )
-
-        # 4. Auto-frame initial camera from gaussian positions. SHARP
-        # follows OpenCV convention with scene centered around (0, 0, +z);
-        # placing the eye at -2.5*radius behind the centroid along the
-        # depth axis gives a reasonable default framing for ad-hoc views.
-        eye, fwd = _auto_frame_camera(splat_bytes, gaussian_count)
 
         total_ms = (time.perf_counter() - t0) * 1000
         log.info(
@@ -256,10 +232,8 @@ class SharpInference:
         )
 
         return {
-            "splat_b64": base64.b64encode(splat_bytes).decode("ascii"),
-            "gaussian_count": gaussian_count,
-            "camera_eye": eye,
-            "camera_fwd": fwd,
+            "ply_b64": base64.b64encode(ply_bytes).decode("ascii"),
+            "ply_size_bytes": len(ply_bytes),
         }
 
     @torch.no_grad()
@@ -316,133 +290,6 @@ class SharpInference:
         )
 
 
-def _ply_to_splat_bytes(ply_path: str) -> tuple[bytes, int]:
-    """Read a 3DGS-standard PLY and pack into our 32-byte-per-gaussian layout.
-
-    Math mirrors services/gs-training-local/pipeline/compress_splat.py —
-    inlined here so this Modal app stays self-contained without needing
-    to mount the gs-training-local package. Keep the two in sync.
-
-    Output struct (matches antimatter15/splat + mkkellogg/GaussianSplats3D):
-
-        struct Gaussian {                  // 32 bytes
-          float position[3];               // 12
-          float scales[3];                 // 12 (already exp'd)
-          uint8 rgba[4];                   //  4 (SH DC → RGB; sigmoid opacity)
-          uint8 rotation[4];               //  4 ([-1,1] → [0,255])
-        };
-
-    If the result would exceed Supabase's 50 MB file limit, drop the
-    lowest-opacity gaussians until we fit. Quality loss is graceful —
-    transparent splats contribute least to the rendered image.
-    """
-
-    splat_dtype = np.dtype([
-        ("xyz",    np.float32, 3),
-        ("scales", np.float32, 3),
-        ("rgba",   np.uint8,   4),
-        ("rot",    np.uint8,   4),
-    ])
-
-    plydata = PlyData.read(ply_path)
-    v = plydata["vertex"].data
-    n = len(v)
-
-    xyz = np.stack([v["x"], v["y"], v["z"]], axis=-1).astype(np.float32)
-    scales = np.exp(
-        np.stack(
-            [v["scale_0"], v["scale_1"], v["scale_2"]], axis=-1
-        ).astype(np.float32)
-    )
-    rot = np.stack(
-        [v["rot_0"], v["rot_1"], v["rot_2"], v["rot_3"]], axis=-1
-    ).astype(np.float32)
-    rot_norm = np.linalg.norm(rot, axis=-1, keepdims=True)
-    rot_norm[rot_norm == 0] = 1.0
-    rot /= rot_norm
-    rot_u8 = np.clip(np.round((rot * 0.5 + 0.5) * 255.0), 0, 255).astype(np.uint8)
-
-    dc = np.stack(
-        [v["f_dc_0"], v["f_dc_1"], v["f_dc_2"]], axis=-1
-    ).astype(np.float32)
-    rgb = np.clip(0.5 + SH_C0 * dc, 0.0, 1.0)
-    opacity = 1.0 / (1.0 + np.exp(-v["opacity"].astype(np.float32)))
-    rgba_u8 = np.empty((n, 4), dtype=np.uint8)
-    rgba_u8[:, :3] = np.round(rgb * 255.0).astype(np.uint8)
-    rgba_u8[:, 3] = np.clip(np.round(opacity * 255.0), 0, 255).astype(np.uint8)
-
-    # Cap at MAX_GAUSSIANS by keeping the highest-opacity ones. With
-    # SHARP's 1536×1536 internal resolution the raw output can hit
-    # ~2.4M gaussians; we need to come in under Supabase's per-object
-    # limit before the upload step.
-    if n > MAX_GAUSSIANS:
-        log.warning(
-            f"trimming {n} gaussians → {MAX_GAUSSIANS} by opacity to fit "
-            f"under {MAX_SPLAT_BYTES} bytes"
-        )
-        # argsort ascending; take the top MAX_GAUSSIANS by opacity
-        order = np.argsort(opacity)[-MAX_GAUSSIANS:]
-        xyz = xyz[order]
-        scales = scales[order]
-        rgba_u8 = rgba_u8[order]
-        rot_u8 = rot_u8[order]
-        n = MAX_GAUSSIANS
-
-    arr = np.empty(n, dtype=splat_dtype)
-    arr["xyz"] = xyz
-    arr["scales"] = scales
-    arr["rgba"] = rgba_u8
-    arr["rot"] = rot_u8
-
-    return arr.tobytes(), n
-
-
-def _auto_frame_camera(
-    splat_bytes: bytes, gaussian_count: int
-) -> tuple[list[float], list[float]]:
-    """Pick an initial (eye, fwd) so the user sees something on first load.
-
-    SHARP centers the reconstructed scene around (0, 0, +z) in OpenCV
-    convention. We pull the per-gaussian xyz back out of the packed splat
-    blob, compute centroid + radius, then place the camera one scene-
-    radius behind the centroid along -z, looking toward +z. Good enough
-    for a single-image demo where there's no canonical "front" of the
-    scene to align to.
-    """
-
-    if gaussian_count == 0:
-        return [0.0, 0.0, 0.0], [0.0, 0.0, 1.0]
-
-    # Re-interpret the first 12 bytes of each 32-byte record as xyz floats
-    # without copying the whole blob — we already paid for one round of
-    # packing, no point doing another.
-    raw = np.frombuffer(splat_bytes, dtype=np.uint8).reshape(gaussian_count, 32)
-    xyz = raw[:, :12].view(np.float32).reshape(gaussian_count, 3)
-
-    centroid = xyz.mean(axis=0)
-    # Use the max-axis half-extent rather than full distance — quieter to
-    # outliers (a single far-away gaussian doesn't blow the framing).
-    half_extent = np.abs(xyz - centroid).max(axis=0)
-    radius = float(np.linalg.norm(half_extent))
-    if radius < 1e-3:
-        radius = 1.0  # degenerate scene; back the camera off by a unit
-
-    # 2.5×radius pull-back along -z; clamp so we never end up at the
-    # origin or behind the camera plane.
-    pullback = max(2.5 * radius, 1.0)
-    eye = [
-        float(centroid[0]),
-        float(centroid[1]),
-        float(centroid[2] - pullback),
-    ]
-    fwd = [0.0, 0.0, 1.0]
-    log.info(
-        f"auto-frame: centroid={centroid.tolist()} radius={radius:.3f} "
-        f"eye={eye} fwd={fwd}"
-    )
-    return eye, fwd
-
-
 @app.function(
     image=sharp_image,
     timeout=600,
@@ -457,24 +304,29 @@ def generate(payload: dict[str, Any]) -> dict[str, Any]:
     t0 = time.perf_counter()
 
     image_b64 = payload.get("image_b64")
+    f_px = payload.get("f_px")
     log.info(
         f"[{request_id}] endpoint: POST received; "
-        f"image_b64_len={len(image_b64) if image_b64 else 0}"
+        f"image_b64_len={len(image_b64) if image_b64 else 0} f_px={f_px}"
     )
 
     if not image_b64:
         log.warning(f"[{request_id}] endpoint: rejecting; missing image_b64")
         return {"error": "image_b64 is required"}
+    if f_px is None:
+        log.warning(f"[{request_id}] endpoint: rejecting; missing f_px")
+        return {"error": "f_px is required"}
 
     inference = SharpInference()
     result = inference.generate.remote(
         request_id=request_id,
         image_b64=image_b64,
+        f_px=float(f_px),
     )
 
     total_ms = (time.perf_counter() - t0) * 1000
     log.info(
         f"[{request_id}] endpoint: done; total_ms={total_ms:.0f} "
-        f"gaussians={result.get('gaussian_count') if isinstance(result, dict) else 0}"
+        f"ply_bytes={result.get('ply_size_bytes') if isinstance(result, dict) else 0}"
     )
     return result

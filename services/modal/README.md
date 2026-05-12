@@ -136,20 +136,29 @@ MODAL_SHARP_ENDPOINT_URL=https://<workspace>--demo-hub-sharp-generate.modal.run
 
 ### Endpoint contract
 
-`POST /` accepts `{"image_b64": "<base64-encoded JPEG/PNG>"}` and returns:
+`POST /` accepts the EXIF-baked photo and a precomputed focal length:
 
 ```json
 {
-  "splat_b64": "<base64 of 32-byte/gaussian .splat blob>",
-  "gaussian_count": 1234567,
-  "camera_eye": [x, y, z],
-  "camera_fwd": [x, y, z]
+  "image_b64": "<base64-encoded JPEG/PNG, EXIF already applied>",
+  "f_px": 1234.5
 }
 ```
 
-`camera_eye`/`camera_fwd` are auto-framed from the gaussian point cloud
-(centroid + AABB radius, pulled back along -z). SHARP follows OpenCV
-convention with the scene around (0, 0, +z).
+and returns a standard 3DGS PLY:
+
+```json
+{
+  "ply_b64": "<base64-encoded .ply bytes>",
+  "ply_size_bytes": 12345678
+}
+```
+
+Scope: GPU inference only. Splat packing (PLY → 32-byte/gaussian
+`.splat`), auto-framing (`camera_eye` / `camera_fwd` from the
+gaussian AABB), and the S3 upload all run on the dispatch worker —
+plain numpy + plyfile, no GPU needed. Keeps the Modal container
+focused on what the A10G is actually for.
 
 ### License caveats
 
