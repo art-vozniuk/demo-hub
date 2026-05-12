@@ -90,7 +90,11 @@ class SharpPipeline(AsyncPipeline):
         image_bytes, f_px = await asyncio.to_thread(
             _prepare_image_for_modal, image_bytes
         )
-        prep_ms = (time.perf_counter() - t_prep) * 1000
+        log.info(
+            "sharp: prep image done in %.0fms (f_px=%.1f)",
+            (time.perf_counter() - t_prep) * 1000,
+            f_px,
+        )
 
         payload = {
             "image_b64": base64.b64encode(image_bytes).decode("ascii"),
@@ -102,7 +106,8 @@ class SharpPipeline(AsyncPipeline):
         ply_b64 = result.get("ply_b64")
         if not ply_b64:
             raise RuntimeError(
-                f"Modal SHARP returned no ply_b64; keys={list(result.keys())}"
+                f"Modal SHARP endpoint returned no ply_b64; payload keys: "
+                f"{list(result.keys())}"
             )
         ply_bytes = base64.b64decode(ply_b64)
 
@@ -110,7 +115,13 @@ class SharpPipeline(AsyncPipeline):
         splat_bytes, gaussian_count, camera_eye, camera_fwd = await asyncio.to_thread(
             _ply_to_splat_and_frame, ply_bytes
         )
-        post_ms = (time.perf_counter() - t_post) * 1000
+        log.info(
+            "sharp: ply→splat + auto-frame done in %.0fms "
+            "(%d gaussians, %.1f MB)",
+            (time.perf_counter() - t_post) * 1000,
+            gaussian_count,
+            len(splat_bytes) / (1024 * 1024),
+        )
 
         url = await self.s3.upload_file(
             data_bytes=splat_bytes,
@@ -120,13 +131,8 @@ class SharpPipeline(AsyncPipeline):
         )
 
         log.info(
-            "sharp done: %d gaussians, %.1fMB → %s "
-            "(prep %.0fms, post %.0fms)",
-            gaussian_count,
-            len(splat_bytes) / 1e6,
-            url,
-            prep_ms,
-            post_ms,
+            f"Dispatched sharp complete; uploaded {len(splat_bytes)} bytes "
+            f"({gaussian_count} gaussians) to {url}"
         )
         return {
             "result_url": url,

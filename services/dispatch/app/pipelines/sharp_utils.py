@@ -14,9 +14,13 @@ in torch and the COLMAP helpers we don't need. Keep the two in sync.
 from __future__ import annotations
 
 import io
+import logging
 
 import numpy as np
 from plyfile import PlyData
+
+
+log = logging.getLogger(__name__)
 
 
 # Spherical-harmonics Y_0^0 — the DC term used by 3DGS PLYs to encode
@@ -50,6 +54,7 @@ def ply_bytes_to_splat_bytes(ply_bytes: bytes) -> tuple[bytes, int]:
     plydata = PlyData.read(io.BytesIO(ply_bytes))
     v = plydata["vertex"].data
     n = len(v)
+    log.info("ply→splat: read %d gaussians", n)
 
     xyz = np.stack([v["x"], v["y"], v["z"]], axis=-1).astype(np.float32)
     scales = np.exp(
@@ -116,4 +121,11 @@ def auto_frame_camera(
         float(centroid[2] - pullback),
     ]
     fwd = [0.0, 0.0, 1.0]
+    log.info(
+        "auto-frame: centroid=%s radius=%.3f eye=%s fwd=%s",
+        centroid.tolist(),
+        radius,
+        eye,
+        fwd,
+    )
     return eye, fwd
