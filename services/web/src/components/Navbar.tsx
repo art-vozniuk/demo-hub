@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAnalytics } from "@/hooks/useAnalytics";
@@ -10,7 +10,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { User, LogOut, ChevronDown, List } from "lucide-react";
+import {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import { ChevronDown, List, LogOut, Menu, User } from "lucide-react";
 import TokenBalance from "@/components/TokenBalance";
 
 type NavItem = { to: string; label: string; end?: boolean };
@@ -31,6 +38,7 @@ const Navbar = () => {
   const navAreaRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
   const [visibleCount, setVisibleCount] = useState(ALL_LINKS.length);
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   useLayoutEffect(() => {
     const area = navAreaRef.current;
@@ -43,6 +51,9 @@ const Navbar = () => {
       // collapse into "More" while the user is interacting with a menu.
       if (document.body.hasAttribute("data-scroll-locked")) return;
       const available = area.clientWidth;
+      // The adaptive nav is hidden on mobile (display:none → clientWidth 0).
+      // Nothing to compute in that state; the hamburger handles mobile.
+      if (available === 0) return;
       const itemEls = measure.querySelectorAll<HTMLElement>("[data-m-item]");
       const moreEl = measure.querySelector<HTMLElement>("[data-m-more]");
       const moreWidth = moreEl ? moreEl.offsetWidth : 0;
@@ -80,6 +91,11 @@ const Navbar = () => {
     return () => ro.disconnect();
   }, []);
 
+  // Close the mobile sheet on route change so it doesn't linger after a tap.
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
+
   const isLinkActive = (link: NavItem) =>
     link.end ? location.pathname === link.to : location.pathname.startsWith(link.to);
 
@@ -114,7 +130,7 @@ const Navbar = () => {
   };
 
   const navLinkClassName = ({ isActive }: { isActive: boolean }) =>
-    `relative whitespace-nowrap text-xs sm:text-sm font-medium transition-colors hover:text-primary ${
+    `relative whitespace-nowrap text-sm font-medium transition-colors hover:text-primary ${
       isActive ? "text-primary" : "text-muted-foreground"
     } after:absolute after:-bottom-1 after:left-0 after:h-0.5 after:w-full after:origin-left after:scale-x-0 after:bg-primary after:transition-transform after:duration-300 ${
       isActive ? "after:scale-x-100" : "hover:after:scale-x-100"
@@ -129,32 +145,32 @@ const Navbar = () => {
 
         <div
           ref={navAreaRef}
-          className="relative flex min-w-0 flex-1 items-center justify-end"
+          className="relative hidden min-w-0 flex-1 items-center justify-end sm:flex"
         >
           <div
             ref={measureRef}
             aria-hidden
-            className="pointer-events-none invisible absolute left-0 top-0 flex items-center gap-3 sm:gap-8"
+            className="pointer-events-none invisible absolute left-0 top-0 flex items-center gap-8"
           >
             {ALL_LINKS.map((link) => (
               <span
                 key={link.to}
                 data-m-item
-                className="whitespace-nowrap text-xs sm:text-sm font-medium"
+                className="whitespace-nowrap text-sm font-medium"
               >
                 {link.label}
               </span>
             ))}
             <span
               data-m-more
-              className="flex items-center gap-1 whitespace-nowrap text-xs sm:text-sm font-medium"
+              className="flex items-center gap-1 whitespace-nowrap text-sm font-medium"
             >
               More
-              <ChevronDown className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              <ChevronDown className="h-4 w-4" />
             </span>
           </div>
 
-          <ul className="flex items-center gap-3 sm:gap-8">
+          <ul className="flex items-center gap-8">
             {visibleLinks.map((link) => (
               <li key={link.to}>
                 <NavLink
@@ -172,14 +188,14 @@ const Navbar = () => {
                 <DropdownMenu>
                   <DropdownMenuTrigger
                     aria-label="More navigation"
-                    className={`group relative flex items-center gap-1 whitespace-nowrap text-xs sm:text-sm font-medium outline-none transition-colors hover:text-primary data-[state=open]:text-primary ${
+                    className={`group relative flex items-center gap-1 whitespace-nowrap text-sm font-medium outline-none transition-colors hover:text-primary data-[state=open]:text-primary ${
                       isMoreActive ? "text-primary" : "text-muted-foreground"
                     } after:absolute after:-bottom-1 after:left-0 after:h-0.5 after:w-full after:origin-left after:scale-x-0 after:bg-primary after:transition-transform after:duration-300 ${
                       isMoreActive ? "after:scale-x-100" : "hover:after:scale-x-100"
                     }`}
                   >
                     More
-                    <ChevronDown className="h-3.5 w-3.5 sm:h-4 sm:w-4 transition-transform duration-200 group-data-[state=open]:rotate-180" />
+                    <ChevronDown className="h-4 w-4 transition-transform duration-200 group-data-[state=open]:rotate-180" />
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="min-w-[10rem]">
                     {hiddenLinks.map((link) => (
@@ -203,7 +219,7 @@ const Navbar = () => {
           </ul>
         </div>
 
-        <div className="shrink-0 flex items-center gap-2 sm:gap-3 pl-2 sm:pl-4 border-l border-border">
+        <div className="ml-auto flex shrink-0 items-center gap-2 sm:ml-0 sm:gap-3 sm:border-l sm:border-border sm:pl-4">
           <TokenBalance />
           {user ? (
             <DropdownMenu>
@@ -243,6 +259,39 @@ const Navbar = () => {
               <Link to="/auth">Sign in</Link>
             </Button>
           )}
+
+          <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+            <SheetTrigger
+              aria-label="Open navigation menu"
+              className="ml-1 inline-flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground outline-none transition-colors hover:text-primary hover:bg-muted/50 sm:hidden"
+            >
+              <Menu className="h-5 w-5" />
+            </SheetTrigger>
+            <SheetContent side="right" className="w-72 p-0 sm:max-w-xs">
+              <SheetTitle className="sr-only">Navigation</SheetTitle>
+              <div className="flex flex-col gap-1 p-6 pt-14">
+                {ALL_LINKS.map((link) => {
+                  const active = isLinkActive(link);
+                  return (
+                    <SheetClose key={link.to} asChild>
+                      <NavLink
+                        to={link.to}
+                        end={link.end}
+                        onClick={() => handleNavClick(link.to)}
+                        className={`rounded-md px-3 py-2.5 text-base font-medium transition-colors ${
+                          active
+                            ? "bg-muted text-primary"
+                            : "text-muted-foreground hover:bg-muted/50 hover:text-primary"
+                        }`}
+                      >
+                        {link.label}
+                      </NavLink>
+                    </SheetClose>
+                  );
+                })}
+              </div>
+            </SheetContent>
+          </Sheet>
         </div>
       </div>
     </nav>
