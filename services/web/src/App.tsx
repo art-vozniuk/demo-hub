@@ -17,6 +17,7 @@ import GenerativeEditingGenerate from "./pages/GenerativeEditingGenerate";
 import Renderer from "./pages/Renderer";
 import Sharp from "./pages/Sharp";
 import Auth from "./pages/Auth";
+import MyPipelines from "./pages/MyPipelines";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -43,6 +44,7 @@ const App = () => (
                       <Route path="/generative-editing/generate" element={<GenerativeEditingGenerate />} />
                       <Route path="/renderer" element={<Renderer />} />
                       <Route path="/sharp" element={<Sharp />} />
+                      <Route path="/me/pipelines" element={<MyPipelines />} />
                       <Route path="/auth" element={<Auth />} />
                       <Route path="*" element={<NotFound />} />
                     </Routes>

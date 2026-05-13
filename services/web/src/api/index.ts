@@ -22,4 +22,7 @@ export type {
   GenerativeEditingResult,
   SharpResult,
   PipelineResult,
+  PipelineStatus,
+  UserPipelineItem,
+  UserPipelinesResponse,
 } from "./core/pipelines";

@@ -1,5 +1,6 @@
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     DateTime,
@@ -19,6 +20,9 @@ class PipelineType(Base, TimeStampMixin):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     base_cost = Column(Integer, nullable=False)
+    visible_in_user_history = Column(
+        Boolean, nullable=False, server_default="true", default=True
+    )
 
     __table_args__ = (
         UniqueConstraint("name", name="uq_pipeline_types_name"),

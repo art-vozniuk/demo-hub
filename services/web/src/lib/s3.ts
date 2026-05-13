@@ -85,3 +85,13 @@ export function getFileExtension(filename: string): string {
   return parts.length > 1 ? parts[parts.length - 1] : "jpg";
 }
 
+export function getPublicImageUrl(
+  bucket: string | undefined | null,
+  key: string | undefined | null,
+): string | null {
+  if (!bucket || !key) return null;
+  const publicEndpoint = import.meta.env.VITE_S3_PUBLIC_BUCKETS_ENDPOINT;
+  if (!publicEndpoint) return null;
+  return `${publicEndpoint}/${bucket}/${key}`;
+}
+

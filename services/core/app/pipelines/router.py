@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from services.common.auth.models import User
 from services.common.database import DbSession
@@ -17,6 +17,8 @@ from .schemas import (
     PipelineStatusItem,
     PipelineEstimateResponse,
     PipelineJobInput,
+    UserPipelineItem,
+    UserPipelinesResponse,
 )
 from . import service
 from .estimation import estimate_pipeline
@@ -97,6 +99,8 @@ async def _process_pipeline(
         pipeline_id=pipeline_id,
         trace_id=trace_id,
         pipeline_name=pipeline_name,
+        input=pipeline.input,
+        user_id=user_uuid,
     )
 
     resolved_input = await resolve_pipeline_input(db, pipeline_name, pipeline.input)
@@ -187,6 +191,30 @@ async def get_pipeline_status(
 
     return PipelineStatusResponse(
         pipelines=[PipelineStatusItem.model_validate(p) for p in pipelines]
+    )
+
+
+@router.get(
+    "/mine",
+    response_model=UserPipelinesResponse,
+    dependencies=[Depends(rate_limit("mine", config.RATE_LIMIT_STATUS_PER_MINUTE, 60))],
+)
+async def list_my_pipelines(
+    db: DbSession,
+    user: User = Depends(_get_user_dep()),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> UserPipelinesResponse:
+    user_uuid: UUID = UUID(user.id)
+    pipelines = await service.list_pipelines_for_user(
+        db, user_uuid, limit=limit, offset=offset
+    )
+    total = await service.count_pipelines_for_user(db, user_uuid)
+    return UserPipelinesResponse(
+        pipelines=[UserPipelineItem.model_validate(p) for p in pipelines],
+        total=total,
+        limit=limit,
+        offset=offset,
     )
 
 

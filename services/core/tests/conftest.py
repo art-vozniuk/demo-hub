@@ -9,6 +9,7 @@ from services.common.auth.models import User
 from services.core.app.pipelines.models import Pipeline
 from services.core.app.recast.models import RecastTemplate
 from services.core.app.generative.models import GenerativePreset
+from services.core.app.wallet.models import PipelineType
 
 
 # Use file-based URI with shared cache to ensure single database instance
@@ -19,7 +20,7 @@ TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:?cache=shared"
 async def engine():
     # Ensure models are loaded by referencing them
     # This ensures they're registered with Base.metadata
-    _ = [Pipeline, RecastTemplate, GenerativePreset]
+    _ = [Pipeline, RecastTemplate, GenerativePreset, PipelineType]
 
     engine = create_async_engine(
         TEST_DATABASE_URL,
@@ -64,3 +65,23 @@ def mock_rabbitmq_publisher(mocker):
     publisher = mocker.AsyncMock()
     publisher.publish = mocker.AsyncMock()
     return publisher
+
+
+@pytest.fixture
+async def seeded_pipeline_types(db_session):
+    """Seed pipeline_types with the production defaults: face_recognition
+    hidden from user history, the rest visible."""
+    db_session.add_all(
+        [
+            PipelineType(
+                name="face_recognition", base_cost=0, visible_in_user_history=False
+            ),
+            PipelineType(name="face_swap", base_cost=1, visible_in_user_history=True),
+            PipelineType(
+                name="generative_editing",
+                base_cost=10,
+                visible_in_user_history=True,
+            ),
+        ]
+    )
+    await db_session.commit()
