@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 from pydantic import BaseModel
@@ -47,3 +48,23 @@ class PipelineEstimateResponse(BaseModel):
     queue_position: int
     worker_count: int
     workers_missing: bool
+
+
+class UserPipelineItem(BaseModel):
+    id: UUID
+    pipeline_name: str
+    status: PipelineStatus
+    message: str | None = None
+    input: dict[str, Any] | None = None
+    result: dict[str, Any] | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class UserPipelinesResponse(BaseModel):
+    pipelines: list[UserPipelineItem]
+    total: int
+    limit: int
+    offset: int

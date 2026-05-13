@@ -21,10 +21,12 @@ async def create_pipeline(
     trace_id: UUID,
     pipeline_name: str,
     input: dict | None = None,
+    user_id: UUID | None = None,
 ) -> Pipeline:
     pipeline = Pipeline(
         id=pipeline_id,
         trace_id=trace_id,
+        user_id=user_id,
         pipeline_name=pipeline_name,
         status=PipelineStatus.PENDING,
         input=input,
@@ -45,6 +47,29 @@ async def get_pipelines_by_ids(
 ) -> list[Pipeline]:
     result = await db.execute(select(Pipeline).where(Pipeline.id.in_(pipeline_ids)))
     return list(result.scalars().all())
+
+
+async def list_pipelines_for_user(
+    db: AsyncSession,
+    user_id: UUID,
+    limit: int,
+    offset: int,
+) -> list[Pipeline]:
+    stmt = (
+        select(Pipeline)
+        .where(Pipeline.user_id == user_id)
+        .order_by(Pipeline.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def count_pipelines_for_user(db: AsyncSession, user_id: UUID) -> int:
+    stmt = select(func.count(Pipeline.id)).where(Pipeline.user_id == user_id)
+    result = await db.execute(stmt)
+    return int(result.scalar_one())
 
 
 async def get_pipeline_by_id(
