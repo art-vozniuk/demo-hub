@@ -21,4 +21,7 @@ export type {
   FaceSwapResult,
   GenerativeEditingResult,
   PipelineResult,
+  PipelineStatus,
+  UserPipelineItem,
+  UserPipelinesResponse,
 } from "./core/pipelines";
