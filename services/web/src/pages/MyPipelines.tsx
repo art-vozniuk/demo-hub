@@ -12,7 +12,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { pipelinesApi, type UserPipelineItem } from "@/api";
 import PipelineStatusBadge from "@/components/pipelines/PipelineStatusBadge";
@@ -62,7 +61,7 @@ const MyPipelines = () => {
     if (user) track({ name: "my_pipelines_viewed", params: {} });
   }, [user, track]);
 
-  const { data, isLoading, isError, refetch } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ["my-pipelines", user?.id],
     enabled: !!user,
     queryFn: () => pipelinesApi.getMine(PAGE_SIZE, 0),
@@ -90,28 +89,18 @@ const MyPipelines = () => {
 
   return (
     <div className="container mx-auto px-3 sm:px-6 py-8">
-      <div className="mb-6 flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
-            My Pipelines
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            History of pipelines you have queued.
-            {inFlightCount > 0 && (
-              <span className="ml-2 text-primary">
-                {inFlightCount} in progress
-              </span>
-            )}
-          </p>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => refetch()}
-          disabled={isLoading}
-        >
-          Refresh
-        </Button>
+      <div className="mb-6">
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
+          My Pipelines
+        </h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          History of pipelines you have queued.
+          {inFlightCount > 0 && (
+            <span className="ml-2 text-primary">
+              {inFlightCount} in progress
+            </span>
+          )}
+        </p>
       </div>
 
       {isLoading ? (
