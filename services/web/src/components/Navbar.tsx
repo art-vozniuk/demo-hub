@@ -139,6 +139,39 @@ const Navbar = () => {
   return (
     <nav className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md">
       <div className="container mx-auto flex h-16 items-center gap-3 sm:gap-8 px-3 sm:px-6">
+        <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+          <SheetTrigger
+            aria-label="Open navigation menu"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground outline-none transition-colors hover:text-primary hover:bg-muted/50 sm:hidden"
+          >
+            <Menu className="h-5 w-5" />
+          </SheetTrigger>
+          <SheetContent side="left" className="w-72 p-0 sm:max-w-xs">
+            <SheetTitle className="sr-only">Navigation</SheetTitle>
+            <div className="flex flex-col gap-1 p-6 pt-14">
+              {ALL_LINKS.map((link) => {
+                const active = isLinkActive(link);
+                return (
+                  <SheetClose key={link.to} asChild>
+                    <NavLink
+                      to={link.to}
+                      end={link.end}
+                      onClick={() => handleNavClick(link.to)}
+                      className={`rounded-md px-3 py-2.5 text-base font-medium transition-colors ${
+                        active
+                          ? "bg-muted text-primary"
+                          : "text-muted-foreground hover:bg-muted/50 hover:text-primary"
+                      }`}
+                    >
+                      {link.label}
+                    </NavLink>
+                  </SheetClose>
+                );
+              })}
+            </div>
+          </SheetContent>
+        </Sheet>
+
         <h1 className="shrink-0 text-base sm:text-xl font-bold tracking-tight text-gradient">
           Demo Hub
         </h1>
@@ -259,39 +292,6 @@ const Navbar = () => {
               <Link to="/auth">Sign in</Link>
             </Button>
           )}
-
-          <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-            <SheetTrigger
-              aria-label="Open navigation menu"
-              className="ml-1 inline-flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground outline-none transition-colors hover:text-primary hover:bg-muted/50 sm:hidden"
-            >
-              <Menu className="h-5 w-5" />
-            </SheetTrigger>
-            <SheetContent side="right" className="w-72 p-0 sm:max-w-xs">
-              <SheetTitle className="sr-only">Navigation</SheetTitle>
-              <div className="flex flex-col gap-1 p-6 pt-14">
-                {ALL_LINKS.map((link) => {
-                  const active = isLinkActive(link);
-                  return (
-                    <SheetClose key={link.to} asChild>
-                      <NavLink
-                        to={link.to}
-                        end={link.end}
-                        onClick={() => handleNavClick(link.to)}
-                        className={`rounded-md px-3 py-2.5 text-base font-medium transition-colors ${
-                          active
-                            ? "bg-muted text-primary"
-                            : "text-muted-foreground hover:bg-muted/50 hover:text-primary"
-                        }`}
-                      >
-                        {link.label}
-                      </NavLink>
-                    </SheetClose>
-                  );
-                })}
-              </div>
-            </SheetContent>
-          </Sheet>
         </div>
       </div>
     </nav>
