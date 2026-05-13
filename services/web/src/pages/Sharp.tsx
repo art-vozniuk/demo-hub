@@ -3,12 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { v4 as uuidv4 } from "uuid";
 import { Github } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { ExpandableDescription } from "@/components/ExpandableDescription";
+import { DemoHeader } from "@/components/DemoHeader";
 import UploadDropzone from "@/components/UploadDropzone";
 import {
   pipelinesApi,
@@ -20,7 +15,6 @@ import { uploadToS3, getFileExtension } from "@/lib/s3";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { useWallet } from "@/contexts/WalletContext";
 import { useAuth } from "@/contexts/AuthContext";
-import CostBadge from "@/components/CostBadge";
 import OutOfTokensDialog from "@/components/OutOfTokensDialog";
 import { toast } from "sonner";
 
@@ -240,16 +234,11 @@ const Sharp = () => {
 
   return (
     <main className="container mx-auto px-6 py-16 space-y-12 min-h-[calc(100vh-8rem)]">
-      <section className="max-w-4xl mx-auto space-y-6 text-center animate-fade-in">
-        <div className="space-y-4">
-          <h1 className="text-5xl font-bold tracking-tight sm:text-6xl flex items-center justify-center gap-3 flex-wrap">
-            <span className="text-gradient">SHARP</span>
-            {sharpCost !== undefined && (
-              <CostBadge cost={sharpCost} size="md" />
-            )}
-          </h1>
-
-          <ExpandableDescription>
+      <DemoHeader
+        title="SHARP"
+        cost={sharpCost}
+        description={
+          <>
             Turn a single photo into a 3D Gaussian-Splatting scene you can fly
             a camera around in your browser. Wraps Apple's{" "}
             <a
@@ -263,46 +252,16 @@ const Sharp = () => {
             feed-forward predictor on a serverless A10G — the model
             hallucinates backside geometry from a single view, so straight-on
             or 3/4 product shots work best.
-          </ExpandableDescription>
-
-          <div className="flex items-center justify-center gap-3">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="rounded-full animate-pulse-glow"
-                  asChild
-                >
-                  <a
-                    href="https://github.com/art-vozniuk/demo-hub"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label="GitHub Repository"
-                    onClick={() =>
-                      track({
-                        name: "sharp_github_repo_clicked",
-                        params: {},
-                      })
-                    }
-                  >
-                    <Github className="h-5 w-5" />
-                  </a>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                <p>Visit the repository</p>
-              </TooltipContent>
-            </Tooltip>
-          </div>
-
-          {!photo && !result && !failed && (
-            <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-              Drop a single photo
-            </p>
-          )}
-        </div>
-      </section>
+          </>
+        }
+        githubUrl="https://github.com/art-vozniuk/demo-hub"
+        onGithubClick={() =>
+          track({ name: "sharp_github_repo_clicked", params: {} })
+        }
+        tagline={
+          !photo && !result && !failed ? "Drop a single photo" : undefined
+        }
+      />
 
       <section className="max-w-3xl mx-auto space-y-4">
         {!result && !failed && (

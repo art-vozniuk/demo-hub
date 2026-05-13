@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Github, Activity, Download } from "lucide-react";
+import { ArrowLeft, Activity, Download } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAnalytics } from "@/hooks/useAnalytics";
-import { ExpandableDescription } from "@/components/ExpandableDescription";
+import { DemoHeader } from "@/components/DemoHeader";
 import { RendererUnsupported } from "@/components/RendererUnsupported";
 import { RendererCrashed } from "@/components/RendererCrashed";
 import { splatsApi, SplatSceneRead } from "@/api";
@@ -920,45 +920,14 @@ const Renderer = () => {
 
   return (
     <main className="container mx-auto px-6 py-16 space-y-8 min-h-[calc(100vh-8rem)]">
-      <section className="max-w-4xl mx-auto space-y-6 text-center animate-fade-in">
-        <div className="space-y-4">
-          <h1 className="text-5xl font-bold tracking-tight sm:text-6xl">
-            <span className="text-gradient">Gaussian Splatting</span>
-          </h1>
-          <ExpandableDescription>
-            Real-time Gaussian Splatting renderer. Custom C++ engine on
-            WebGPU with per-frame GPU radix sort and EWA splat projection
-            in WGSL. Compiled to WebAssembly via Emscripten.
-          </ExpandableDescription>
-          <div className="flex items-center justify-center gap-3">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="rounded-full animate-pulse-glow"
-                  asChild
-                >
-                  <a
-                    href="https://github.com/art-vozniuk/renderer"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label="GitHub Repository"
-                    onClick={() =>
-                      track({ name: "renderer_github_repo_clicked", params: {} })
-                    }
-                  >
-                    <Github className="h-5 w-5" />
-                  </a>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                <p>Visit the repository</p>
-              </TooltipContent>
-            </Tooltip>
-          </div>
-        </div>
-      </section>
+      <DemoHeader
+        title="Gaussian Splatting"
+        description="Real-time Gaussian Splatting renderer. Custom C++ engine on WebGPU with per-frame GPU radix sort and EWA splat projection in WGSL. Compiled to WebAssembly via Emscripten."
+        githubUrl="https://github.com/art-vozniuk/renderer"
+        onGithubClick={() =>
+          track({ name: "renderer_github_repo_clicked", params: {} })
+        }
+      />
 
       <div className="max-w-5xl mx-auto space-y-3">
         {webGpu.kind === "checking" ? (

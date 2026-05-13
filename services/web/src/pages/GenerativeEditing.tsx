@@ -1,15 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Github } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { ExpandableDescription } from "@/components/ExpandableDescription";
+import { DemoHeader } from "@/components/DemoHeader";
 import PresetCard from "@/components/PresetCard";
-import CostBadge from "@/components/CostBadge";
 import { useWallet } from "@/contexts/WalletContext";
 import { generativeApi, type GenerativePresetRead } from "@/api";
 import { useAnalytics } from "@/hooks/useAnalytics";
@@ -52,58 +44,16 @@ const GenerativeEditing = () => {
 
   return (
     <main className="container mx-auto px-6 py-16 space-y-12 min-h-[calc(100vh-8rem)]">
-      <section className="max-w-4xl mx-auto space-y-6 text-center animate-fade-in">
-        <div className="space-y-4">
-          <h1 className="text-5xl font-bold tracking-tight sm:text-6xl flex items-center justify-center gap-3 flex-wrap">
-            <span className="text-gradient">Generative Editing</span>
-            {fluxCost !== undefined && (
-              <CostBadge cost={fluxCost} size="md" />
-            )}
-          </h1>
-
-          <ExpandableDescription>
-            Image-conditioned generative editing on FLUX.2 klein. Pick a
-            cinematic preset and the platform routes your photo through a
-            serverless A10G on Modal — async dispatch worker, RabbitMQ
-            orchestration.
-          </ExpandableDescription>
-
-          <div className="flex items-center justify-center gap-3">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="rounded-full animate-pulse-glow"
-                  asChild
-                >
-                  <a
-                    href="https://github.com/art-vozniuk/demo-hub"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label="GitHub Repository"
-                    onClick={() =>
-                      track({
-                        name: "generative_github_repo_clicked",
-                        params: {},
-                      })
-                    }
-                  >
-                    <Github className="h-5 w-5" />
-                  </a>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                <p>Visit the repository</p>
-              </TooltipContent>
-            </Tooltip>
-          </div>
-
-          <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-            Pick a cinematic preset
-          </p>
-        </div>
-      </section>
+      <DemoHeader
+        title="Generative Editing"
+        cost={fluxCost}
+        description="Image-conditioned generative editing on FLUX.2 klein. Pick a cinematic preset and the platform routes your photo through a serverless A10G on Modal — async dispatch worker, RabbitMQ orchestration."
+        githubUrl="https://github.com/art-vozniuk/demo-hub"
+        onGithubClick={() =>
+          track({ name: "generative_github_repo_clicked", params: {} })
+        }
+        tagline="Pick a cinematic preset"
+      />
 
       <section className="max-w-6xl mx-auto">
         {error && (

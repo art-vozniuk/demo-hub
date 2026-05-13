@@ -2,16 +2,14 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import Masonry from "react-masonry-css";
 import { Button } from "@/components/ui/button";
-import {Sparkles, Github, Linkedin} from "lucide-react";
+import {Sparkles, Linkedin} from "lucide-react";
 import { recastApi, type RecastTemplateRead } from "@/api";
 import TemplateCard from "@/components/TemplateCard";
 import CustomTemplateCard from "@/components/CustomTemplateCard";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import type { AnalyticsEvent } from "@/types/analytics";
 import "./masonry.css";
-import {Tooltip, TooltipContent, TooltipTrigger} from "@/components/ui/tooltip.tsx";
-import { ExpandableDescription } from "@/components/ExpandableDescription";
-import CostBadge from "@/components/CostBadge";
+import { DemoHeader } from "@/components/DemoHeader";
 import { useWallet } from "@/contexts/WalletContext";
 
 const MAX_SELECTION = 3;
@@ -152,60 +150,26 @@ const FaceFusion = () => {
 
   return (
     <main className="container mx-auto px-6 py-16 space-y-12 min-h-[calc(100vh-8rem)]">
-      <section className="max-w-4xl mx-auto space-y-6 text-center animate-fade-in">
-        <div className="space-y-4">
-          <h1 className="text-5xl font-bold tracking-tight sm:text-6xl flex items-center justify-center gap-3 flex-wrap">
-            <span className="text-gradient">Face Swap</span>
-            {faceSwapCost !== undefined && (
-              <CostBadge cost={faceSwapCost} size="md" />
-            )}
-          </h1>
-
-          <ExpandableDescription>
-            Face Swap GAN pipeline built with Python, PyTorch and ONNX Runtime.
-            Event-driven async backend on FastAPI with RabbitMQ message orchestration.
-          </ExpandableDescription>
-
-          <div className="flex items-center justify-center gap-3">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="rounded-full animate-pulse-glow"
-                  asChild
-                >
-                  <a
-                    href="https://github.com/art-vozniuk/demo-hub"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label="GitHub Repository"
-                    onClick={() => track({ name: 'facefusion_github_repo_clicked', params: {} })}
-                  >
-                    <Github className="h-5 w-5" />
-                  </a>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                <p>Visit the repository</p>
-              </TooltipContent>
-            </Tooltip>
-          </div>
-
-          <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-            Select up to {MAX_SELECTION} templates
-          </p>
-        </div>
-
+      <DemoHeader
+        title="Face Swap"
+        cost={faceSwapCost}
+        description="Face Swap GAN pipeline built with Python, PyTorch and ONNX Runtime. Event-driven async backend on FastAPI with RabbitMQ message orchestration."
+        githubUrl="https://github.com/art-vozniuk/demo-hub"
+        onGithubClick={() =>
+          track({ name: "facefusion_github_repo_clicked", params: {} })
+        }
+        tagline={`Select up to ${MAX_SELECTION} templates`}
+      >
         <div ref={counterRef} className="flex justify-center">
           <div
-              className={`inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/20 border border-primary/30 transition-opacity ${isSticky ? "opacity-0" : "opacity-100"}`}>
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/20 border border-primary/30 transition-opacity ${isSticky ? "opacity-0" : "opacity-100"}`}
+          >
             <span className="text-sm font-medium">
               Selected: {selectedTemplates.length}/{MAX_SELECTION}
             </span>
           </div>
         </div>
-      </section>
+      </DemoHeader>
 
       {isSticky && (
           <div className="fixed top-8 left-1/2 -translate-x-1/2 z-40">
