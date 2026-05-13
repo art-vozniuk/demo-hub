@@ -20,12 +20,14 @@ async def create_pipeline(
     pipeline_id: UUID,
     trace_id: UUID,
     pipeline_name: str,
+    input: dict | None = None,
 ) -> Pipeline:
     pipeline = Pipeline(
         id=pipeline_id,
         trace_id=trace_id,
         pipeline_name=pipeline_name,
         status=PipelineStatus.PENDING,
+        input=input,
     )
     db.add(pipeline)
     await db.flush()
