@@ -29,13 +29,15 @@ log = configure_logging("sharp")
 app, volume = make_app("demo-hub-sharp", "sharp-models")
 
 
-# ml-sharp recommends Python 3.13; torch 2.5.x has 3.13 wheels.
+# ml-sharp recommends Python 3.13. torch 2.5.x has 3.13 wheels but matching
+# torchvision 0.20.x does not — bump the pair to 2.6/0.21, the first with
+# cp313 wheels on both sides.
 sharp_image = (
     modal.Image.debian_slim(python_version="3.13")
     .apt_install("git", "libgl1", "libglib2.0-0")
     .pip_install(
-        "torch==2.5.1",
-        "torchvision==0.20.1",
+        "torch==2.6.0",
+        "torchvision==0.21.0",
         "numpy",
         "Pillow==11.0.0",
         "click",
@@ -44,6 +46,8 @@ sharp_image = (
         # ml-sharp is GitHub-only; pin to a commit once Apple ships a release.
         "git+https://github.com/apple/ml-sharp.git",
     )
+    # Modal no longer auto-mounts sibling .py files; ship _common explicitly.
+    .add_local_python_source("_common")
 )
 
 
@@ -64,17 +68,43 @@ def _ensure_checkpoint() -> str:
 
     log.info(f"downloading checkpoint from {CHECKPOINT_URL} -> {CHECKPOINT_LOCAL_PATH}")
     os.makedirs(MODEL_DIR, exist_ok=True)
-    t0 = time.perf_counter()
     # Tmp + rename so a killed container can't leave a half-file in the cache.
     tmp = CHECKPOINT_LOCAL_PATH + ".tmp"
-    urllib.request.urlretrieve(CHECKPOINT_URL, tmp)
-    os.replace(tmp, CHECKPOINT_LOCAL_PATH)
-    size_mb = os.path.getsize(CHECKPOINT_LOCAL_PATH) / (1024 * 1024)
-    log.info(
-        f"checkpoint downloaded ({size_mb:.1f} MB) "
-        f"in {(time.perf_counter() - t0):.1f}s"
+
+    # Apple's CDN occasionally resets the TLS handshake mid-download; retry
+    # with exponential backoff before giving up.
+    max_attempts = 5
+    last_err: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        t0 = time.perf_counter()
+        try:
+            urllib.request.urlretrieve(CHECKPOINT_URL, tmp)
+            os.replace(tmp, CHECKPOINT_LOCAL_PATH)
+            size_mb = os.path.getsize(CHECKPOINT_LOCAL_PATH) / (1024 * 1024)
+            log.info(
+                f"checkpoint downloaded ({size_mb:.1f} MB) "
+                f"in {(time.perf_counter() - t0):.1f}s (attempt {attempt})"
+            )
+            return CHECKPOINT_LOCAL_PATH
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+            last_err = e
+            elapsed = time.perf_counter() - t0
+            sleep_s = min(2**attempt, 30)
+            log.warning(
+                f"download attempt {attempt}/{max_attempts} failed after "
+                f"{elapsed:.1f}s: {e!r}; retrying in {sleep_s}s"
+            )
+            # Drop any partial tmp so the next attempt starts clean.
+            try:
+                os.remove(tmp)
+            except FileNotFoundError:
+                pass
+            if attempt < max_attempts:
+                time.sleep(sleep_s)
+
+    raise RuntimeError(
+        f"failed to download checkpoint after {max_attempts} attempts: {last_err!r}"
     )
-    return CHECKPOINT_LOCAL_PATH
 
 
 @app.function(
@@ -184,51 +214,58 @@ class SharpInference:
             "ply_size_bytes": len(ply_bytes),
         }
 
-    @torch.no_grad()
     def _run_inference(self, image: "np.ndarray", f_px: float) -> Any:
         """Inlined copy of sharp.cli.predict.predict_image — that lives under
         cli/ and isn't a stable API. Revisit when Apple ships one."""
 
+        # torch is imported inside `sharp_image.imports()` so it's unavailable
+        # when this file is parsed locally — keep no_grad as a context manager
+        # inside the body, not a decorator on the def.
         import torch.nn.functional as F  # noqa: N812
         from sharp.utils.gaussians import unproject_gaussians
 
-        device = torch.device("cuda")
-        internal_shape = (1536, 1536)
+        with torch.no_grad():
+            device = torch.device("cuda")
+            internal_shape = (1536, 1536)
 
-        image_pt = (
-            torch.from_numpy(image.copy()).float().to(device).permute(2, 0, 1) / 255.0
-        )
-        _, height, width = image_pt.shape
-        disparity_factor = torch.tensor([f_px / width]).float().to(device)
-
-        image_resized_pt = F.interpolate(
-            image_pt[None],
-            size=(internal_shape[1], internal_shape[0]),
-            mode="bilinear",
-            align_corners=True,
-        )
-
-        gaussians_ndc = self.predictor(image_resized_pt, disparity_factor)
-
-        intrinsics = (
-            torch.tensor(
-                [
-                    [f_px, 0, width / 2, 0],
-                    [0, f_px, height / 2, 0],
-                    [0, 0, 1, 0],
-                    [0, 0, 0, 1],
-                ]
+            image_pt = (
+                torch.from_numpy(image.copy()).float().to(device).permute(2, 0, 1)
+                / 255.0
             )
-            .float()
-            .to(device)
-        )
-        intrinsics_resized = intrinsics.clone()
-        intrinsics_resized[0] *= internal_shape[0] / width
-        intrinsics_resized[1] *= internal_shape[1] / height
+            _, height, width = image_pt.shape
+            disparity_factor = torch.tensor([f_px / width]).float().to(device)
 
-        return unproject_gaussians(
-            gaussians_ndc, torch.eye(4).to(device), intrinsics_resized, internal_shape
-        )
+            image_resized_pt = F.interpolate(
+                image_pt[None],
+                size=(internal_shape[1], internal_shape[0]),
+                mode="bilinear",
+                align_corners=True,
+            )
+
+            gaussians_ndc = self.predictor(image_resized_pt, disparity_factor)
+
+            intrinsics = (
+                torch.tensor(
+                    [
+                        [f_px, 0, width / 2, 0],
+                        [0, f_px, height / 2, 0],
+                        [0, 0, 1, 0],
+                        [0, 0, 0, 1],
+                    ]
+                )
+                .float()
+                .to(device)
+            )
+            intrinsics_resized = intrinsics.clone()
+            intrinsics_resized[0] *= internal_shape[0] / width
+            intrinsics_resized[1] *= internal_shape[1] / height
+
+            return unproject_gaussians(
+                gaussians_ndc,
+                torch.eye(4).to(device),
+                intrinsics_resized,
+                internal_shape,
+            )
 
 
 @app.function(

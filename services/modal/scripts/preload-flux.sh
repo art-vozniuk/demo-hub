@@ -6,4 +6,4 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/_lib.sh
 
-run_preload ./apps/flux.py
+run_preload ./apps/flux_app.py

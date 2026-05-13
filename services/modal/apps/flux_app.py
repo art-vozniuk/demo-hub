@@ -53,6 +53,8 @@ flux_image = (
             "TRANSFORMERS_OFFLINE": "0",
         }
     )
+    # Modal no longer auto-mounts sibling .py files; ship _common explicitly.
+    .add_local_python_source("_common")
 )
 
 

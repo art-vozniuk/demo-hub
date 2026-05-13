@@ -6,8 +6,8 @@ endpoints, and proxy-auth tokens.
 
 | App | Demo | Entry file | Volume | Endpoint env var |
 |---|---|---|---|---|
-| `demo-hub-flux` | Generative Editing | `apps/flux.py` | `flux-models` | `MODAL_GENERATIVE_ENDPOINT_URL` |
-| `demo-hub-sharp` | SHARP (single-image → 3DGS) | `apps/sharp.py` | `sharp-models` | `MODAL_SHARP_ENDPOINT_URL` |
+| `demo-hub-flux` | Generative Editing | `apps/flux_app.py` | `flux-models` | `MODAL_GENERATIVE_ENDPOINT_URL` |
+| `demo-hub-sharp` | SHARP (single-image → 3DGS) | `apps/sharp_app.py` | `sharp-models` | `MODAL_SHARP_ENDPOINT_URL` |
 
 Each app boots through `apps/_common.py` for the byte-identical
 bootstrap (logging config, `modal.App` + `modal.Volume` pair, model
@@ -158,5 +158,5 @@ ml-sharp ships under a dual license — code under
 weights under a separate
 [LICENSE_MODEL](https://github.com/apple/ml-sharp/blob/main/LICENSE_MODEL).
 Review both before shipping anything beyond a personal demo. The
-checkpoint URL is hard-coded in `apps/sharp.py:CHECKPOINT_URL` — pin
+checkpoint URL is hard-coded in `apps/sharp_app.py:CHECKPOINT_URL` — pin
 to a specific commit/release of ml-sharp once Apple cuts one.

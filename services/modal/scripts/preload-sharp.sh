@@ -6,4 +6,4 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/_lib.sh
 
-run_preload ./apps/sharp.py
+run_preload ./apps/sharp_app.py

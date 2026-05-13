@@ -1,6 +1,6 @@
 """Shared bootstrap for the Modal apps in this directory.
 
-Just the bits that are byte-identical between flux.py and sharp.py
+Just the bits that are byte-identical between flux_app.py and sharp_app.py
 (logging config, the App + Volume pair, model dir constant). The
 inference class + endpoint code stays per-app — bodies differ enough
 that abstracting them would obscure more than it dedupes.
