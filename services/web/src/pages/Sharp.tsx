@@ -254,10 +254,6 @@ const Sharp = () => {
             or 3/4 product shots work best.
           </>
         }
-        githubUrl="https://github.com/art-vozniuk/demo-hub"
-        onGithubClick={() =>
-          track({ name: "sharp_github_repo_clicked", params: {} })
-        }
         tagline={
           !photo && !result && !failed ? "Drop a single photo" : undefined
         }

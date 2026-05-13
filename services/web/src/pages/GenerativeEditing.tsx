@@ -48,10 +48,6 @@ const GenerativeEditing = () => {
         title="Generative Editing"
         cost={fluxCost}
         description="Image-conditioned generative editing on FLUX.2 klein. Pick a cinematic preset and the platform routes your photo through a serverless A10G on Modal — async dispatch worker, RabbitMQ orchestration."
-        githubUrl="https://github.com/art-vozniuk/demo-hub"
-        onGithubClick={() =>
-          track({ name: "generative_github_repo_clicked", params: {} })
-        }
         tagline="Pick a cinematic preset"
       />
 

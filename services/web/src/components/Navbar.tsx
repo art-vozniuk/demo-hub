@@ -17,7 +17,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { ChevronDown, List, LogOut, Menu, User } from "lucide-react";
+import { ChevronDown, Github, List, LogOut, Menu, User } from "lucide-react";
 import TokenBalance from "@/components/TokenBalance";
 
 type NavItem = { to: string; label: string; end?: boolean };
@@ -175,9 +175,21 @@ const Navbar = () => {
           </SheetContent>
         </Sheet>
 
-        <h1 className="shrink-0 text-base sm:text-xl font-bold tracking-tight text-gradient">
-          Demo Hub
-        </h1>
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+          <h1 className="text-base sm:text-xl font-bold tracking-tight text-gradient">
+            Demo Hub
+          </h1>
+          <a
+            href="https://github.com/art-vozniuk/demo-hub"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="GitHub Repository"
+            onClick={() => track({ name: "nav_github_clicked", params: {} })}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:text-primary hover:bg-muted/50"
+          >
+            <Github className="h-4 w-4" />
+          </a>
+        </div>
 
         <div
           ref={navAreaRef}

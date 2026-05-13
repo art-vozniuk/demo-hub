@@ -154,10 +154,6 @@ const FaceFusion = () => {
         title="Face Swap"
         cost={faceSwapCost}
         description="Face Swap GAN pipeline built with Python, PyTorch and ONNX Runtime. Event-driven async backend on FastAPI with RabbitMQ message orchestration."
-        githubUrl="https://github.com/art-vozniuk/demo-hub"
-        onGithubClick={() =>
-          track({ name: "facefusion_github_repo_clicked", params: {} })
-        }
         tagline={`Select up to ${MAX_SELECTION} templates`}
       >
         <div ref={counterRef} className="flex justify-center">

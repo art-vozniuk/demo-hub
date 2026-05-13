@@ -923,10 +923,6 @@ const Renderer = () => {
       <DemoHeader
         title="Gaussian Splatting"
         description="Real-time Gaussian Splatting renderer. Custom C++ engine on WebGPU with per-frame GPU radix sort and EWA splat projection in WGSL. Compiled to WebAssembly via Emscripten."
-        githubUrl="https://github.com/art-vozniuk/renderer"
-        onGithubClick={() =>
-          track({ name: "renderer_github_repo_clicked", params: {} })
-        }
       />
 
       <div className="max-w-5xl mx-auto space-y-3">
