@@ -152,7 +152,9 @@ async def test_create_pipeline_with_user_id(db_session):
 
 
 @pytest.mark.asyncio
-async def test_list_pipelines_for_user_filters_and_orders(db_session):
+async def test_list_pipelines_for_user_hides_face_recognition(
+    db_session, seeded_pipeline_types
+):
     user_a = uuid4()
     user_b = uuid4()
 
@@ -175,11 +177,13 @@ async def test_list_pipelines_for_user_filters_and_orders(db_session):
     result_a = await service.list_pipelines_for_user(
         db_session, user_a, limit=50, offset=0
     )
-    assert len(result_a) == 3
+    # face_recognition is hidden from history.
+    assert {p.pipeline_name for p in result_a} == {"face_swap", "generative_editing"}
     assert {p.user_id for p in result_a} == {user_a}
     # Newest first.
     timestamps = [p.created_at for p in result_a]
     assert timestamps == sorted(timestamps, reverse=True)
+    assert (await service.count_pipelines_for_user(db_session, user_a)) == 2
 
     result_b = await service.list_pipelines_for_user(
         db_session, user_b, limit=50, offset=0
@@ -189,7 +193,7 @@ async def test_list_pipelines_for_user_filters_and_orders(db_session):
 
 
 @pytest.mark.asyncio
-async def test_list_pipelines_for_user_pagination(db_session):
+async def test_list_pipelines_for_user_pagination(db_session, seeded_pipeline_types):
     user_id = uuid4()
     for _ in range(5):
         await service.create_pipeline(
@@ -216,9 +220,30 @@ async def test_list_pipelines_for_user_pagination(db_session):
 
 
 @pytest.mark.asyncio
-async def test_count_pipelines_for_user_returns_zero_for_unknown(db_session):
+async def test_count_pipelines_for_user_returns_zero_for_unknown(
+    db_session, seeded_pipeline_types
+):
     total = await service.count_pipelines_for_user(db_session, uuid4())
     assert total == 0
+
+
+@pytest.mark.asyncio
+async def test_list_pipelines_for_user_excludes_only_face_recognition(
+    db_session, seeded_pipeline_types
+):
+    user_id = uuid4()
+    await service.create_pipeline(
+        db=db_session,
+        pipeline_id=uuid4(),
+        trace_id=uuid4(),
+        pipeline_name="face_recognition",
+        user_id=user_id,
+    )
+    pipelines = await service.list_pipelines_for_user(
+        db_session, user_id, limit=50, offset=0
+    )
+    assert pipelines == []
+    assert (await service.count_pipelines_for_user(db_session, user_id)) == 0
 
 
 @pytest.mark.asyncio

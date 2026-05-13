@@ -5,6 +5,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.domain.enums import PipelineStatus
+from ..wallet.models import PipelineType
 from .models import Pipeline
 
 log = logging.getLogger(__name__)
@@ -49,6 +50,18 @@ async def get_pipelines_by_ids(
     return list(result.scalars().all())
 
 
+def _user_history_stmt(user_id: UUID):
+    # Only types flagged as user-facing show up in /pipelines/mine.
+    # face_recognition is hidden because it is a building block of other
+    # flows rather than something the user thinks of as their own run.
+    return (
+        select(Pipeline)
+        .join(PipelineType, PipelineType.name == Pipeline.pipeline_name)
+        .where(Pipeline.user_id == user_id)
+        .where(PipelineType.visible_in_user_history.is_(True))
+    )
+
+
 async def list_pipelines_for_user(
     db: AsyncSession,
     user_id: UUID,
@@ -56,8 +69,7 @@ async def list_pipelines_for_user(
     offset: int,
 ) -> list[Pipeline]:
     stmt = (
-        select(Pipeline)
-        .where(Pipeline.user_id == user_id)
+        _user_history_stmt(user_id)
         .order_by(Pipeline.created_at.desc())
         .limit(limit)
         .offset(offset)
@@ -67,7 +79,12 @@ async def list_pipelines_for_user(
 
 
 async def count_pipelines_for_user(db: AsyncSession, user_id: UUID) -> int:
-    stmt = select(func.count(Pipeline.id)).where(Pipeline.user_id == user_id)
+    stmt = (
+        select(func.count(Pipeline.id))
+        .join(PipelineType, PipelineType.name == Pipeline.pipeline_name)
+        .where(Pipeline.user_id == user_id)
+        .where(PipelineType.visible_in_user_history.is_(True))
+    )
     result = await db.execute(stmt)
     return int(result.scalar_one())
 

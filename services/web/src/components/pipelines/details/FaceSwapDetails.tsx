@@ -1,4 +1,6 @@
 import type { UserPipelineItem } from "@/api";
+import { getPublicImageUrl } from "@/lib/s3";
+import PipelinePreviewImage from "../PipelinePreviewImage";
 
 interface Props {
   pipeline: UserPipelineItem;
@@ -7,39 +9,30 @@ interface Props {
 const FaceSwapDetails = ({ pipeline }: Props) => {
   const input = pipeline.input ?? {};
   const result = (pipeline.result ?? {}) as { result_url?: string };
-  const sourceKey =
-    typeof input.source_image_key === "string" ? input.source_image_key : null;
-  const templateKey =
-    typeof input.template_image_key === "string" ? input.template_image_key : null;
+  const sourceUrl = getPublicImageUrl(
+    typeof input.source_image_bucket === "string"
+      ? input.source_image_bucket
+      : null,
+    typeof input.source_image_key === "string" ? input.source_image_key : null,
+  );
+  const templateUrl = getPublicImageUrl(
+    typeof input.template_image_bucket === "string"
+      ? input.template_image_bucket
+      : null,
+    typeof input.template_image_key === "string"
+      ? input.template_image_key
+      : null,
+  );
 
   return (
-    <div className="grid gap-4 sm:grid-cols-[1fr_auto]">
-      <div className="space-y-1 text-sm">
-        {sourceKey && (
-          <div className="text-xs text-muted-foreground truncate">
-            Source face: {sourceKey}
-          </div>
-        )}
-        {templateKey && (
-          <div className="text-xs text-muted-foreground truncate">
-            Template: {templateKey}
-          </div>
-        )}
-      </div>
-      {result.result_url ? (
-        <a
-          href={result.result_url}
-          target="_blank"
-          rel="noreferrer"
-          className="block"
-        >
-          <img
-            src={result.result_url}
-            alt="Face swap result"
-            className="h-32 w-32 rounded-md object-cover border border-border"
-          />
-        </a>
-      ) : null}
+    <div className="flex flex-wrap gap-4">
+      {sourceUrl && <PipelinePreviewImage url={sourceUrl} label="Source" />}
+      {templateUrl && (
+        <PipelinePreviewImage url={templateUrl} label="Template" />
+      )}
+      {result.result_url && (
+        <PipelinePreviewImage url={result.result_url} label="Result" />
+      )}
     </div>
   );
 };
