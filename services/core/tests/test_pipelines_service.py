@@ -10,20 +10,35 @@ async def test_create_pipeline(db_session):
     pipeline_id = uuid4()
     trace_id = uuid4()
     pipeline_name = "test_pipeline"
+    input_payload = {"image_url": "https://example.com/x.png", "k": 3}
 
     pipeline = await service.create_pipeline(
         db=db_session,
         pipeline_id=pipeline_id,
         trace_id=trace_id,
         pipeline_name=pipeline_name,
+        input=input_payload,
     )
 
     assert pipeline.id == pipeline_id
     assert pipeline.trace_id == trace_id
     assert pipeline.pipeline_name == pipeline_name
     assert pipeline.status == PipelineStatus.PENDING
+    assert pipeline.input == input_payload
     assert pipeline.result is None
     assert pipeline.message is None
+
+
+@pytest.mark.asyncio
+async def test_create_pipeline_without_input(db_session):
+    pipeline = await service.create_pipeline(
+        db=db_session,
+        pipeline_id=uuid4(),
+        trace_id=uuid4(),
+        pipeline_name="test_pipeline",
+    )
+
+    assert pipeline.input is None
 
 
 @pytest.mark.asyncio

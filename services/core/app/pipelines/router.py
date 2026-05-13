@@ -97,6 +97,7 @@ async def _process_pipeline(
         pipeline_id=pipeline_id,
         trace_id=trace_id,
         pipeline_name=pipeline_name,
+        input=pipeline.input,
     )
 
     resolved_input = await resolve_pipeline_input(db, pipeline_name, pipeline.input)
