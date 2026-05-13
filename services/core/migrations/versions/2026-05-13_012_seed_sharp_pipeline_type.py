@@ -1,7 +1,7 @@
 """seed sharp pipeline_type
 
-Revision ID: 009
-Revises: 008
+Revision ID: 012
+Revises: 011
 Create Date: 2026-05-12
 
 """
@@ -9,8 +9,8 @@ Create Date: 2026-05-12
 from alembic import op
 
 
-revision = "009"
-down_revision = "008"
+revision = "012"
+down_revision = "011"
 branch_labels = None
 depends_on = None
 
