@@ -85,3 +85,66 @@ def test_auto_frame_camera_handles_empty():
     eye, fwd = auto_frame_camera(b"", 0)
     assert eye == [0.0, 0.0, 0.0]
     assert fwd == [0.0, 0.0, -1.0]
+
+
+def _make_splat_bytes(xyz: np.ndarray, alpha: np.ndarray) -> tuple[bytes, int]:
+    """Hand-pack a minimal .splat-format buffer matching _SPLAT_DTYPE."""
+
+    n = len(xyz)
+    arr = np.zeros(n, dtype=np.dtype([
+        ("xyz", np.float32, 3),
+        ("scales", np.float32, 3),
+        ("rgba", np.uint8, 4),
+        ("rot", np.uint8, 4),
+    ]))
+    arr["xyz"] = xyz.astype(np.float32)
+    arr["scales"] = 1.0
+    arr["rgba"][:, 3] = alpha.astype(np.uint8)
+    return arr.tobytes(), n
+
+
+def test_auto_frame_camera_ignores_far_phantom_outliers():
+    """A handful of very far, low-opacity gaussians shouldn't blow up the
+    pullback distance — keep the camera close to the visible bulk."""
+
+    bulk = np.random.default_rng(0).uniform(-0.5, 0.5, size=(1000, 3))
+    bulk[:, 2] += 2.0  # shift bulk to z ≈ 2
+    # 5 phantom gaussians 100x farther away, near-transparent.
+    phantoms = np.array([[0, 0, 200.0]] * 5)
+    xyz = np.concatenate([bulk, phantoms])
+    alpha = np.concatenate([
+        np.full(len(bulk), 200, dtype=np.uint8),  # opaque bulk
+        np.full(len(phantoms), 5, dtype=np.uint8),  # near-transparent
+    ])
+    splat_bytes, n = _make_splat_bytes(xyz, alpha)
+
+    eye, fwd = auto_frame_camera(splat_bytes, n)
+    # Bulk is ~1 unit across at z≈2. Pullback ~2.5×radius (~2) → eye_z ≈ 4-7.
+    assert 3.0 < eye[2] < 15.0, f"eye too far: {eye[2]} (phantoms not filtered?)"
+    assert fwd == [0.0, 0.0, -1.0]
+
+
+def test_auto_frame_camera_ignores_opaque_sky_at_huge_z():
+    """Real bug: ml-sharp on a sky-heavy photo produces a LOT of opaque
+    gaussians at z≈150..800. Alpha filter alone doesn't catch them. The
+    z-band filter must drop them and the camera must spawn near the subject,
+    not 150 units away in a black void."""
+
+    rng = np.random.default_rng(1)
+    # 40% subject at z ≈ 2..4 (foreground content).
+    subject = rng.uniform(-1, 1, size=(400, 3))
+    subject[:, 2] = rng.uniform(2.0, 4.0, size=400)
+    # 60% "sky" — opaque gaussians shoved to huge z values by unprojection.
+    sky = rng.uniform(-2, 2, size=(600, 3))
+    sky[:, 2] = rng.uniform(150.0, 800.0, size=600)
+    xyz = np.concatenate([subject, sky])
+    # Both groups fully opaque — only z-band filter can separate them.
+    alpha = np.full(len(xyz), 220, dtype=np.uint8)
+    splat_bytes, n = _make_splat_bytes(xyz, alpha)
+
+    eye, fwd = auto_frame_camera(splat_bytes, n)
+    # Subject at z≈3, radius capped at 5 → pullback ≤12.5 → eye_z ≤ 16.
+    # If sky leaked in, eye_z would be in the hundreds (the reported regression).
+    assert eye[2] < 20.0, f"sky leaked into auto-frame: eye_z={eye[2]}"
+    assert eye[2] > 2.0, f"camera spawned inside subject: eye_z={eye[2]}"
+    assert fwd == [0.0, 0.0, -1.0]

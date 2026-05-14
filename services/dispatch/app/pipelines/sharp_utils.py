@@ -81,16 +81,26 @@ def ply_bytes_to_splat_bytes(ply_bytes: bytes) -> tuple[bytes, int]:
     return arr.tobytes(), n
 
 
+# ml-sharp predicts gaussians in OpenCV camera coords. Real subjects sit
+# at z ≈ 1..5; anything past this is sky/background hallucination dragged
+# to "infinity" by the unprojection. These constants drop those outliers
+# and cap the camera distance so we never spawn into a void.
+_AUTO_FRAME_MAX_Z = 20.0
+_AUTO_FRAME_MAX_RADIUS = 5.0
+_AUTO_FRAME_MIN_RADIUS = 0.5
+_AUTO_FRAME_MIN_OPACITY = 32  # uint8 ≈ 12% sigmoid
+
+
 def auto_frame_camera(
     splat_bytes: bytes, gaussian_count: int
 ) -> tuple[list[float], list[float]]:
     """Initial (eye, fwd) for a transient SHARP scene.
 
-    ml-sharp emits gaussians in OpenCV camera coords (scene at +z). Our
-    renderer matches catalog scenes that use the +z-camera, -z-look
-    convention (see migrations/.../create_splat_scenes.py). Putting the
-    camera at -z made the user spawn behind the back-side hallucinations;
-    flip to +z + look toward -z so the photo's view is the default.
+    Renderer convention: camera at +z, looking toward -z (matches catalog
+    scenes in migrations/.../create_splat_scenes.py). Robust to ml-sharp's
+    sky/background gaussians that get unprojected to huge z values — drop
+    anything past `_AUTO_FRAME_MAX_Z`, then median + percentile on the rest,
+    with a hard radius cap so a wide subject can't push the camera too far.
     """
 
     if gaussian_count == 0:
@@ -98,14 +108,30 @@ def auto_frame_camera(
 
     raw = np.frombuffer(splat_bytes, dtype=np.uint8).reshape(gaussian_count, 32)
     xyz = raw[:, :12].view(np.float32).reshape(gaussian_count, 3)
+    alpha = raw[:, 27]
 
-    centroid = xyz.mean(axis=0)
-    half_extent = np.abs(xyz - centroid).max(axis=0)
+    # Step 1: alpha + z-band filter. Sky gaussians often have high alpha
+    # (sky is opaque) so opacity alone won't catch them — the z cap does.
+    mask = (
+        (alpha > _AUTO_FRAME_MIN_OPACITY)
+        & (xyz[:, 2] > 0.1)
+        & (xyz[:, 2] < _AUTO_FRAME_MAX_Z)
+    )
+    # Fallback if z-band stranded us with <5% (e.g. legitimately deep scene).
+    if mask.sum() < max(gaussian_count // 20, 100):
+        mask = alpha > _AUTO_FRAME_MIN_OPACITY
+        if mask.sum() < max(gaussian_count // 20, 100):
+            mask = np.ones(gaussian_count, dtype=bool)
+    xyz_kept = xyz[mask]
+
+    centroid = np.median(xyz_kept, axis=0)
+    half_extent = np.percentile(np.abs(xyz_kept - centroid), 95, axis=0)
     radius = float(np.linalg.norm(half_extent))
-    if radius < 1e-3:
-        radius = 1.0
+    # Clamp so the camera lands in a usable framing range regardless of
+    # any remaining outliers or unusually wide subjects.
+    radius = min(max(radius, _AUTO_FRAME_MIN_RADIUS), _AUTO_FRAME_MAX_RADIUS)
 
-    pullback = max(2.5 * radius, 1.0)
+    pullback = 2.5 * radius
     eye = [
         float(centroid[0]),
         float(centroid[1]),
@@ -113,7 +139,9 @@ def auto_frame_camera(
     ]
     fwd = [0.0, 0.0, -1.0]
     log.info(
-        "auto-frame: centroid=%s radius=%.3f eye=%s fwd=%s",
+        "auto-frame: kept=%d/%d centroid=%s radius=%.3f eye=%s fwd=%s",
+        int(mask.sum()),
+        gaussian_count,
         centroid.tolist(),
         radius,
         eye,
