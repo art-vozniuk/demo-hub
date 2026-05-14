@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { v4 as uuidv4 } from "uuid";
-import { Github } from "lucide-react";
+import { Github, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DemoHeader } from "@/components/DemoHeader";
+import { SplatViewer, type SplatViewerScene } from "@/components/SplatViewer";
 import UploadDropzone from "@/components/UploadDropzone";
 import {
   pipelinesApi,
@@ -20,19 +21,25 @@ import { toast } from "sonner";
 
 const POLL_INTERVAL_MS = 1000;
 const POLL_TIMEOUT_MS = 120_000;
-const RENDERER_URL = import.meta.env.VITE_RENDERER_URL as string | undefined;
 
-/** Build the WASM viewer iframe URL for a transient SHARP result.
- * scene_url/eye/fwd are the same query params Renderer.tsx uses for
- * catalog scenes; here they point at the pipeline's .splat in S3. */
-function buildResultIframeSrc(result: SharpResult): string {
-  if (!RENDERER_URL) return "";
-  const url = new URL(RENDERER_URL, window.location.origin);
-  url.searchParams.set("scene", `sharp-result`);
-  url.searchParams.set("scene_url", result.result_url);
-  url.searchParams.set("eye", result.camera_eye.join(","));
-  url.searchParams.set("fwd", result.camera_fwd.join(","));
-  return url.toString();
+const formatRemaining = (seconds: number): string => {
+  if (seconds <= 1) return "<1s";
+  if (seconds >= 60) {
+    const m = Math.floor(seconds / 60);
+    const s = Math.round(seconds % 60);
+    return `${m}m ${s}s`;
+  }
+  return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+};
+
+function resultToViewerScene(result: SharpResult): SplatViewerScene {
+  return {
+    slug: "sharp-result",
+    title: "SHARP result",
+    sceneUrl: result.result_url,
+    cameraEye: result.camera_eye,
+    cameraFwd: result.camera_fwd,
+  };
 }
 
 const Sharp = () => {
@@ -68,10 +75,29 @@ const Sharp = () => {
     useState<PipelineStatusItem | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [estimatedFinishAt, setEstimatedFinishAt] = useState<string | null>(
+    null,
+  );
+  const [workersMissing, setWorkersMissing] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
 
   const pollIntervalRef = useRef<number | null>(null);
   const pollTimeoutRef = useRef<number | null>(null);
   const isMountedRef = useRef(true);
+
+  // Stable preview URL for the local file; revoke on unmount or replace.
+  const objectUrlRef = useRef<string | null>(null);
+  const previewUrl = (file: File) => {
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    objectUrlRef.current = URL.createObjectURL(file);
+    return objectUrlRef.current;
+  };
+
+  useEffect(() => {
+    return () => {
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -80,6 +106,21 @@ const Sharp = () => {
       clearPolling();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isProcessing || !estimatedFinishAt) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [isProcessing, estimatedFinishAt]);
+
+  const remainingSeconds = (() => {
+    if (!estimatedFinishAt) return null;
+    const target = new Date(estimatedFinishAt).getTime();
+    if (Number.isNaN(target)) return null;
+    const diff = (target - now) / 1000;
+    return diff > 0 ? diff : 0.01;
+  })();
 
   // Reset uploadedRef when a new file is picked so we don't submit
   // the stale S3 key against the newly chosen photo.
@@ -159,6 +200,8 @@ const Sharp = () => {
     setIsProcessing(true);
     setErrorMessage(null);
     setPipelineStatus(null);
+    setEstimatedFinishAt(null);
+    setWorkersMissing(false);
 
     try {
       const traceId = uuidv4();
@@ -196,6 +239,17 @@ const Sharp = () => {
       refreshBalance();
       setPipelineId(newPipelineId);
 
+      pipelinesApi
+        .getEstimate(newPipelineId)
+        .then((res) => {
+          if (!isMountedRef.current) return;
+          setEstimatedFinishAt(
+            new Date(Date.now() + res.estimated_seconds * 1000).toISOString(),
+          );
+          setWorkersMissing(res.workers_missing);
+        })
+        .catch((e) => console.warn("estimate fetch failed:", e));
+
       await pollOnce(newPipelineId);
       pollIntervalRef.current = window.setInterval(
         () => pollOnce(newPipelineId),
@@ -223,6 +277,8 @@ const Sharp = () => {
     setPipelineStatus(null);
     setErrorMessage(null);
     setIsProcessing(false);
+    setEstimatedFinishAt(null);
+    setWorkersMissing(false);
     clearPolling();
   }, []);
 
@@ -260,31 +316,74 @@ const Sharp = () => {
       />
 
       <section className="max-w-3xl mx-auto space-y-4">
-        {!result && !failed && (
+        {!photo && !result && !failed && (
           <UploadDropzone onFileSelect={setPhoto} selectedFile={photo} />
         )}
 
         {photo && !result && !failed && (
-          <div className="flex flex-wrap items-center justify-center gap-3">
-            <Button
-              onClick={handleGenerate}
-              disabled={!uploadedRef || isUploading || isProcessing}
-            >
-              {isUploading
-                ? "Uploading…"
-                : isProcessing
-                  ? pipelineStatus?.status === "RUNNING"
-                    ? "Running on GPU…"
-                    : "Queued…"
-                  : "Generate splat"}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={handleReset}
-              disabled={isProcessing}
-            >
-              Reset
-            </Button>
+          <div className="space-y-4">
+            <div className="group relative overflow-hidden rounded-xl border border-border shadow-elegant bg-card">
+              <div className="aspect-square relative overflow-hidden">
+                <img
+                  src={previewUrl(photo)}
+                  alt="Your photo"
+                  className="h-full w-full object-cover transition-all duration-700"
+                  style={{ filter: isProcessing ? "blur(30px)" : "none" }}
+                />
+
+                {isUploading && !isProcessing && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/40 backdrop-blur-sm gap-2">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                    <p className="text-white text-xs font-medium px-2 py-0.5 rounded bg-black/40">
+                      Uploading…
+                    </p>
+                  </div>
+                )}
+
+                {isProcessing && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/10 backdrop-blur-sm gap-2">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                    {workersMissing ? (
+                      <p className="text-white text-xs font-medium px-2 py-0.5 rounded bg-destructive/70 text-center max-w-[80%]">
+                        No workers available for this pipeline
+                      </p>
+                    ) : remainingSeconds !== null ? (
+                      <p className="text-white text-xs font-medium px-2 py-0.5 rounded bg-black/40">
+                        ~{formatRemaining(remainingSeconds)} left
+                      </p>
+                    ) : (
+                      <p className="text-white text-xs font-medium px-2 py-0.5 rounded bg-black/40">
+                        {pipelineStatus?.status === "RUNNING"
+                          ? "Running on GPU…"
+                          : "Queued…"}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <Button
+                onClick={handleGenerate}
+                disabled={!uploadedRef || isUploading || isProcessing}
+              >
+                {isUploading
+                  ? "Uploading…"
+                  : isProcessing
+                    ? pipelineStatus?.status === "RUNNING"
+                      ? "Running on GPU…"
+                      : "Queued…"
+                    : "Generate splat"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleReset}
+                disabled={isProcessing}
+              >
+                Reset
+              </Button>
+            </div>
           </div>
         )}
 
@@ -305,16 +404,9 @@ const Sharp = () => {
           </div>
         )}
 
-        {result && RENDERER_URL && (
+        {result && (
           <div className="flex flex-col gap-3">
-            <div className="aspect-[4/3] w-full overflow-hidden rounded-lg border border-border bg-black sm:aspect-video">
-              <iframe
-                title="SHARP result"
-                src={buildResultIframeSrc(result)}
-                className="h-full w-full"
-                allow="cross-origin-isolated"
-              />
-            </div>
+            <SplatViewer scene={resultToViewerScene(result)} height="60vh" />
             <div className="flex flex-wrap items-center justify-center gap-3 text-xs text-muted-foreground">
               <span>
                 {result.gaussian_count?.toLocaleString() ?? "?"} gaussians

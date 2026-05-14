@@ -68,19 +68,20 @@ def test_ply_bytes_to_splat_bytes_struct_layout():
     assert 125 <= rot[1] <= 130
 
 
-def test_auto_frame_camera_pulls_back_along_negative_z():
+def test_auto_frame_camera_pulls_back_along_positive_z():
     ply_bytes = _build_test_ply_bytes(n=32)
     splat_bytes, count = ply_bytes_to_splat_bytes(ply_bytes)
     eye, fwd = auto_frame_camera(splat_bytes, count)
 
-    assert fwd == [0.0, 0.0, 1.0]
-    # Scene z bounded in [2, 4] → centroid_z ≈ 3, pullback positive → eye_z < 3
-    assert eye[2] < 3.0
-    # And we should pull back at least a unit to avoid clipping into the scene.
-    assert eye[2] < 2.0
+    # Catalog convention: camera at +z, looking toward -z.
+    assert fwd == [0.0, 0.0, -1.0]
+    # Scene z bounded in [2, 4] → centroid_z ≈ 3, pullback positive → eye_z > 3
+    assert eye[2] > 3.0
+    # And we should pull back at least a unit beyond the far end of the scene.
+    assert eye[2] > 5.0
 
 
 def test_auto_frame_camera_handles_empty():
     eye, fwd = auto_frame_camera(b"", 0)
     assert eye == [0.0, 0.0, 0.0]
-    assert fwd == [0.0, 0.0, 1.0]
+    assert fwd == [0.0, 0.0, -1.0]

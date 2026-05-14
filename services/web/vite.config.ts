@@ -35,8 +35,9 @@ export default defineConfig(({ mode }) => {
                 proxyRes.headers["cache-control"] = "no-store";
                 delete proxyRes.headers["etag"];
 
-                if (!req.url?.endsWith(".html")) {
-                  // Non-HTML: pipe through unchanged
+                // Strip query string — iframe URLs carry ?scene_url=&eye=&fwd=.
+                const pathOnly = req.url?.split("?")[0] ?? "";
+                if (!pathOnly.endsWith(".html")) {
                   res.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers);
                   proxyRes.pipe(res);
                   return;

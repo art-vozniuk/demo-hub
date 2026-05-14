@@ -86,14 +86,16 @@ def auto_frame_camera(
 ) -> tuple[list[float], list[float]]:
     """Initial (eye, fwd) for a transient SHARP scene.
 
-    OpenCV convention, scene around (0, 0, +z). Centroid + max-axis
-    half-extent (outlier-quiet), then 2.5×radius pull-back along -z.
+    ml-sharp emits gaussians in OpenCV camera coords (scene at +z). Our
+    renderer matches catalog scenes that use the +z-camera, -z-look
+    convention (see migrations/.../create_splat_scenes.py). Putting the
+    camera at -z made the user spawn behind the back-side hallucinations;
+    flip to +z + look toward -z so the photo's view is the default.
     """
 
     if gaussian_count == 0:
-        return [0.0, 0.0, 0.0], [0.0, 0.0, 1.0]
+        return [0.0, 0.0, 0.0], [0.0, 0.0, -1.0]
 
-    # Reinterpret first 12 bytes of each record as xyz floats; no copy.
     raw = np.frombuffer(splat_bytes, dtype=np.uint8).reshape(gaussian_count, 32)
     xyz = raw[:, :12].view(np.float32).reshape(gaussian_count, 3)
 
@@ -107,9 +109,9 @@ def auto_frame_camera(
     eye = [
         float(centroid[0]),
         float(centroid[1]),
-        float(centroid[2] - pullback),
+        float(centroid[2] + pullback),
     ]
-    fwd = [0.0, 0.0, 1.0]
+    fwd = [0.0, 0.0, -1.0]
     log.info(
         "auto-frame: centroid=%s radius=%.3f eye=%s fwd=%s",
         centroid.tolist(),
