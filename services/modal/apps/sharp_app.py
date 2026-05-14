@@ -1,7 +1,9 @@
 """Modal app: Apple ml-sharp single-image → 3DGS on A10G.
 
 GPU inference only — PLY→splat, auto-frame and S3 upload run on
-dispatch. Endpoint: POST {image_b64, f_px} → {ply_b64, ply_size_bytes}.
+dispatch. Two HTTP endpoints to dodge Modal's ~60s sync gateway cap:
+  POST /submit {image_b64, f_px} → {call_id, request_id}
+  POST /poll   {call_id}         → {status: running|done|failed|expired, ...}
 Deploy / preload via services/modal/scripts/{deploy,preload}-sharp.sh.
 """
 
@@ -141,13 +143,17 @@ class SharpInference:
         t0 = time.perf_counter()
 
         ckpt_path = _ensure_checkpoint()
-        state_dict = torch.load(ckpt_path, weights_only=True, map_location="cpu")
+        # mmap + assign: weights stay file-backed instead of bloating the
+        # memory snapshot — restore reads MB, not GB.
+        state_dict = torch.load(
+            ckpt_path, weights_only=True, map_location="cpu", mmap=True
+        )
         load_ms = (time.perf_counter() - t0) * 1000
         log.info(f"snapshot-load: torch.load done in {load_ms:.0f}ms")
 
         t1 = time.perf_counter()
         self.predictor = create_predictor(PredictorParams())
-        self.predictor.load_state_dict(state_dict)
+        self.predictor.load_state_dict(state_dict, assign=True)
         self.predictor.eval()
         init_ms = (time.perf_counter() - t1) * 1000
         log.info(
@@ -268,41 +274,53 @@ class SharpInference:
             )
 
 
-@app.function(
-    image=sharp_image,
-    timeout=600,
-)
+@app.function(image=sharp_image, timeout=120)
 @modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-def generate(payload: dict[str, Any]) -> dict[str, Any]:
-    """Public HTTP entry point; proxy-auth gated by Modal."""
+def submit(payload: dict[str, Any]) -> dict[str, Any]:
+    """Kick off inference asynchronously; client polls /poll with the call_id."""
 
     request_id = uuid.uuid4().hex[:8]
-    t0 = time.perf_counter()
-
     image_b64 = payload.get("image_b64")
     f_px = payload.get("f_px")
     log.info(
-        f"[{request_id}] endpoint: POST received; "
+        f"[{request_id}] submit: received; "
         f"image_b64_len={len(image_b64) if image_b64 else 0} f_px={f_px}"
     )
 
     if not image_b64:
-        log.warning(f"[{request_id}] endpoint: rejecting; missing image_b64")
+        log.warning(f"[{request_id}] submit: missing image_b64")
         return {"error": "image_b64 is required"}
     if f_px is None:
-        log.warning(f"[{request_id}] endpoint: rejecting; missing f_px")
+        log.warning(f"[{request_id}] submit: missing f_px")
         return {"error": "f_px is required"}
 
-    inference = SharpInference()
-    result = inference.generate.remote(
-        request_id=request_id,
+    call = SharpInference().generate.spawn(
         image_b64=image_b64,
+        request_id=request_id,
         f_px=float(f_px),
     )
+    log.info(f"[{request_id}] submit: spawned call_id={call.object_id}")
+    return {"call_id": call.object_id, "request_id": request_id}
 
-    total_ms = (time.perf_counter() - t0) * 1000
-    log.info(
-        f"[{request_id}] endpoint: done; total_ms={total_ms:.0f} "
-        f"ply_bytes={result.get('ply_size_bytes') if isinstance(result, dict) else 0}"
-    )
-    return result
+
+@app.function(image=sharp_image, timeout=120)
+@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
+def poll(payload: dict[str, Any]) -> dict[str, Any]:
+    """Non-blocking status check; returns running / done / failed / expired."""
+
+    call_id = payload.get("call_id")
+    if not call_id:
+        return {"status": "error", "error": "call_id is required"}
+
+    call = modal.FunctionCall.from_id(call_id)
+    try:
+        # timeout=0: don't wait — let dispatch own the polling cadence.
+        result = call.get(timeout=0)
+        return {"status": "done", "result": result}
+    except TimeoutError:
+        return {"status": "running"}
+    except modal.exception.OutputExpiredError:
+        return {"status": "expired"}
+    except Exception as e:
+        log.exception(f"poll: call_id={call_id} raised")
+        return {"status": "failed", "error": f"{type(e).__name__}: {e}"}

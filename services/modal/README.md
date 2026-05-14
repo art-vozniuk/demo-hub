@@ -4,10 +4,10 @@ Two independent Modal apps live in this directory, one per demo. They
 share the same A10G + memory-snapshot pattern but use separate volumes,
 endpoints, and proxy-auth tokens.
 
-| App | Demo | Entry file | Volume | Endpoint env var |
+| App | Demo | Entry file | Volume | Endpoint env vars |
 |---|---|---|---|---|
 | `demo-hub-flux` | Generative Editing | `apps/flux_app.py` | `flux-models` | `MODAL_GENERATIVE_ENDPOINT_URL` |
-| `demo-hub-sharp` | SHARP (single-image → 3DGS) | `apps/sharp_app.py` | `sharp-models` | `MODAL_SHARP_ENDPOINT_URL` |
+| `demo-hub-sharp` | SHARP (single-image → 3DGS) | `apps/sharp_app.py` | `sharp-models` | `MODAL_SHARP_SUBMIT_URL`, `MODAL_SHARP_POLL_URL` |
 
 Each app boots through `apps/_common.py` for the byte-identical
 bootstrap (logging config, `modal.App` + `modal.Volume` pair, model
@@ -52,12 +52,14 @@ cd services/modal
 ./scripts/destroy-sharp.sh
 ```
 
-Each deploy writes its endpoint URL to a sibling `.endpoint-flux` /
-`.endpoint-sharp`. Copy into the dispatch worker's env:
+Each deploy writes its endpoint URL(s) to a sibling `.endpoint-flux` /
+`.endpoint-sharp` (SHARP writes two lines: submit then poll). Copy
+into the dispatch worker's env:
 
 ```
 MODAL_GENERATIVE_ENDPOINT_URL=https://<workspace>--demo-hub-flux-generate.modal.run
-MODAL_SHARP_ENDPOINT_URL=https://<workspace>--demo-hub-sharp-generate.modal.run
+MODAL_SHARP_SUBMIT_URL=https://<workspace>--demo-hub-sharp-submit.modal.run
+MODAL_SHARP_POLL_URL=https://<workspace>--demo-hub-sharp-poll.modal.run
 ```
 
 ## Secrets and proxy-auth
@@ -127,7 +129,12 @@ commands documented above. The checkpoint download is ~1.4 GB from
 
 ### Endpoint contract
 
-`POST /` accepts the EXIF-baked photo and a precomputed focal length:
+Two endpoints — submit kicks off inference, poll fetches the result.
+Modal's sync `@fastapi_endpoint` gateway drops connections at ~60s,
+and a SHARP cold start runs ~30s before inference even starts, so we
+spawn the GPU job and have dispatch poll for completion.
+
+`POST /submit` accepts the EXIF-baked photo and a precomputed focal length:
 
 ```json
 {
@@ -136,13 +143,19 @@ commands documented above. The checkpoint download is ~1.4 GB from
 }
 ```
 
-and returns a standard 3DGS PLY:
+and returns a Modal FunctionCall handle:
 
 ```json
-{
-  "ply_b64": "<base64-encoded .ply bytes>",
-  "ply_size_bytes": 12345678
-}
+{ "call_id": "fc-...", "request_id": "abc12345" }
+```
+
+`POST /poll` returns one of:
+
+```json
+{ "status": "running" }
+{ "status": "done",    "result": { "ply_b64": "...", "ply_size_bytes": 12345678 } }
+{ "status": "failed",  "error": "..." }
+{ "status": "expired" }
 ```
 
 Scope: GPU inference only. Splat packing (PLY → 32-byte/gaussian
