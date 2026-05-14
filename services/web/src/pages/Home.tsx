@@ -30,37 +30,42 @@ const Home = () => {
   }, [hasTrackedScroll, track]);
 
   return (
-    <main className="flex min-h-[calc(100vh-8rem)] items-center justify-center px-6 py-16">
-      <div className="max-w-2xl space-y-8 text-center animate-fade-in">
-        <Avatar />
-        <SocialIcons
-          onLinkedInClick={() => track({ name: 'home_linkedin_clicked', params: {} })}
-          onGitHubClick={() => track({ name: 'home_github_clicked', params: {} })}
-          onResumeClick={() => track({ name: 'home_resume_clicked', params: {} })}
-        />
-
-        <div className="space-y-4">
-          <h1 className="text-4xl font-bold tracking-tight sm:text-5xl leading-tight">
-            Artem Vozniuk<br/>
-            <span className="text-gradient">Software Engineering, ML Serving Platforms, GPU Systems, Scalable Distributed Backends</span>
-          </h1>
-
-          <p className="mx-auto max-w-xl text-lg leading-relaxed text-muted-foreground">
-            Focused on high-performance systems, real-time AI, and turning complex ideas into working products.
-            Feel free to explore my{" "}
-            <Link to="/renderer" className="text-cyan-500 hover:underline">
-              demos
-            </Link>{" "}
-            or reach out on{" "}
-            <Link
-                to="https://www.linkedin.com/in/artem-vozniuk-ai/"
-                className="text-cyan-500 hover:underline"
-            >
-              LinkedIn.
-            </Link>
-             I’m always open to collaboration and new ideas.
-          </p>
+    <main className="flex min-h-[calc(100vh-8rem)] items-start justify-center px-6 py-12">
+      <div className="w-full max-w-3xl space-y-8 animate-fade-in">
+        <div className="flex flex-col items-center gap-6 sm:flex-row sm:items-start">
+          <Avatar />
+          <div className="flex min-w-0 flex-1 flex-col gap-4 text-center sm:text-left">
+            <div className="space-y-1">
+              <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
+                Artem Vozniuk
+              </h1>
+              <p className="text-base font-medium leading-snug sm:text-lg text-gradient">
+                Software Engineering, ML Serving Platforms, GPU Systems, Scalable Distributed Backends
+              </p>
+            </div>
+            <SocialIcons
+              onLinkedInClick={() => track({ name: 'home_linkedin_clicked', params: {} })}
+              onGitHubClick={() => track({ name: 'home_github_clicked', params: {} })}
+              onResumeClick={() => track({ name: 'home_resume_clicked', params: {} })}
+            />
+          </div>
         </div>
+
+        <p className="text-base leading-relaxed text-muted-foreground">
+          Focused on high-performance systems, real-time AI, and turning complex ideas into working products.
+          Feel free to explore my{" "}
+          <Link to="/renderer" className="text-cyan-500 hover:underline">
+            demos
+          </Link>{" "}
+          or reach out on{" "}
+          <Link
+              to="https://www.linkedin.com/in/artem-vozniuk-ai/"
+              className="text-cyan-500 hover:underline"
+          >
+            LinkedIn.
+          </Link>
+           I’m always open to collaboration and new ideas.
+        </p>
 
         <div className="border-t border-gray-700" />
 
