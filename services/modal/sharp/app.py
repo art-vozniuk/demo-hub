@@ -1,11 +1,11 @@
 """Modal app: Apple ml-sharp single-image → 3DGS on A10G.
 
-predict → pack Gaussians3D into 32-byte splat blob → auto-frame, all
-on the GPU container; dispatch only uploads the result. Two HTTP
-endpoints to dodge Modal's ~60s sync gateway cap:
-  POST /submit {image_b64, f_px} → {call_id, request_id}
-  POST /poll   {call_id}         → {status: running|done|failed|expired, ...}
-Deploy / preload via services/modal/scripts/{deploy,preload}-sharp.sh.
+predict → pack Gaussians3D into 32-byte splat blob → auto-frame → S3
+upload, all on the GPU container; dispatch only forwards the result.
+Two HTTP endpoints to dodge Modal's ~60s sync gateway cap:
+  POST /submit {image_b64, f_px, image_bucket} → {call_id, request_id}
+  POST /poll   {call_id}                       → {status: ..., ...}
+Deploy / preload via services/modal/sharp/{deploy,preload}.py.
 """
 
 from __future__ import annotations
@@ -20,7 +20,13 @@ from typing import Any
 
 import modal
 
-from _common import MODEL_DIR, configure_logging, make_app, upload_to_s3
+from common.lib import (
+    MODEL_DIR,
+    configure_logging,
+    make_app,
+    poll_function_call,
+    upload_to_s3,
+)
 
 
 CHECKPOINT_URL = "https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh.pt"
@@ -50,15 +56,18 @@ sharp_image = (
         # ml-sharp is GitHub-only; pin to a commit once Apple ships a release.
         "git+https://github.com/apple/ml-sharp.git",
     )
-    # Modal no longer auto-mounts sibling .py files; ship _common + _sharp_utils.
-    .add_local_python_source("_common", "_sharp_utils")
+    # Modal no longer auto-mounts sibling files; ship common.lib +
+    # common.sharp_utils explicitly. (sharp_utils lives under common/
+    # rather than sharp/ to avoid clashing with the ml-sharp pip
+    # package's own `sharp` namespace.)
+    .add_local_python_source("common.lib", "common.sharp_utils")
 )
 
 
 # submit/poll only spawn / inspect a FunctionCall — no torch needed. A
-# thin image keeps their cold-start small. `_common` ships here because
-# module top-level calls `configure_logging` and `make_app` on every
-# container start; `_sharp_utils` is gated behind `sharp_image.imports()`
+# thin image keeps their cold-start small. common.lib ships here because
+# the module top-level calls `configure_logging` and `make_app` on every
+# container start; sharp_utils is gated behind `sharp_image.imports()`
 # so it never loads outside the inference container.
 sharp_thin_image = (
     modal.Image.debian_slim(python_version="3.13")
@@ -66,7 +75,7 @@ sharp_thin_image = (
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
     )
-    .add_local_python_source("_common")
+    .add_local_python_source("common.lib")
 )
 
 
@@ -75,7 +84,7 @@ with sharp_image.imports():
     import torch
     from PIL import Image
     from sharp.models import PredictorParams, create_predictor
-    from _sharp_utils import auto_frame_camera, gaussians_to_splat_bytes
+    from common.sharp_utils import auto_frame_camera, gaussians_to_splat_bytes
 
 
 def _ensure_checkpoint() -> str:
@@ -347,19 +356,4 @@ def submit(payload: dict[str, Any]) -> dict[str, Any]:
 def poll(payload: dict[str, Any]) -> dict[str, Any]:
     """Non-blocking status check; returns running / done / failed / expired."""
 
-    call_id = payload.get("call_id")
-    if not call_id:
-        return {"status": "error", "error": "call_id is required"}
-
-    call = modal.FunctionCall.from_id(call_id)
-    try:
-        # timeout=0: don't wait — let dispatch own the polling cadence.
-        result = call.get(timeout=0)
-        return {"status": "done", "result": result}
-    except TimeoutError:
-        return {"status": "running"}
-    except modal.exception.OutputExpiredError:
-        return {"status": "expired"}
-    except Exception as e:
-        log.exception(f"poll: call_id={call_id} raised")
-        return {"status": "failed", "error": f"{type(e).__name__}: {e}"}
+    return poll_function_call(payload.get("call_id"), log)

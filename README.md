@@ -91,15 +91,16 @@ For the Generative Editing demo additionally:
 
 ```bash
 cd services/modal
-./scripts/setup.sh    # Modal CLI + secrets
-./scripts/preload.sh  # populate flux-models volume (one-shot)
-./scripts/deploy.sh   # deploy inference endpoint, prints URL
+./setup.sh                 # Modal CLI + secrets
+python flux/preload.py     # populate flux-models volume (one-shot)
+python flux/deploy.py      # deploy inference endpoint, prints URLs
 ```
 
-Then drop the printed endpoint into `services/dispatch/.env.docker`:
+Then drop the printed endpoint URLs into `services/dispatch/.env.docker`:
 
 ```
-MODAL_GENERATIVE_ENDPOINT_URL=https://...modal.run
+MODAL_GENERATIVE_SUBMIT_URL=https://...modal.run
+MODAL_GENERATIVE_POLL_URL=https://...modal.run
 MODAL_PROXY_AUTH_TOKEN_ID=...
 MODAL_PROXY_AUTH_TOKEN_SECRET=...
 ```

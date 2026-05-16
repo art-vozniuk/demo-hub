@@ -1,5 +1,10 @@
 """ml-sharp Gaussians3D → 32-byte splat blob + auto-frame.
 
+Lives under common/ rather than sharp/ to dodge a Python name clash:
+the ml-sharp pip package is also called `sharp` (its `sharp.models`,
+`sharp.utils.gaussians` etc. are imported inside the Modal container),
+so a local `sharp/` package on sys.path would conflict.
+
 Tensor math (scales, rot, linearRGB→sRGB, opacity) runs on the
 Gaussians' device; a single .cpu() transfer feeds the 32-byte pack.
 

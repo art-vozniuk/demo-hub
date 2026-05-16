@@ -1,9 +1,15 @@
 """Thin async clients for Modal-hosted inference endpoints.
 
-One callable per deployed Modal app (FLUX generative editing, SHARP).
-FLUX uses a plain sync POST; SHARP can outrun Modal's ~60s gateway cap
-on a cold start, so it goes through a submit + poll loop instead.
-Shared header + timeout logic lives in `_post_to_modal`.
+Every Modal app exposes the same shape — a `submit` endpoint that spawns
+a FunctionCall and returns a call_id, and a `poll` endpoint dispatch
+polls until the call resolves. Both endpoints are gated by Modal's
+proxy-auth; shared header + timeout logic lives in `_post_to_modal`,
+shared submit+poll cadence lives in `_submit_and_poll`.
+
+A submit+poll pair (rather than a sync POST) is mandatory for any app
+whose cold start can outrun Modal's ~60s sync gateway cap. SHARP needs
+that; FLUX runs fast warm but its cold start has hit the cap too. One
+flow for both keeps the dispatch surface uniform.
 """
 
 from __future__ import annotations
@@ -55,60 +61,74 @@ async def _post_to_modal(
             raise ModalInferenceError(f"Modal returned non-JSON body: {e}")
 
 
-async def invoke_generative_editing(
+async def _submit_and_poll(
+    label: str,
+    submit_url: str | None,
+    poll_url: str | None,
+    submit_url_label: str,
+    poll_url_label: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    return await _post_to_modal(
-        "MODAL_GENERATIVE_ENDPOINT_URL",
-        config.MODAL_GENERATIVE_ENDPOINT_URL,
-        payload,
-    )
+    """POST to /submit, then /poll on a fixed cadence until done."""
 
-
-async def invoke_sharp(
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    """Submit + poll. Modal's sync endpoint gateway drops connections at ~60s."""
-
-    submit_resp = await _post_to_modal(
-        "MODAL_SHARP_SUBMIT_URL",
-        config.MODAL_SHARP_SUBMIT_URL,
-        payload,
-    )
+    submit_resp = await _post_to_modal(submit_url_label, submit_url, payload)
     if "error" in submit_resp:
-        raise ModalInferenceError(f"Modal submit failed: {submit_resp['error']}")
+        raise ModalInferenceError(f"Modal {label} submit failed: {submit_resp['error']}")
     call_id = submit_resp.get("call_id")
     request_id = submit_resp.get("request_id")
     if not call_id:
         raise ModalInferenceError(
-            f"Modal submit returned no call_id; body={submit_resp}"
+            f"Modal {label} submit returned no call_id; body={submit_resp}"
         )
 
-    log.info(f"[{request_id}] sharp submit ok; polling call_id={call_id}")
+    log.info(f"[{request_id}] {label} submit ok; polling call_id={call_id}")
     deadline = time.monotonic() + config.MODAL_REQUEST_TIMEOUT_SECONDS
     poll_count = 0
     while True:
         if time.monotonic() > deadline:
             raise ModalInferenceError(
-                f"Modal poll timed out after "
+                f"Modal {label} poll timed out after "
                 f"{config.MODAL_REQUEST_TIMEOUT_SECONDS}s; call_id={call_id}"
             )
 
         poll_resp = await _post_to_modal(
-            "MODAL_SHARP_POLL_URL",
-            config.MODAL_SHARP_POLL_URL,
+            poll_url_label,
+            poll_url,
             {"call_id": call_id},
         )
         poll_count += 1
         status = poll_resp.get("status")
         if status == "done":
             log.info(
-                f"[{request_id}] sharp done after {poll_count} polls; call_id={call_id}"
+                f"[{request_id}] {label} done after {poll_count} polls; "
+                f"call_id={call_id}"
             )
             return poll_resp["result"]
         if status in ("failed", "expired", "error"):
             raise ModalInferenceError(
-                f"Modal poll status={status}; call_id={call_id} "
+                f"Modal {label} poll status={status}; call_id={call_id} "
                 f"error={poll_resp.get('error')}"
             )
         await asyncio.sleep(config.MODAL_POLL_INTERVAL_SECONDS)
+
+
+async def invoke_generative_editing(payload: dict[str, Any]) -> dict[str, Any]:
+    return await _submit_and_poll(
+        label="generative_editing",
+        submit_url=config.MODAL_GENERATIVE_SUBMIT_URL,
+        poll_url=config.MODAL_GENERATIVE_POLL_URL,
+        submit_url_label="MODAL_GENERATIVE_SUBMIT_URL",
+        poll_url_label="MODAL_GENERATIVE_POLL_URL",
+        payload=payload,
+    )
+
+
+async def invoke_sharp(payload: dict[str, Any]) -> dict[str, Any]:
+    return await _submit_and_poll(
+        label="sharp",
+        submit_url=config.MODAL_SHARP_SUBMIT_URL,
+        poll_url=config.MODAL_SHARP_POLL_URL,
+        submit_url_label="MODAL_SHARP_SUBMIT_URL",
+        poll_url_label="MODAL_SHARP_POLL_URL",
+        payload=payload,
+    )

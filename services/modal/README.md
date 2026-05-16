@@ -6,28 +6,56 @@ endpoints, and proxy-auth tokens.
 
 | App | Demo | Entry file | Volume | Endpoint env vars |
 |---|---|---|---|---|
-| `demo-hub-flux` | Generative Editing | `apps/flux_app.py` | `flux-models` | `MODAL_GENERATIVE_ENDPOINT_URL` |
-| `demo-hub-sharp` | SHARP (single-image → 3DGS) | `apps/sharp_app.py` | `sharp-models` | `MODAL_SHARP_SUBMIT_URL`, `MODAL_SHARP_POLL_URL` |
+| `demo-hub-flux` | Generative Editing | `flux/app.py` | `flux-models` | `MODAL_GENERATIVE_SUBMIT_URL`, `MODAL_GENERATIVE_POLL_URL` |
+| `demo-hub-sharp` | SHARP (single-image → 3DGS) | `sharp/app.py` | `sharp-models` | `MODAL_SHARP_SUBMIT_URL`, `MODAL_SHARP_POLL_URL` |
 
-Each app boots through `apps/_common.py` for the byte-identical
-bootstrap (logging config, `modal.App` + `modal.Volume` pair, model
-dir). The per-app scripts under `scripts/` are thin wrappers around
-shared helpers in `scripts/_lib.sh` (`run_deploy`, `run_preload`,
-`run_destroy`).
+Every app exposes the same shape: a `submit` endpoint that spawns the
+GPU job and returns a `call_id`, and a `poll` endpoint dispatch hits
+on a fixed cadence until the call resolves. A sync `@fastapi_endpoint`
+would trip Modal's ~60s gateway cap on a cold start; spawn-poll
+sidesteps that and keeps the dispatch surface uniform across apps.
+
+## Layout
+
+```
+services/modal/
+├── setup.sh              # one-time Modal CLI + secrets bootstrap
+├── common/               # shipped to containers (Modal-side) + used locally (CLI-side)
+│   ├── lib.py            # logging, App + Volume bootstrap, poll_function_call, upload_to_s3
+│   ├── sharp_utils.py    # Gaussians3D → splat pack + auto-frame (sharp-specific, lives
+│   │                     # in common/ to dodge the ml-sharp `sharp` pip-package name clash)
+│   └── cli.py            # local deploy/preload/destroy helpers (subprocess + URL grep)
+├── flux/
+│   ├── app.py            # Modal entry point
+│   ├── deploy.py         # python flux/deploy.py
+│   ├── preload.py        # python flux/preload.py
+│   └── destroy.py
+└── sharp/
+    ├── app.py
+    ├── deploy.py
+    ├── preload.py
+    └── destroy.py
+```
+
+Each per-app script is a 3-line wrapper around a function in
+`common/cli.py` (`deploy_submit_poll`, `preload`, `destroy`). The
+preamble pins `cwd` + `sys.path` to `services/modal/` so the modal CLI
+can resolve `from common.lib import ...` inside the app files.
 
 ## FLUX.2 klein — Generative Editing
 
 Serverless GPU backend for the **Generative Editing** demo.
 Runs FLUX.2 klein 4B image-conditioned editing on a Modal GPU, fronted
-by an HTTP endpoint that the platform's [dispatch worker](../dispatch)
-calls.
+by submit + poll HTTP endpoints that the platform's
+[dispatch worker](../dispatch) calls.
 
 ## What it gives you
 
 - One Modal app: `demo-hub-flux`
 - One persistent Modal Volume: `flux-models` — base weights live here
   permanently so cold starts don't pay HuggingFace download time.
-- One web endpoint: `POST /` returning a base64-encoded PNG.
+- Two web endpoints: `POST /submit` and `POST /poll`. Result lands in
+  S3 (Supabase Storage); `poll` returns the public URL.
 - Memory-snapshot cold starts (pipeline already loaded onto GPU).
 - Scale-to-zero with a 120s warm window.
 
@@ -37,40 +65,45 @@ calls.
 cd services/modal
 
 # 1) install Modal CLI + log in (interactive only on first run; shared)
-./scripts/setup.sh
+./setup.sh
 
 # 2) populate the per-app volume with weights (CPU container, idempotent)
-./scripts/preload-flux.sh
-./scripts/preload-sharp.sh
+python flux/preload.py
+python sharp/preload.py
 
-# 3) deploy each app and print its endpoint URL
-./scripts/deploy-flux.sh
-./scripts/deploy-sharp.sh
+# 3) deploy each app and print its endpoint URLs
+python flux/deploy.py
+python sharp/deploy.py
 
 # tear down (volume + secrets kept)
-./scripts/destroy-flux.sh
-./scripts/destroy-sharp.sh
+python flux/destroy.py
+python sharp/destroy.py
 ```
 
-Each deploy writes its endpoint URL(s) to a sibling `.endpoint-flux` /
-`.endpoint-sharp` (SHARP writes two lines: submit then poll). Copy
-into the dispatch worker's env:
+Each deploy writes both endpoint URLs (submit then poll) to a sibling
+`.endpoint-flux` / `.endpoint-sharp`. Copy into the dispatch worker's
+env:
 
 ```
-MODAL_GENERATIVE_ENDPOINT_URL=https://<workspace>--demo-hub-flux-generate.modal.run
+MODAL_GENERATIVE_SUBMIT_URL=https://<workspace>--demo-hub-flux-submit.modal.run
+MODAL_GENERATIVE_POLL_URL=https://<workspace>--demo-hub-flux-poll.modal.run
 MODAL_SHARP_SUBMIT_URL=https://<workspace>--demo-hub-sharp-submit.modal.run
 MODAL_SHARP_POLL_URL=https://<workspace>--demo-hub-sharp-poll.modal.run
 ```
 
 ## Secrets and proxy-auth
 
-One Modal Secret is created on this side:
+Two Modal Secrets are used:
 
 - `huggingface` — keys: `HF_TOKEN`. The `FLUX.2-klein-4B` repo is open
   (Apache 2.0, no gating), so the token is optional, but having one set
   avoids hitting anonymous HF rate limits during the preload.
+- `supabase-s3` — keys: `S3_ACCESS_KEY_ID`, `S3_ACCESS_KEY_SECRET`,
+  `S3_ENDPOINT`, `S3_REGION`, `S3_PUBLIC_BUCKETS_ENDPOINT`. Used by
+  both inference containers to upload results directly to S3 (so the
+  poll response is a small URL instead of a base64 blob).
 
-Proxy-auth tokens for the web endpoint are **issued by Modal directly**,
+Proxy-auth tokens for the web endpoints are **issued by Modal directly**,
 not stored as a Secret. Create one once in the dashboard at
 [/settings/proxy-auth-tokens](https://modal.com/settings/proxy-auth-tokens),
 then put the resulting Token ID + Token Secret into
@@ -85,7 +118,7 @@ The dispatch worker sends those as `Modal-Key` / `Modal-Secret` HTTP
 headers; Modal validates against its own token table before letting the
 request reach the endpoint.
 
-`scripts/setup.sh` handles `huggingface` and prints the dashboard link
+`setup.sh` handles `huggingface` and prints the dashboard link
 for the proxy-auth token.
 
 ## Why this design
@@ -119,27 +152,25 @@ If you bump traffic 100×, expect closer to $10–$30/month.
 ## SHARP — single-image → 3DGS
 
 Serverless GPU backend for the **SHARP** demo. Takes one image, returns
-a `.splat` blob plus an auto-framed initial camera. Wraps Apple's
+a `.splat` URL plus an auto-framed initial camera. Wraps Apple's
 [ml-sharp](https://github.com/apple/ml-sharp) feed-forward predictor —
 single forward pass on A10G, ~1–3s steady-state.
 
-Setup uses the same `./scripts/{preload,deploy,destroy}-sharp.sh`
+Setup uses the same `python sharp/{preload,deploy,destroy}.py`
 commands documented above. The checkpoint download is ~1.4 GB from
-`ml-site.cdn-apple.com` and runs Modal-side during `preload-sharp.sh`.
+`ml-site.cdn-apple.com` and runs Modal-side during `python sharp/preload.py`.
 
 ### Endpoint contract
 
-Two endpoints — submit kicks off inference, poll fetches the result.
-Modal's sync `@fastapi_endpoint` gateway drops connections at ~60s,
-and a SHARP cold start runs ~30s before inference even starts, so we
-spawn the GPU job and have dispatch poll for completion.
-
-`POST /submit` accepts the EXIF-baked photo and a precomputed focal length:
+Same shape as flux — `POST /submit` to kick off the GPU job, `POST /poll`
+to fetch the result. Submit takes the EXIF-baked photo, a precomputed
+focal length, and the target S3 bucket:
 
 ```json
 {
   "image_b64": "<base64-encoded JPEG/PNG, EXIF already applied>",
-  "f_px": 1234.5
+  "f_px": 1234.5,
+  "image_bucket": "media"
 }
 ```
 
@@ -153,16 +184,21 @@ and returns a Modal FunctionCall handle:
 
 ```json
 { "status": "running" }
-{ "status": "done",    "result": { "ply_b64": "...", "ply_size_bytes": 12345678 } }
+{ "status": "done", "result": {
+    "result_url": "https://.../sharp_results/<uuid>.splat",
+    "splat_size_bytes": 12345678,
+    "gaussian_count": 1500000,
+    "camera_eye": [x, y, z],
+    "camera_fwd": [x, y, z]
+} }
 { "status": "failed",  "error": "..." }
 { "status": "expired" }
 ```
 
-Scope: GPU inference only. Splat packing (PLY → 32-byte/gaussian
-`.splat`), auto-framing (`camera_eye` / `camera_fwd` from the
-gaussian AABB), and the S3 upload all run on the dispatch worker —
-plain numpy + plyfile, no GPU needed. Keeps the Modal container
-focused on what the A10G is actually for.
+Scope: GPU inference + splat pack + S3 upload. Auto-framing
+(`camera_eye` / `camera_fwd` from the gaussian AABB) runs on the
+same container — the AABB is already in GPU memory. Dispatch only
+forwards the result URL.
 
 ### License caveats
 
@@ -171,5 +207,5 @@ ml-sharp ships under a dual license — code under
 weights under a separate
 [LICENSE_MODEL](https://github.com/apple/ml-sharp/blob/main/LICENSE_MODEL).
 Review both before shipping anything beyond a personal demo. The
-checkpoint URL is hard-coded in `apps/sharp_app.py:CHECKPOINT_URL` — pin
+checkpoint URL is hard-coded in `sharp/app.py:CHECKPOINT_URL` — pin
 to a specific commit/release of ml-sharp once Apple cuts one.

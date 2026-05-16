@@ -8,8 +8,10 @@ class Config(BaseSettings):
     ENV: str = "local"
     SENTRY_DSN: str | None = None
 
-    MODAL_GENERATIVE_ENDPOINT_URL: str | None = None
-    # SHARP uses a submit+poll pair to dodge Modal's ~60s sync gateway cap.
+    # Every Modal app exposes a submit + poll endpoint pair (uniform shape,
+    # also dodges Modal's ~60s sync gateway cap on cold starts).
+    MODAL_GENERATIVE_SUBMIT_URL: str | None = None
+    MODAL_GENERATIVE_POLL_URL: str | None = None
     MODAL_SHARP_SUBMIT_URL: str | None = None
     MODAL_SHARP_POLL_URL: str | None = None
     MODAL_PROXY_AUTH_TOKEN_ID: str | None = None

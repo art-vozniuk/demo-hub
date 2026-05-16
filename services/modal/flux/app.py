@@ -1,6 +1,6 @@
 """Modal app: FLUX.2 klein image-conditioned editing on A10G.
 
-Deploy / preload via services/modal/scripts/{deploy,preload}-flux.sh.
+Deploy / preload via services/modal/flux/{deploy,preload}.py.
 """
 
 from __future__ import annotations
@@ -14,7 +14,13 @@ from typing import Any
 
 import modal
 
-from _common import MODEL_DIR, configure_logging, make_app, upload_to_s3
+from common.lib import (
+    MODEL_DIR,
+    configure_logging,
+    make_app,
+    poll_function_call,
+    upload_to_s3,
+)
 
 
 MODEL_REPO = "black-forest-labs/FLUX.2-klein-4B"
@@ -54,8 +60,20 @@ flux_image = (
             "TRANSFORMERS_OFFLINE": "0",
         }
     )
-    # Modal no longer auto-mounts sibling .py files; ship _common explicitly.
-    .add_local_python_source("_common")
+    # Modal no longer auto-mounts sibling files; ship common.lib explicitly.
+    .add_local_python_source("common.lib")
+)
+
+
+# submit/poll only spawn / inspect a FunctionCall — no torch needed. A
+# thin image keeps their cold-start small. Same pattern as sharp/app.py.
+flux_thin_image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .pip_install(
+        "fastapi[standard]==0.115.6",
+        "pydantic==2.10.3",
+    )
+    .add_local_python_source("common.lib")
 )
 
 
@@ -74,8 +92,8 @@ with flux_image.imports():
 def preload_weights() -> str:
     """Download FLUX.2 klein 4B into the persistent volume.
 
-    Run once: `modal run services/modal/app.py::preload_weights`.
-    Re-running is a no-op when files are already up to date.
+    Run once: `python services/modal/flux/preload.py`. Re-running is a
+    no-op when files are already up to date.
     """
 
     from huggingface_hub import snapshot_download
@@ -247,48 +265,32 @@ class FluxInference:
         }
 
 
-@app.function(
-    image=flux_image,
-    timeout=600,
-)
+@app.function(image=flux_thin_image, timeout=120)
 @modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-def generate(payload: dict[str, Any]) -> dict[str, Any]:
-    """Public HTTP entry point. Gated by Modal proxy-auth — Modal
-    validates incoming Modal-Key/Modal-Secret headers against tokens
-    issued in the dashboard at /settings/proxy-auth-tokens."""
+def submit(payload: dict[str, Any]) -> dict[str, Any]:
+    """Kick off inference asynchronously; client polls /poll with the call_id."""
 
     request_id = uuid.uuid4().hex[:8]
-    t0 = time.perf_counter()
-
     image_b64 = payload.get("image_b64")
     prompt = payload.get("prompt")
     image_bucket = payload.get("image_bucket")
     log.info(
-        f"[{request_id}] endpoint: POST received; "
+        f"[{request_id}] submit: received; "
         f"image_b64_len={len(image_b64) if image_b64 else 0} "
         f"prompt_len={len(prompt) if prompt else 0} bucket={image_bucket}"
     )
 
     if not image_b64 or not prompt:
-        log.warning(
-            f"[{request_id}] endpoint: rejecting; "
-            f"missing image_b64 or prompt"
-        )
+        log.warning(f"[{request_id}] submit: missing image_b64 or prompt")
         return {"error": "image_b64 and prompt are required"}
     if not image_bucket:
-        log.warning(f"[{request_id}] endpoint: rejecting; missing image_bucket")
+        log.warning(f"[{request_id}] submit: missing image_bucket")
         return {"error": "image_bucket is required"}
 
     guidance_scale = float(payload.get("guidance_scale", 1.0))
     num_inference_steps = int(payload.get("num_inference_steps", 4))
 
-    log.info(
-        f"[{request_id}] endpoint: dispatching to FluxInference.generate; "
-        f"steps={num_inference_steps} guidance={guidance_scale}"
-    )
-
-    inference = FluxInference()
-    result = inference.generate.remote(
+    call = FluxInference().generate.spawn(
         request_id=request_id,
         image_b64=image_b64,
         prompt=prompt,
@@ -296,10 +298,13 @@ def generate(payload: dict[str, Any]) -> dict[str, Any]:
         guidance_scale=guidance_scale,
         num_inference_steps=num_inference_steps,
     )
+    log.info(f"[{request_id}] submit: spawned call_id={call.object_id}")
+    return {"call_id": call.object_id, "request_id": request_id}
 
-    total_ms = (time.perf_counter() - t0) * 1000
-    log.info(
-        f"[{request_id}] endpoint: done; total_ms={total_ms:.0f} "
-        f"result_url={result.get('result_url') if isinstance(result, dict) else None}"
-    )
-    return result
+
+@app.function(image=flux_thin_image, timeout=120)
+@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
+def poll(payload: dict[str, Any]) -> dict[str, Any]:
+    """Non-blocking status check; returns running / done / failed / expired."""
+
+    return poll_function_call(payload.get("call_id"), log)
