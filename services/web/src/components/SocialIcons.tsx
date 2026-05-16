@@ -1,11 +1,5 @@
 import { Github, Linkedin, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import cvPdf from "@/assets/Artem Vozniuk - AI Infrastructure.pdf";
 
 interface SocialIconsProps {
@@ -16,80 +10,45 @@ interface SocialIconsProps {
 
 const SocialIcons = ({ onLinkedInClick, onGitHubClick, onResumeClick }: SocialIconsProps) => {
   return (
-    <TooltipProvider>
-      <div className="flex justify-center gap-4">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon"
-              className="hover-glow rounded-full"
-              asChild
-            >
-              <a
-                href="https://www.linkedin.com/in/artem-vozniuk-ai/"
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="LinkedIn Profile"
-                onClick={onLinkedInClick}
-              >
-                <Linkedin className="h-5 w-5" />
-              </a>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            <p>Visit LinkedIn profile</p>
-          </TooltipContent>
-        </Tooltip>
+    <div className="flex flex-wrap justify-center gap-2 sm:justify-start">
+      <Button variant="outline" size="sm" className="hover-glow rounded-full" asChild>
+        <a
+          href="https://www.linkedin.com/in/artem-vozniuk-ai/"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="LinkedIn Profile"
+          onClick={onLinkedInClick}
+        >
+          <Linkedin className="h-4 w-4" />
+          LinkedIn
+        </a>
+      </Button>
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon"
-              className="hover-glow rounded-full"
-              asChild
-            >
-              <a
-                href="https://github.com/art-vozniuk"
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="GitHub Profile"
-                onClick={onGitHubClick}
-              >
-                <Github className="h-5 w-5" />
-              </a>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            <p>Visit GitHub profile</p>
-          </TooltipContent>
-        </Tooltip>
+      <Button variant="outline" size="sm" className="hover-glow rounded-full" asChild>
+        <a
+          href="https://github.com/art-vozniuk"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="GitHub Profile"
+          onClick={onGitHubClick}
+        >
+          <Github className="h-4 w-4" />
+          GitHub
+        </a>
+      </Button>
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon"
-              className="hover-glow rounded-full"
-              asChild
-            >
-              <a
-                href={cvPdf}
-                download="Artem Vozniuk - AI Infrastructure.pdf"
-                aria-label="Download CV"
-                onClick={onResumeClick}
-              >
-                <FileText className="h-5 w-5" />
-              </a>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            <p>Download CV</p>
-          </TooltipContent>
-        </Tooltip>
-      </div>
-    </TooltipProvider>
+      <Button variant="outline" size="sm" className="hover-glow rounded-full" asChild>
+        <a
+          href={cvPdf}
+          download="Artem Vozniuk - AI Infrastructure.pdf"
+          aria-label="Download CV"
+          onClick={onResumeClick}
+        >
+          <FileText className="h-4 w-4" />
+          Resume
+        </a>
+      </Button>
+    </div>
   );
 };
 

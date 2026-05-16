@@ -2,16 +2,11 @@ import avatarImage from "@/assets/avatar.jpeg";
 
 const Avatar = () => {
   return (
-    <div className="flex justify-center">
-      <div className="relative">
-        <div className="absolute inset-0 animate-pulse-glow rounded-full" />
-        <img
-          src={avatarImage}
-          alt=""
-          className="relative h-33 w-32 rounded-full border-2 object-cover shadow-elegant"
-        />
-      </div>
-    </div>
+    <img
+      src={avatarImage}
+      alt="Artem Vozniuk"
+      className="h-36 w-36 sm:h-44 sm:w-44 shrink-0 rounded-2xl border border-border/50 object-cover object-[center_20%] shadow-elegant"
+    />
   );
 };
 
