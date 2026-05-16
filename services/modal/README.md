@@ -1,7 +1,7 @@
 # Modal — serverless GPU inference
 
 Two independent Modal apps live in this directory, one per demo. They
-share the same A10G + memory-snapshot pattern but use separate volumes,
+share the same GPU + memory-snapshot pattern but use separate volumes,
 endpoints, and proxy-auth tokens.
 
 | App | Demo | Entry file | Volume | Endpoint env vars |
@@ -18,7 +18,7 @@ shared helpers in `scripts/_lib.sh` (`run_deploy`, `run_preload`,
 ## FLUX.2 klein — Generative Editing
 
 Serverless GPU backend for the **Generative Editing** demo.
-Runs FLUX.2 klein 4B image-conditioned editing on a Modal A10G, fronted
+Runs FLUX.2 klein 4B image-conditioned editing on a Modal GPU, fronted
 by an HTTP endpoint that the platform's [dispatch worker](../dispatch)
 calls.
 

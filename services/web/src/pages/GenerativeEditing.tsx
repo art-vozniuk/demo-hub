@@ -47,7 +47,7 @@ const GenerativeEditing = () => {
       <DemoHeader
         title="Generative Editing"
         cost={fluxCost}
-        description="Image-conditioned generative editing on FLUX.2 klein. Pick a cinematic preset and the platform routes your photo through a serverless A10G on Modal — async dispatch worker, RabbitMQ orchestration."
+        description="Image-conditioned generative editing on FLUX.2 klein. Pick a cinematic preset and the platform routes your photo through a serverless GPU on Modal — async dispatch worker, RabbitMQ orchestration."
         tagline="Pick a cinematic preset"
       />
 

@@ -20,7 +20,7 @@ Source: [renderer](https://github.com/art-vozniuk/renderer)
 
 Image-conditioned generative editing on FLUX.2 klein. Pick a cinematic
 preset, upload a photo, get the same subject in the chosen style. The
-inference itself runs on a serverless Modal A10G; the platform side is
+inference itself runs on a serverless Modal GPU; the platform side is
 an async dispatch worker draining a dedicated RabbitMQ queue.
 
 <img width="1040" height="708" alt="image" src="https://github.com/user-attachments/assets/32ca50d4-a517-44e9-a89e-b05f90456e7e" />
@@ -50,7 +50,7 @@ Upload a portrait and apply it to various style templates using a GAN-based imag
 - **Core** — API gateway: auth, rate limiting, pipeline routing, ETA
 - **Compute** — local ML inference workers (face_swap) consuming `pipelines.queue`
 - **Dispatch** — async orchestration workers (generative_editing) consuming `pipelines.dispatch`, calling Modal
-- **Modal** — serverless A10G GPU running FLUX.2 klein, fronted by an HTTP endpoint
+- **Modal** — serverless GPU running FLUX.2 klein, fronted by an HTTP endpoint
 - **Web** — React SPA
 - **Renderer** — Emscripten WASM build served via Supabase Storage + GitHub Releases
 
@@ -71,7 +71,7 @@ demo-hub/
 │   ├── core/            # API gateway + pipeline routing + ETA
 │   ├── compute/         # Local ML workers (face_swap, face_recognition)
 │   ├── dispatch/        # Async workers — call Modal for generative_editing
-│   ├── modal/           # Modal app: FLUX.2 klein on A10G
+│   ├── modal/           # Modal app: FLUX.2 klein on GPU
 │   ├── web/             # React frontend
 │   └── external/        # renderer + face_swap submodules
 ├── nginx/               # Reverse proxy config

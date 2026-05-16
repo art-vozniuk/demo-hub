@@ -96,9 +96,6 @@ pipeline_templates: dict[str, PipelineType] = {
     "sharp": PipelineType(
         service_type=SharpService,
         input_type=SharpPipelineInput,
-        # SHARP itself runs in ~1-3s on A10G, but cold start + S3 upload
-        # bring the warm p50 closer to 5-8s. Pessimistic baseline; the
-        # heartbeat tick will overwrite this with measured wall time.
         estimated_time_ms=8_000,
     ),
 }

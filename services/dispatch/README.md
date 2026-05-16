@@ -7,7 +7,7 @@ design — no torch/onnx dependencies, no GPU.
 ## Pipelines
 
 - `generative_editing` — image-conditioned editing via FLUX.2 klein on
-  Modal A10G. See [services/modal](../modal).
+  Modal GPU. See [services/modal](../modal).
 
 ## Local
 

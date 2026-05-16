@@ -305,9 +305,7 @@ const Sharp = () => {
             >
               ml-sharp <Github className="h-3.5 w-3.5" />
             </a>{" "}
-            feed-forward predictor on a serverless A10G — the model
-            hallucinates backside geometry from a single view, so straight-on
-            or 3/4 product shots work best.
+            feed-forward predictor on a serverless GPU.
           </>
         }
         tagline={
