@@ -160,6 +160,7 @@ def preload_weights() -> str:
     timeout=600,
     enable_memory_snapshot=True,
     secrets=[modal.Secret.from_name("supabase-s3")],
+    #min_containers=1,
 )
 @modal.concurrent(max_inputs=1)
 class SharpInference:
