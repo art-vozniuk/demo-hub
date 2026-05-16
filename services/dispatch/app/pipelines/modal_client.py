@@ -103,8 +103,7 @@ async def invoke_sharp(
         status = poll_resp.get("status")
         if status == "done":
             log.info(
-                f"[{request_id}] sharp done after {poll_count} polls; "
-                f"call_id={call_id}"
+                f"[{request_id}] sharp done after {poll_count} polls; call_id={call_id}"
             )
             return poll_resp["result"]
         if status in ("failed", "expired", "error"):

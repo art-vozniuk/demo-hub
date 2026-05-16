@@ -97,8 +97,7 @@ class SharpPipeline(AsyncPipeline):
             _ply_to_splat_and_frame, ply_bytes
         )
         log.info(
-            "sharp: ply→splat + auto-frame done in %.0fms "
-            "(%d gaussians, %.1f MB)",
+            "sharp: ply→splat + auto-frame done in %.0fms (%d gaussians, %.1f MB)",
             (time.perf_counter() - t_post) * 1000,
             gaussian_count,
             len(splat_bytes) / (1024 * 1024),

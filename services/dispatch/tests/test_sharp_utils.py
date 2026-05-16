@@ -20,11 +20,20 @@ def _build_test_ply_bytes(n: int = 8) -> bytes:
     """Build a minimal 3DGS-format PLY in memory with `n` gaussians."""
 
     dtype = [
-        ("x", "f4"), ("y", "f4"), ("z", "f4"),
-        ("f_dc_0", "f4"), ("f_dc_1", "f4"), ("f_dc_2", "f4"),
+        ("x", "f4"),
+        ("y", "f4"),
+        ("z", "f4"),
+        ("f_dc_0", "f4"),
+        ("f_dc_1", "f4"),
+        ("f_dc_2", "f4"),
         ("opacity", "f4"),
-        ("scale_0", "f4"), ("scale_1", "f4"), ("scale_2", "f4"),
-        ("rot_0", "f4"), ("rot_1", "f4"), ("rot_2", "f4"), ("rot_3", "f4"),
+        ("scale_0", "f4"),
+        ("scale_1", "f4"),
+        ("scale_2", "f4"),
+        ("rot_0", "f4"),
+        ("rot_1", "f4"),
+        ("rot_2", "f4"),
+        ("rot_3", "f4"),
     ]
     rng = np.random.default_rng(0)
     arr = np.zeros(n, dtype=dtype)
@@ -91,12 +100,17 @@ def _make_splat_bytes(xyz: np.ndarray, alpha: np.ndarray) -> tuple[bytes, int]:
     """Hand-pack a minimal .splat-format buffer matching _SPLAT_DTYPE."""
 
     n = len(xyz)
-    arr = np.zeros(n, dtype=np.dtype([
-        ("xyz", np.float32, 3),
-        ("scales", np.float32, 3),
-        ("rgba", np.uint8, 4),
-        ("rot", np.uint8, 4),
-    ]))
+    arr = np.zeros(
+        n,
+        dtype=np.dtype(
+            [
+                ("xyz", np.float32, 3),
+                ("scales", np.float32, 3),
+                ("rgba", np.uint8, 4),
+                ("rot", np.uint8, 4),
+            ]
+        ),
+    )
     arr["xyz"] = xyz.astype(np.float32)
     arr["scales"] = 1.0
     arr["rgba"][:, 3] = alpha.astype(np.uint8)
@@ -112,10 +126,12 @@ def test_auto_frame_camera_ignores_far_phantom_outliers():
     # 5 phantom gaussians 100x farther away, near-transparent.
     phantoms = np.array([[0, 0, 200.0]] * 5)
     xyz = np.concatenate([bulk, phantoms])
-    alpha = np.concatenate([
-        np.full(len(bulk), 200, dtype=np.uint8),  # opaque bulk
-        np.full(len(phantoms), 5, dtype=np.uint8),  # near-transparent
-    ])
+    alpha = np.concatenate(
+        [
+            np.full(len(bulk), 200, dtype=np.uint8),  # opaque bulk
+            np.full(len(phantoms), 5, dtype=np.uint8),  # near-transparent
+        ]
+    )
     splat_bytes, n = _make_splat_bytes(xyz, alpha)
 
     eye, fwd = auto_frame_camera(splat_bytes, n)

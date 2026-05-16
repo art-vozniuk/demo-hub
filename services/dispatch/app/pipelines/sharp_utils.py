@@ -51,21 +51,17 @@ def ply_bytes_to_splat_bytes(ply_bytes: bytes) -> tuple[bytes, int]:
 
     xyz = np.stack([v["x"], v["y"], v["z"]], axis=-1).astype(np.float32)
     scales = np.exp(
-        np.stack(
-            [v["scale_0"], v["scale_1"], v["scale_2"]], axis=-1
-        ).astype(np.float32)
+        np.stack([v["scale_0"], v["scale_1"], v["scale_2"]], axis=-1).astype(np.float32)
     )
-    rot = np.stack(
-        [v["rot_0"], v["rot_1"], v["rot_2"], v["rot_3"]], axis=-1
-    ).astype(np.float32)
+    rot = np.stack([v["rot_0"], v["rot_1"], v["rot_2"], v["rot_3"]], axis=-1).astype(
+        np.float32
+    )
     rot_norm = np.linalg.norm(rot, axis=-1, keepdims=True)
     rot_norm[rot_norm == 0] = 1.0
     rot /= rot_norm
     rot_u8 = np.clip(np.round((rot * 0.5 + 0.5) * 255.0), 0, 255).astype(np.uint8)
 
-    dc = np.stack(
-        [v["f_dc_0"], v["f_dc_1"], v["f_dc_2"]], axis=-1
-    ).astype(np.float32)
+    dc = np.stack([v["f_dc_0"], v["f_dc_1"], v["f_dc_2"]], axis=-1).astype(np.float32)
     rgb = np.clip(0.5 + SH_C0 * dc, 0.0, 1.0)
     opacity = 1.0 / (1.0 + np.exp(-v["opacity"].astype(np.float32)))
     rgba_u8 = np.empty((n, 4), dtype=np.uint8)
