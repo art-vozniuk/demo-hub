@@ -127,7 +127,7 @@ def auto_frame_camera(
     radius = float(np.linalg.norm(half_extent))
     radius = min(max(radius, _AUTO_FRAME_MIN_RADIUS), _AUTO_FRAME_MAX_RADIUS)
 
-    pullback = radius
+    pullback = 0.01 * radius
     eye = [
         float(centroid[0]),
         float(centroid[1]),
