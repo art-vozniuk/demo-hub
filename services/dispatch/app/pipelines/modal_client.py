@@ -73,7 +73,9 @@ async def _submit_and_poll(
 
     submit_resp = await _post_to_modal(submit_url_label, submit_url, payload)
     if "error" in submit_resp:
-        raise ModalInferenceError(f"Modal {label} submit failed: {submit_resp['error']}")
+        raise ModalInferenceError(
+            f"Modal {label} submit failed: {submit_resp['error']}"
+        )
     call_id = submit_resp.get("call_id")
     request_id = submit_resp.get("request_id")
     if not call_id:
