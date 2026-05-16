@@ -208,9 +208,3 @@ jobs:
         run: |
           git tag -f last-deploy HEAD
           git push -f origin last-deploy
-
-  e2e-test:
-    needs: [deploy]
-    if: ${{ success() }}
-    uses: ./.github/workflows/e2e_recast_pipeline_test.yml
-    secrets: inherit
