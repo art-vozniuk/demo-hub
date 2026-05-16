@@ -62,6 +62,29 @@ def poll_function_call(call_id: str, log: logging.Logger) -> dict[str, Any]:
         return {"status": "failed", "error": f"{type(e).__name__}: {e}"}
 
 
+def _s3_client():
+    """Build a boto3 S3 client from the `supabase-s3` Modal secret env vars."""
+
+    import boto3
+    from botocore.config import Config as BotoConfig
+
+    return boto3.client(
+        "s3",
+        aws_access_key_id=os.environ["S3_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["S3_ACCESS_KEY_SECRET"],
+        endpoint_url=os.environ["S3_ENDPOINT"],
+        region_name=os.environ["S3_REGION"],
+        config=BotoConfig(retries={"max_attempts": 5, "mode": "adaptive"}),
+    )
+
+
+def download_from_s3(bucket: str, key: str) -> bytes:
+    """Fetch an object's bytes from S3 (Supabase Storage)."""
+
+    resp = _s3_client().get_object(Bucket=bucket, Key=key)
+    return resp["Body"].read()
+
+
 def upload_to_s3(
     data_bytes: bytes,
     bucket: str,
@@ -74,17 +97,27 @@ def upload_to_s3(
     returned URL is the same shape dispatch would have produced.
     """
 
-    import boto3
-    from botocore.config import Config as BotoConfig
-
     key = f"{folder}/{uuid4().hex}.{extension}"
-    client = boto3.client(
-        "s3",
-        aws_access_key_id=os.environ["S3_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["S3_ACCESS_KEY_SECRET"],
-        endpoint_url=os.environ["S3_ENDPOINT"],
-        region_name=os.environ["S3_REGION"],
-        config=BotoConfig(retries={"max_attempts": 5, "mode": "adaptive"}),
-    )
-    client.put_object(Bucket=bucket, Key=key, Body=data_bytes)
+    _s3_client().put_object(Bucket=bucket, Key=key, Body=data_bytes)
     return f"{os.environ['S3_PUBLIC_BUCKETS_ENDPOINT']}/{bucket}/{key}"
+
+
+def bake_exif_orientation(image_bytes: bytes) -> bytes:
+    """Apply EXIF Orientation and re-encode as JPEG.
+
+    Phone uploads carry an Orientation EXIF tag that most backends drop,
+    leaving portrait shots sideways. PIL + ImageOps.exif_transpose applies
+    the rotation in pixel space, then we re-encode at quality 95.
+    """
+
+    import io
+
+    from PIL import Image, ImageOps
+
+    with Image.open(io.BytesIO(image_bytes)) as img:
+        oriented = ImageOps.exif_transpose(img)
+        if oriented.mode != "RGB":
+            oriented = oriented.convert("RGB")
+        out = io.BytesIO()
+        oriented.save(out, format="JPEG", quality=95)
+        return out.getvalue()

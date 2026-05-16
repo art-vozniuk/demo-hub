@@ -1,14 +1,18 @@
-"""User photo → FLUX.2 klein image-conditioned edit on Modal."""
+"""User photo → FLUX.2 klein image-conditioned edit on Modal.
+
+Dispatch only forwards the S3 location of the source photo to Modal;
+Modal downloads, bakes EXIF, runs inference, and uploads the result
+back to S3 itself. Dispatch never sees the image bytes.
+"""
 
 from __future__ import annotations
 
-import base64
 import logging
 from typing import Any
 
 from services.common.s3.client import S3Client
 
-from .base import AsyncPipeline, bake_exif_orientation
+from .base import AsyncPipeline
 from .modal_client import invoke_generative_editing
 from .schemas import GenerativeEditingPipelineInput
 
@@ -22,21 +26,16 @@ class GenerativeEditingPipeline(AsyncPipeline):
         s3: S3Client,
         pipeline_input: GenerativeEditingPipelineInput,
     ) -> None:
+        # s3 is plumbed in by the service factory but unused — Modal owns
+        # both the download and the upload now.
         self.s3 = s3
         self.pipeline_input = pipeline_input
 
     async def run(self) -> dict[str, Any]:
-        image_bytes = await self.s3.download_file(
-            s3_bucket=self.pipeline_input.image_bucket,
-            s3_key=self.pipeline_input.image_key,
-        )
-
-        image_bytes = bake_exif_orientation(image_bytes)
-
         payload = {
-            "image_b64": base64.b64encode(image_bytes).decode("ascii"),
-            "prompt": self.pipeline_input.prompt,
             "image_bucket": self.pipeline_input.image_bucket,
+            "image_key": self.pipeline_input.image_key,
+            "prompt": self.pipeline_input.prompt,
         }
 
         result = await invoke_generative_editing(payload)

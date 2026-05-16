@@ -5,7 +5,6 @@ Deploy / preload via services/modal/flux/{deploy,preload}.py.
 
 from __future__ import annotations
 
-import base64
 import io
 import os
 import time
@@ -16,7 +15,9 @@ import modal
 
 from common.lib import (
     MODEL_DIR,
+    bake_exif_orientation,
     configure_logging,
+    download_from_s3,
     make_app,
     poll_function_call,
     upload_to_s3,
@@ -183,10 +184,10 @@ class FluxInference:
     @modal.method()
     def generate(
         self,
-        image_b64: str,
+        image_bucket: str,
+        image_key: str,
         prompt: str,
         request_id: str,
-        image_bucket: str,
         guidance_scale: float = 1.0,
         num_inference_steps: int = 4,
         max_side: int = 1024,
@@ -198,7 +199,14 @@ class FluxInference:
         )
         t0 = time.perf_counter()
 
-        raw = base64.b64decode(image_b64)
+        t_dl = time.perf_counter()
+        raw = download_from_s3(image_bucket, image_key)
+        raw = bake_exif_orientation(raw)
+        log.info(
+            f"[{request_id}] s3 download + EXIF bake done in "
+            f"{(time.perf_counter() - t_dl) * 1000:.0f}ms ({len(raw)} bytes)"
+        )
+
         init = Image.open(io.BytesIO(raw)).convert("RGB")
         log.info(
             f"[{request_id}] inference: decoded input "
@@ -271,30 +279,29 @@ def submit(payload: dict[str, Any]) -> dict[str, Any]:
     """Kick off inference asynchronously; client polls /poll with the call_id."""
 
     request_id = uuid.uuid4().hex[:8]
-    image_b64 = payload.get("image_b64")
-    prompt = payload.get("prompt")
     image_bucket = payload.get("image_bucket")
+    image_key = payload.get("image_key")
+    prompt = payload.get("prompt")
     log.info(
-        f"[{request_id}] submit: received; "
-        f"image_b64_len={len(image_b64) if image_b64 else 0} "
-        f"prompt_len={len(prompt) if prompt else 0} bucket={image_bucket}"
+        f"[{request_id}] submit: received; bucket={image_bucket} "
+        f"key={image_key} prompt_len={len(prompt) if prompt else 0}"
     )
 
-    if not image_b64 or not prompt:
-        log.warning(f"[{request_id}] submit: missing image_b64 or prompt")
-        return {"error": "image_b64 and prompt are required"}
-    if not image_bucket:
-        log.warning(f"[{request_id}] submit: missing image_bucket")
-        return {"error": "image_bucket is required"}
+    if not image_bucket or not image_key:
+        log.warning(f"[{request_id}] submit: missing image_bucket or image_key")
+        return {"error": "image_bucket and image_key are required"}
+    if not prompt:
+        log.warning(f"[{request_id}] submit: missing prompt")
+        return {"error": "prompt is required"}
 
     guidance_scale = float(payload.get("guidance_scale", 1.0))
     num_inference_steps = int(payload.get("num_inference_steps", 4))
 
     call = FluxInference().generate.spawn(
         request_id=request_id,
-        image_b64=image_b64,
-        prompt=prompt,
         image_bucket=image_bucket,
+        image_key=image_key,
+        prompt=prompt,
         guidance_scale=guidance_scale,
         num_inference_steps=num_inference_steps,
     )

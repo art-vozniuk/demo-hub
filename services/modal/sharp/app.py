@@ -10,7 +10,6 @@ Deploy / preload via services/modal/sharp/{deploy,preload}.py.
 
 from __future__ import annotations
 
-import base64
 import io
 import os
 import time
@@ -22,7 +21,9 @@ import modal
 
 from common.lib import (
     MODEL_DIR,
+    bake_exif_orientation,
     configure_logging,
+    download_from_s3,
     make_app,
     poll_function_call,
     upload_to_s3,
@@ -201,20 +202,29 @@ class SharpInference:
     @modal.method()
     def generate(
         self,
-        image_b64: str,
-        request_id: str,
-        f_px: float,
         image_bucket: str,
+        image_key: str,
+        request_id: str,
     ) -> dict[str, Any]:
-        log.info(f"[{request_id}] inference: start; f_px={f_px:.1f}")
+        log.info(f"[{request_id}] inference: start; key={image_key}")
         t0 = time.perf_counter()
 
-        # Image arrives EXIF-baked from dispatch; just decode to an HWC numpy.
-        raw = base64.b64decode(image_b64)
+        t_dl = time.perf_counter()
+        raw = download_from_s3(image_bucket, image_key)
+        raw = bake_exif_orientation(raw)
+        log.info(
+            f"[{request_id}] s3 download + EXIF bake done in "
+            f"{(time.perf_counter() - t_dl) * 1000:.0f}ms ({len(raw)} bytes)"
+        )
+
         pil = Image.open(io.BytesIO(raw)).convert("RGB")
         arr = np.array(pil)
         height, width = arr.shape[:2]
-        log.info(f"[{request_id}] input: {width}x{height}, {len(raw)} bytes")
+        # No EXIF f_px on most web uploads; default to ~62° FOV (phone main lens).
+        f_px = float(width) * 0.9
+        log.info(
+            f"[{request_id}] input: {width}x{height}, f_px={f_px:.1f}"
+        )
 
         t_inf = time.perf_counter()
         gaussians = self._run_inference(arr, f_px)
@@ -322,30 +332,20 @@ def submit(payload: dict[str, Any]) -> dict[str, Any]:
     """Kick off inference asynchronously; client polls /poll with the call_id."""
 
     request_id = uuid.uuid4().hex[:8]
-    image_b64 = payload.get("image_b64")
-    f_px = payload.get("f_px")
     image_bucket = payload.get("image_bucket")
+    image_key = payload.get("image_key")
     log.info(
-        f"[{request_id}] submit: received; "
-        f"image_b64_len={len(image_b64) if image_b64 else 0} "
-        f"f_px={f_px} bucket={image_bucket}"
+        f"[{request_id}] submit: received; bucket={image_bucket} key={image_key}"
     )
 
-    if not image_b64:
-        log.warning(f"[{request_id}] submit: missing image_b64")
-        return {"error": "image_b64 is required"}
-    if f_px is None:
-        log.warning(f"[{request_id}] submit: missing f_px")
-        return {"error": "f_px is required"}
-    if not image_bucket:
-        log.warning(f"[{request_id}] submit: missing image_bucket")
-        return {"error": "image_bucket is required"}
+    if not image_bucket or not image_key:
+        log.warning(f"[{request_id}] submit: missing image_bucket or image_key")
+        return {"error": "image_bucket and image_key are required"}
 
     call = SharpInference().generate.spawn(
-        image_b64=image_b64,
-        request_id=request_id,
-        f_px=float(f_px),
         image_bucket=image_bucket,
+        image_key=image_key,
+        request_id=request_id,
     )
     log.info(f"[{request_id}] submit: spawned call_id={call.object_id}")
     return {"call_id": call.object_id, "request_id": request_id}
