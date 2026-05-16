@@ -17,17 +17,21 @@ export const DemoHeader = ({
   tagline,
   children,
 }: DemoHeaderProps) => (
-  <section className="max-w-4xl mx-auto space-y-6 text-center animate-fade-in">
-    <div className="space-y-4">
-      <h1 className="text-5xl font-bold tracking-tight sm:text-6xl flex items-center justify-center gap-3 flex-wrap">
-        <span className="text-gradient">{title}</span>
-        {cost !== undefined && <CostBadge cost={cost} size="md" />}
-      </h1>
+  <section className="space-y-6 animate-fade-in">
+    <div className="space-y-3">
+      <div className="flex items-center gap-3 flex-wrap">
+        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
+          {title}
+        </h1>
+        {cost !== undefined && <CostBadge cost={cost} />}
+      </div>
 
-      <ExpandableDescription>{description}</ExpandableDescription>
+      <ExpandableDescription className="text-base text-muted-foreground leading-relaxed max-w-3xl">
+        {description}
+      </ExpandableDescription>
 
       {tagline !== undefined && (
-        <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
+        <p className="pt-2 text-base font-medium text-muted-foreground/90 max-w-3xl">
           {tagline}
         </p>
       )}
