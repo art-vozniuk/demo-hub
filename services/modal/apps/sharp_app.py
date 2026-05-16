@@ -1,7 +1,8 @@
 """Modal app: Apple ml-sharp single-image → 3DGS on A10G.
 
-GPU inference only — PLY→splat, auto-frame and S3 upload run on
-dispatch. Two HTTP endpoints to dodge Modal's ~60s sync gateway cap:
+predict → pack Gaussians3D into 32-byte splat blob → auto-frame, all
+on the GPU container; dispatch only uploads the result. Two HTTP
+endpoints to dodge Modal's ~60s sync gateway cap:
   POST /submit {image_b64, f_px} → {call_id, request_id}
   POST /poll   {call_id}         → {status: running|done|failed|expired, ...}
 Deploy / preload via services/modal/scripts/{deploy,preload}-sharp.sh.
@@ -12,7 +13,6 @@ from __future__ import annotations
 import base64
 import io
 import os
-import tempfile
 import time
 import urllib.request
 import uuid
@@ -41,6 +41,7 @@ sharp_image = (
         "torch==2.6.0",
         "torchvision==0.21.0",
         "numpy",
+        "plyfile==1.0.3",
         "Pillow==11.0.0",
         "click",
         "fastapi[standard]==0.115.6",
@@ -48,7 +49,22 @@ sharp_image = (
         # ml-sharp is GitHub-only; pin to a commit once Apple ships a release.
         "git+https://github.com/apple/ml-sharp.git",
     )
-    # Modal no longer auto-mounts sibling .py files; ship _common explicitly.
+    # Modal no longer auto-mounts sibling .py files; ship _common + _sharp_utils.
+    .add_local_python_source("_common", "_sharp_utils")
+)
+
+
+# submit/poll only spawn / inspect a FunctionCall — no torch needed. A
+# thin image keeps their cold-start small. `_common` ships here because
+# module top-level calls `configure_logging` and `make_app` on every
+# container start; `_sharp_utils` is gated behind `sharp_image.imports()`
+# so it never loads outside the inference container.
+sharp_thin_image = (
+    modal.Image.debian_slim(python_version="3.13")
+    .pip_install(
+        "fastapi[standard]==0.115.6",
+        "pydantic==2.10.3",
+    )
     .add_local_python_source("_common")
 )
 
@@ -58,7 +74,7 @@ with sharp_image.imports():
     import torch
     from PIL import Image
     from sharp.models import PredictorParams, create_predictor
-    from sharp.utils.gaussians import save_ply
+    from _sharp_utils import auto_frame_camera, gaussians_to_splat_bytes
 
 
 def _ensure_checkpoint() -> str:
@@ -196,18 +212,17 @@ class SharpInference:
             f"{inference_ms:.0f}ms"
         )
 
-        # save_ply stays here — it needs the `sharp` package's linearRGB→sRGB
-        # and opacity→logit conversions tied to the predictor's tensors.
-        with tempfile.TemporaryDirectory() as td:
-            ply_path = f"{td}/scene.ply"
-            t_save = time.perf_counter()
-            save_ply(gaussians, f_px, (height, width), ply_path)
-            ply_bytes = open(ply_path, "rb").read()
-            log.info(
-                f"[{request_id}] save_ply done in "
-                f"{(time.perf_counter() - t_save) * 1000:.0f}ms; "
-                f"size={len(ply_bytes) / (1024 * 1024):.1f} MB"
-            )
+        t_pack = time.perf_counter()
+        splat_bytes, gaussian_count, pos_np, alpha_np = gaussians_to_splat_bytes(
+            gaussians
+        )
+        camera_eye, camera_fwd = auto_frame_camera(pos_np, alpha_np)
+        log.info(
+            f"[{request_id}] gaussians→splat + auto-frame done in "
+            f"{(time.perf_counter() - t_pack) * 1000:.0f}ms; "
+            f"splat_size={len(splat_bytes) / (1024 * 1024):.1f} MB "
+            f"({gaussian_count} gaussians)"
+        )
 
         total_ms = (time.perf_counter() - t0) * 1000
         log.info(
@@ -216,8 +231,11 @@ class SharpInference:
         )
 
         return {
-            "ply_b64": base64.b64encode(ply_bytes).decode("ascii"),
-            "ply_size_bytes": len(ply_bytes),
+            "splat_b64": base64.b64encode(splat_bytes).decode("ascii"),
+            "splat_size_bytes": len(splat_bytes),
+            "gaussian_count": gaussian_count,
+            "camera_eye": camera_eye,
+            "camera_fwd": camera_fwd,
         }
 
     def _run_inference(self, image: "np.ndarray", f_px: float) -> Any:
@@ -274,7 +292,7 @@ class SharpInference:
             )
 
 
-@app.function(image=sharp_image, timeout=120)
+@app.function(image=sharp_thin_image, timeout=120)
 @modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
 def submit(payload: dict[str, Any]) -> dict[str, Any]:
     """Kick off inference asynchronously; client polls /poll with the call_id."""
@@ -303,7 +321,7 @@ def submit(payload: dict[str, Any]) -> dict[str, Any]:
     return {"call_id": call.object_id, "request_id": request_id}
 
 
-@app.function(image=sharp_image, timeout=120)
+@app.function(image=sharp_thin_image, timeout=120)
 @modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
 def poll(payload: dict[str, Any]) -> dict[str, Any]:
     """Non-blocking status check; returns running / done / failed / expired."""

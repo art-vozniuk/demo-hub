@@ -1,12 +1,9 @@
 """User photo → Apple ml-sharp 3DGS prediction on Modal.
 
-Modal returns a 3DGS PLY; PLY→splat, auto-frame and S3 upload run here.
-CPU-bound steps go through asyncio.to_thread (~hundreds of ms each)
-so they don't block the event loop. NumPy releases the GIL — threads
-parallelize fine, no need for a process pool.
-
-Result is transient: no SplatScene catalog row, the frontend renders
-the .splat URL straight in an iframe via `?scene_url=&eye=&fwd=`.
+Modal returns a packed .splat blob plus auto-framed camera params;
+dispatch only bakes EXIF on the input, ships the photo, and uploads
+the result to S3. Result is transient — no SplatScene catalog row;
+the frontend renders the .splat URL directly via `?scene_url=&eye=&fwd=`.
 """
 
 from __future__ import annotations
@@ -25,7 +22,6 @@ from services.common.s3.client import S3Client
 from .base import AsyncPipeline, bake_exif_orientation
 from .modal_client import invoke_sharp
 from .schemas import SharpPipelineInput
-from .sharp_utils import auto_frame_camera, ply_bytes_to_splat_bytes
 
 
 log = logging.getLogger(__name__)
@@ -40,16 +36,6 @@ def _prepare_image_for_modal(image_bytes: bytes) -> tuple[bytes, float]:
     # No EXIF f_px on most web uploads; default to ~62° FOV (phone main lens).
     f_px = float(width) * 0.9
     return image_bytes, f_px
-
-
-def _ply_to_splat_and_frame(
-    ply_bytes: bytes,
-) -> tuple[bytes, int, list[float], list[float]]:
-    """Pack splat + auto-frame in one thread hop (shared numpy arrays)."""
-
-    splat_bytes, gaussian_count = ply_bytes_to_splat_bytes(ply_bytes)
-    camera_eye, camera_fwd = auto_frame_camera(splat_bytes, gaussian_count)
-    return splat_bytes, gaussian_count, camera_eye, camera_fwd
 
 
 class SharpPipeline(AsyncPipeline):
@@ -84,24 +70,16 @@ class SharpPipeline(AsyncPipeline):
 
         result = await invoke_sharp(payload)
 
-        ply_b64 = result.get("ply_b64")
-        if not ply_b64:
+        splat_b64 = result.get("splat_b64")
+        if not splat_b64:
             raise RuntimeError(
-                f"Modal SHARP endpoint returned no ply_b64; payload keys: "
+                f"Modal SHARP endpoint returned no splat_b64; payload keys: "
                 f"{list(result.keys())}"
             )
-        ply_bytes = base64.b64decode(ply_b64)
-
-        t_post = time.perf_counter()
-        splat_bytes, gaussian_count, camera_eye, camera_fwd = await asyncio.to_thread(
-            _ply_to_splat_and_frame, ply_bytes
-        )
-        log.info(
-            "sharp: ply→splat + auto-frame done in %.0fms (%d gaussians, %.1f MB)",
-            (time.perf_counter() - t_post) * 1000,
-            gaussian_count,
-            len(splat_bytes) / (1024 * 1024),
-        )
+        splat_bytes = base64.b64decode(splat_b64)
+        gaussian_count = int(result.get("gaussian_count", 0))
+        camera_eye = result.get("camera_eye") or [0.0, 0.0, 3.0]
+        camera_fwd = result.get("camera_fwd") or [0.0, 0.0, -1.0]
 
         url = await self.s3.upload_file(
             data_bytes=splat_bytes,

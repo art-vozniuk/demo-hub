@@ -118,9 +118,8 @@ services:
       - "8080:8080"
     volumes:
       - ./nginx/local.conf:/etc/nginx/conf.d/default.conf:ro
-      # Locally built renderer (cmake --build build-web). nginx serves
-      # /renderer/* from here when files exist; falls through to the prod
-      # Supabase/VPS proxy otherwise. See nginx/local.conf for the wiring.
+      # Locally built renderer; nginx.local.conf prefers it over the
+      # Supabase/VPS proxy when the files exist.
       - ./services/external/renderer/build-web:/usr/share/renderer-build:ro
     depends_on:
       - web
