@@ -2,6 +2,7 @@ import type { UserPipelineItem } from "@/api";
 import GenerativeEditingDetails from "./GenerativeEditingDetails";
 import FaceSwapDetails from "./FaceSwapDetails";
 import FaceRecognitionDetails from "./FaceRecognitionDetails";
+import SharpDetails from "./SharpDetails";
 import UnknownPipelineDetails from "./UnknownPipelineDetails";
 
 interface Props {
@@ -16,6 +17,8 @@ const PipelineDetails = ({ pipeline }: Props) => {
       return <FaceSwapDetails pipeline={pipeline} />;
     case "face_recognition":
       return <FaceRecognitionDetails pipeline={pipeline} />;
+    case "sharp":
+      return <SharpDetails pipeline={pipeline} />;
     default:
       return <UnknownPipelineDetails pipeline={pipeline} />;
   }
@@ -27,6 +30,7 @@ export const PIPELINE_DISPLAY_NAME: Record<string, string> = {
   generative_editing: "Generative Editing",
   face_swap: "Face Swap",
   face_recognition: "Face Recognition",
+  sharp: "SHARP",
 };
 
 export const getPipelineDisplayName = (name: string): string => {
