@@ -20,7 +20,7 @@ from typing import Any
 
 import modal
 
-from _common import MODEL_DIR, configure_logging, make_app
+from _common import MODEL_DIR, configure_logging, make_app, upload_to_s3
 
 
 CHECKPOINT_URL = "https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh.pt"
@@ -46,6 +46,7 @@ sharp_image = (
         "click",
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
+        "boto3==1.35.92",
         # ml-sharp is GitHub-only; pin to a commit once Apple ships a release.
         "git+https://github.com/apple/ml-sharp.git",
     )
@@ -148,6 +149,7 @@ def preload_weights() -> str:
     scaledown_window=10,
     timeout=600,
     enable_memory_snapshot=True,
+    secrets=[modal.Secret.from_name("supabase-s3")],
 )
 @modal.concurrent(max_inputs=1)
 class SharpInference:
@@ -193,6 +195,7 @@ class SharpInference:
         image_b64: str,
         request_id: str,
         f_px: float,
+        image_bucket: str,
     ) -> dict[str, Any]:
         log.info(f"[{request_id}] inference: start; f_px={f_px:.1f}")
         t0 = time.perf_counter()
@@ -224,6 +227,18 @@ class SharpInference:
             f"({gaussian_count} gaussians)"
         )
 
+        t_up = time.perf_counter()
+        result_url = upload_to_s3(
+            data_bytes=splat_bytes,
+            bucket=image_bucket,
+            folder="sharp_results",
+            extension="splat",
+        )
+        log.info(
+            f"[{request_id}] upload: s3 put done in "
+            f"{(time.perf_counter() - t_up) * 1000:.0f}ms; url={result_url}"
+        )
+
         total_ms = (time.perf_counter() - t0) * 1000
         log.info(
             f"[{request_id}] inference: done in {total_ms:.0f}ms "
@@ -231,7 +246,7 @@ class SharpInference:
         )
 
         return {
-            "splat_b64": base64.b64encode(splat_bytes).decode("ascii"),
+            "result_url": result_url,
             "splat_size_bytes": len(splat_bytes),
             "gaussian_count": gaussian_count,
             "camera_eye": camera_eye,
@@ -300,9 +315,11 @@ def submit(payload: dict[str, Any]) -> dict[str, Any]:
     request_id = uuid.uuid4().hex[:8]
     image_b64 = payload.get("image_b64")
     f_px = payload.get("f_px")
+    image_bucket = payload.get("image_bucket")
     log.info(
         f"[{request_id}] submit: received; "
-        f"image_b64_len={len(image_b64) if image_b64 else 0} f_px={f_px}"
+        f"image_b64_len={len(image_b64) if image_b64 else 0} "
+        f"f_px={f_px} bucket={image_bucket}"
     )
 
     if not image_b64:
@@ -311,11 +328,15 @@ def submit(payload: dict[str, Any]) -> dict[str, Any]:
     if f_px is None:
         log.warning(f"[{request_id}] submit: missing f_px")
         return {"error": "f_px is required"}
+    if not image_bucket:
+        log.warning(f"[{request_id}] submit: missing image_bucket")
+        return {"error": "image_bucket is required"}
 
     call = SharpInference().generate.spawn(
         image_b64=image_b64,
         request_id=request_id,
         f_px=float(f_px),
+        image_bucket=image_bucket,
     )
     log.info(f"[{request_id}] submit: spawned call_id={call.object_id}")
     return {"call_id": call.object_id, "request_id": request_id}

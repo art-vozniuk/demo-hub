@@ -1,9 +1,10 @@
 """User photo → Apple ml-sharp 3DGS prediction on Modal.
 
-Modal returns a packed .splat blob plus auto-framed camera params;
-dispatch only bakes EXIF on the input, ships the photo, and uploads
-the result to S3. Result is transient — no SplatScene catalog row;
-the frontend renders the .splat URL directly via `?scene_url=&eye=&fwd=`.
+Modal predicts the 3DGS, packs it into a .splat blob, and uploads
+directly to S3; dispatch just bakes EXIF, ships the photo, and forwards
+the returned URL + auto-framed camera params. Result is transient — no
+SplatScene catalog row; the frontend renders the .splat URL directly
+via `?scene_url=&eye=&fwd=`.
 """
 
 from __future__ import annotations
@@ -66,34 +67,26 @@ class SharpPipeline(AsyncPipeline):
         payload = {
             "image_b64": base64.b64encode(image_bytes).decode("ascii"),
             "f_px": f_px,
+            "image_bucket": self.pipeline_input.image_bucket,
         }
 
         result = await invoke_sharp(payload)
 
-        splat_b64 = result.get("splat_b64")
-        if not splat_b64:
+        result_url = result.get("result_url")
+        if not result_url:
             raise RuntimeError(
-                f"Modal SHARP endpoint returned no splat_b64; payload keys: "
+                f"Modal SHARP endpoint returned no result_url; payload keys: "
                 f"{list(result.keys())}"
             )
-        splat_bytes = base64.b64decode(splat_b64)
         gaussian_count = int(result.get("gaussian_count", 0))
         camera_eye = result.get("camera_eye") or [0.0, 0.0, 3.0]
         camera_fwd = result.get("camera_fwd") or [0.0, 0.0, -1.0]
 
-        url = await self.s3.upload_file(
-            data_bytes=splat_bytes,
-            s3_bucket=self.pipeline_input.image_bucket,
-            s3_folder="sharp_results",
-            file_extension="splat",
-        )
-
         log.info(
-            f"Dispatched sharp complete; uploaded {len(splat_bytes)} bytes "
-            f"({gaussian_count} gaussians) to {url}"
+            f"Dispatched sharp complete; {gaussian_count} gaussians at {result_url}"
         )
         return {
-            "result_url": url,
+            "result_url": result_url,
             "camera_eye": camera_eye,
             "camera_fwd": camera_fwd,
             "gaussian_count": gaussian_count,

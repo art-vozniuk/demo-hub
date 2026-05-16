@@ -14,7 +14,7 @@ from typing import Any
 
 import modal
 
-from _common import MODEL_DIR, configure_logging, make_app
+from _common import MODEL_DIR, configure_logging, make_app, upload_to_s3
 
 
 MODEL_REPO = "black-forest-labs/FLUX.2-klein-4B"
@@ -45,6 +45,7 @@ flux_image = (
         "Pillow==11.0.0",
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
+        "boto3==1.35.92",
     )
     .env(
         {
@@ -114,6 +115,7 @@ def preload_weights() -> str:
     scaledown_window=10,
     timeout=600,
     enable_memory_snapshot=True,
+    secrets=[modal.Secret.from_name("supabase-s3")],
 )
 @modal.concurrent(max_inputs=1)
 class FluxInference:
@@ -166,6 +168,7 @@ class FluxInference:
         image_b64: str,
         prompt: str,
         request_id: str,
+        image_bucket: str,
         guidance_scale: float = 1.0,
         num_inference_steps: int = 4,
         max_side: int = 1024,
@@ -219,16 +222,26 @@ class FluxInference:
         result_image.save(buf, format="PNG")
         png_bytes = buf.getvalue()
 
+        t_up = time.perf_counter()
+        result_url = upload_to_s3(
+            data_bytes=png_bytes,
+            bucket=image_bucket,
+            folder="generative_results",
+            extension="png",
+        )
+        upload_ms = (time.perf_counter() - t_up) * 1000
+
         total_ms = (time.perf_counter() - t0) * 1000
         log.info(
             f"[{request_id}] inference: done; output "
             f"{result_image.width}x{result_image.height} "
             f"png_size={len(png_bytes)} bytes "
-            f"inference_ms={inference_ms:.0f} total_ms={total_ms:.0f}"
+            f"inference_ms={inference_ms:.0f} upload_ms={upload_ms:.0f} "
+            f"total_ms={total_ms:.0f} url={result_url}"
         )
 
         return {
-            "image_b64": base64.b64encode(png_bytes).decode("ascii"),
+            "result_url": result_url,
             "width": result_image.width,
             "height": result_image.height,
         }
@@ -249,10 +262,11 @@ def generate(payload: dict[str, Any]) -> dict[str, Any]:
 
     image_b64 = payload.get("image_b64")
     prompt = payload.get("prompt")
+    image_bucket = payload.get("image_bucket")
     log.info(
         f"[{request_id}] endpoint: POST received; "
         f"image_b64_len={len(image_b64) if image_b64 else 0} "
-        f"prompt_len={len(prompt) if prompt else 0}"
+        f"prompt_len={len(prompt) if prompt else 0} bucket={image_bucket}"
     )
 
     if not image_b64 or not prompt:
@@ -261,6 +275,9 @@ def generate(payload: dict[str, Any]) -> dict[str, Any]:
             f"missing image_b64 or prompt"
         )
         return {"error": "image_b64 and prompt are required"}
+    if not image_bucket:
+        log.warning(f"[{request_id}] endpoint: rejecting; missing image_bucket")
+        return {"error": "image_bucket is required"}
 
     guidance_scale = float(payload.get("guidance_scale", 1.0))
     num_inference_steps = int(payload.get("num_inference_steps", 4))
@@ -275,6 +292,7 @@ def generate(payload: dict[str, Any]) -> dict[str, Any]:
         request_id=request_id,
         image_b64=image_b64,
         prompt=prompt,
+        image_bucket=image_bucket,
         guidance_scale=guidance_scale,
         num_inference_steps=num_inference_steps,
     )
@@ -282,6 +300,6 @@ def generate(payload: dict[str, Any]) -> dict[str, Any]:
     total_ms = (time.perf_counter() - t0) * 1000
     log.info(
         f"[{request_id}] endpoint: done; total_ms={total_ms:.0f} "
-        f"output_b64_len={len(result.get('image_b64', '')) if isinstance(result, dict) else 0}"
+        f"result_url={result.get('result_url') if isinstance(result, dict) else None}"
     )
     return result

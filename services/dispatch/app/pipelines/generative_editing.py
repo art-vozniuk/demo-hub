@@ -36,21 +36,16 @@ class GenerativeEditingPipeline(AsyncPipeline):
         payload = {
             "image_b64": base64.b64encode(image_bytes).decode("ascii"),
             "prompt": self.pipeline_input.prompt,
+            "image_bucket": self.pipeline_input.image_bucket,
         }
 
         result = await invoke_generative_editing(payload)
 
-        result_b64 = result.get("image_b64")
-        if not result_b64:
-            raise RuntimeError("Modal endpoint returned no image_b64 in response")
+        result_url = result.get("result_url")
+        if not result_url:
+            raise RuntimeError(
+                f"Modal endpoint returned no result_url; keys: {list(result.keys())}"
+            )
 
-        result_bytes = base64.b64decode(result_b64)
-        url = await self.s3.upload_file(
-            data_bytes=result_bytes,
-            s3_bucket=self.pipeline_input.image_bucket,
-            s3_folder="generative_results",
-            file_extension="png",
-        )
-
-        log.info(f"Dispatched generative_editing complete; uploaded result to {url}")
-        return {"result_url": url}
+        log.info(f"Dispatched generative_editing complete; result at {result_url}")
+        return {"result_url": result_url}
