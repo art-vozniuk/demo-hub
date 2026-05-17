@@ -1,5 +1,4 @@
 import { ReactNode } from "react";
-import { ExpandableDescription } from "@/components/ExpandableDescription";
 import CostBadge from "@/components/CostBadge";
 
 type DemoHeaderProps = {
@@ -26,9 +25,9 @@ export const DemoHeader = ({
         {cost !== undefined && <CostBadge cost={cost} />}
       </div>
 
-      <ExpandableDescription className="text-base text-muted-foreground leading-relaxed max-w-3xl">
+      <div className="text-base text-muted-foreground leading-relaxed max-w-3xl">
         {description}
-      </ExpandableDescription>
+      </div>
 
       {tagline !== undefined && (
         <p className="pt-2 text-base font-medium text-muted-foreground/90 max-w-3xl">
