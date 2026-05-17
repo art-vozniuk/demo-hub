@@ -5,7 +5,7 @@ import {
   useRef,
   useMemo,
 } from "react";
-import { Activity, Download } from "lucide-react";
+import { Activity, Download, Maximize, Minimize, Orbit, Plane } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { RendererUnsupported } from "@/components/RendererUnsupported";
@@ -389,7 +389,9 @@ const PerfOverlay = ({
   );
 };
 
-const CameraHelp = () => {
+type CameraMode = "orbit" | "fly";
+
+const CameraHelp = ({ mode }: { mode: CameraMode }) => {
   const isCoarse =
     typeof window !== "undefined" &&
     window.matchMedia &&
@@ -398,25 +400,29 @@ const CameraHelp = () => {
   if (isCoarse) {
     return (
       <p className="mt-3 text-xs text-muted-foreground text-center">
-        Drag the left stick to fly · drag the right stick to look ·{" "}
-        <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">▲</kbd>{" "}
-        <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">▼</kbd>{" "}
-        to ascend / descend
+        Drag with one finger to orbit · pinch to zoom · let go to snap back
+      </p>
+    );
+  }
+
+  if (mode === "fly") {
+    return (
+      <p className="mt-3 text-xs text-muted-foreground text-center">
+        <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">W A S D</kbd>{" "}
+        to move ·{" "}
+        <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">Q E</kbd>{" "}
+        to rise / fall · hold{" "}
+        <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">LMB</kbd>{" "}
+        and drag to look · click the orbit icon to snap home
       </p>
     );
   }
 
   return (
     <p className="mt-3 text-xs text-muted-foreground text-center">
-      Hold{" "}
-      <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">LMB</kbd>{" "}
-      and use{" "}
-      <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">
-        W A S D
-      </kbd>{" "}
-      to move,{" "}
-      <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">Q E</kbd>{" "}
-      to rise / fall
+      Drag with the mouse to orbit · scroll to zoom · press{" "}
+      <kbd className="px-1 py-0.5 rounded bg-muted font-mono text-xs">W A S D</kbd>{" "}
+      (or click the fly icon) to free-fly
     </p>
   );
 };
@@ -453,8 +459,68 @@ export const SplatViewer = ({
   const lastPerfUpdateRef = useRef(0);
   const recorderRef = useRef<PerfRecorder | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const engineLogRef = useRef<string[]>([]);
   const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [cameraMode, setCameraMode] = useState<CameraMode>("orbit");
+  // Touch devices stay orbit-only — no keyboard, no fly toggle.
+  const isCoarsePointer = useMemo(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia &&
+      window.matchMedia("(pointer: coarse)").matches,
+    [],
+  );
+
+  const requestCameraMode = useCallback((mode: CameraMode) => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    iframe.contentWindow?.postMessage(
+      { type: "set-camera-mode", mode: mode === "orbit" ? 0 : 1 },
+      "*",
+    );
+  }, []);
+
+  // Mirror Fullscreen API state — covers user-pressed Esc / browser-driven exit.
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  const toggleFullscreen = useCallback(async () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+      return;
+    }
+    const target = wrapperRef.current;
+    if (!target) return;
+    try {
+      await target.requestFullscreen();
+    } catch {
+      return;
+    }
+    // Touch devices: try to lock to landscape so the renderer fills the
+    // screen properly. Only supported in some browsers (Chrome Android
+    // yes, Safari iOS no — silently swallow the rejection there).
+    try {
+      const orientation = (
+        screen as Screen & {
+          orientation?: { lock?: (o: string) => Promise<void> };
+        }
+      ).orientation;
+      const isCoarse =
+        window.matchMedia &&
+        window.matchMedia("(pointer: coarse)").matches;
+      if (isCoarse && orientation?.lock) {
+        await orientation.lock("landscape");
+      }
+    } catch {
+      /* unsupported / disallowed — leave orientation alone */
+    }
+  }, []);
 
   const pushEngineLog = useCallback((line: string) => {
     const buf = engineLogRef.current;
@@ -754,6 +820,9 @@ export const SplatViewer = ({
           /* cross-origin — ignore */
         }
         setIsReady(true);
+      } else if (t === "camera-mode-changed") {
+        const mode = e.data?.mode === "fly" ? "fly" : "orbit";
+        setCameraMode(mode);
       } else if (t === "perf") {
         const data: PerfData = {
           frame: e.data.frame,
@@ -848,7 +917,11 @@ export const SplatViewer = ({
 
   return (
     <div className="space-y-3">
-      <div className="relative w-full" style={{ height }}>
+      <div
+        ref={wrapperRef}
+        className="relative w-full bg-background"
+        style={{ height: isFullscreen ? "100vh" : height }}
+      >
         {enablePerf && perfOpen && isReady && (
           <PerfOverlay perf={perf} recorderRef={recorderRef} />
         )}
@@ -868,6 +941,62 @@ export const SplatViewer = ({
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">Toggle perf overlay</TooltipContent>
+            </Tooltip>
+          </div>
+        )}
+        {isReady && (
+          <div className="absolute top-3 right-3 z-20 flex gap-2">
+            {!isCoarsePointer && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={cameraMode === "fly" ? "default" : "secondary"}
+                    size="sm"
+                    onClick={() =>
+                      requestCameraMode(cameraMode === "fly" ? "orbit" : "fly")
+                    }
+                    className="gap-1 h-8 w-8 p-0 rounded-full shadow-md"
+                    aria-pressed={cameraMode === "fly"}
+                    aria-label={
+                      cameraMode === "fly"
+                        ? "Switch to orbit camera"
+                        : "Switch to fly camera"
+                    }
+                  >
+                    {cameraMode === "fly" ? (
+                      <Orbit className="h-4 w-4" />
+                    ) : (
+                      <Plane className="h-4 w-4" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {cameraMode === "fly" ? "Orbit camera" : "Fly camera"}
+                </TooltipContent>
+              </Tooltip>
+            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={toggleFullscreen}
+                  className="gap-1 h-8 w-8 p-0 rounded-full shadow-md"
+                  aria-pressed={isFullscreen}
+                  aria-label={
+                    isFullscreen ? "Exit fullscreen" : "Enter fullscreen"
+                  }
+                >
+                  {isFullscreen ? (
+                    <Minimize className="h-4 w-4" />
+                  ) : (
+                    <Maximize className="h-4 w-4" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+              </TooltipContent>
             </Tooltip>
           </div>
         )}
@@ -908,7 +1037,7 @@ export const SplatViewer = ({
           title={`Renderer — ${scene.title}`}
         />
       </div>
-      {isReady && showCameraHelp && <CameraHelp />}
+      {isReady && showCameraHelp && <CameraHelp mode={cameraMode} />}
     </div>
   );
 };

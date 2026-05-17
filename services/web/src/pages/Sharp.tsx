@@ -295,8 +295,8 @@ const Sharp = () => {
         cost={sharpCost}
         description={
           <>
-            Turn a single photo into a 3D Gaussian-Splatting scene you can fly
-            a camera around in your browser. Wraps Apple's{" "}
+            Turn a single photo into a 3D Gaussian-Splatting scene you can
+            orbit around in your browser. Wraps Apple's{" "}
             <a
               href="https://github.com/apple/ml-sharp"
               target="_blank"
