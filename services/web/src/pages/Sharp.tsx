@@ -18,6 +18,7 @@ import { useWallet } from "@/contexts/WalletContext";
 import { useAuth } from "@/contexts/AuthContext";
 import OutOfTokensDialog from "@/components/OutOfTokensDialog";
 import { toast } from "sonner";
+import sharpDemoVideo from "@/assets/sharp-demo.mp4";
 
 const POLL_INTERVAL_MS = 1000;
 const POLL_TIMEOUT_MS = 120_000;
@@ -315,7 +316,25 @@ const Sharp = () => {
 
       <section className="max-w-3xl mx-auto space-y-4">
         {!photo && !result && !failed && (
-          <UploadDropzone onFileSelect={setPhoto} selectedFile={photo} />
+          <>
+            <div className="group relative overflow-hidden rounded-xl border border-border shadow-elegant bg-card">
+              <video
+                src={sharpDemoVideo}
+                autoPlay
+                loop
+                muted
+                playsInline
+                preload="auto"
+                className="block w-full aspect-video object-cover"
+              />
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent p-3">
+                <p className="text-xs font-medium text-white/90">
+                  Demo: photo → orbitable 3D scene
+                </p>
+              </div>
+            </div>
+            <UploadDropzone onFileSelect={setPhoto} selectedFile={photo} />
+          </>
         )}
 
         {photo && !result && !failed && (
