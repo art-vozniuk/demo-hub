@@ -49,12 +49,16 @@ class SharpPipeline(AsyncPipeline):
         gaussian_count = int(result.get("gaussian_count", 0))
         camera_eye = result.get("camera_eye") or [0.0, 0.0, 3.0]
         camera_fwd = result.get("camera_fwd") or [0.0, 0.0, -1.0]
+        # Optional wobble-preview MP4; Modal returns null when RENDER_VIDEO is off.
+        video_url = result.get("video_url")
 
         log.info(
             f"Dispatched sharp complete; {gaussian_count} gaussians at {result_url}"
+            + (f" (video={video_url})" if video_url else "")
         )
         return {
             "result_url": result_url,
+            "video_url": video_url,
             "camera_eye": camera_eye,
             "camera_fwd": camera_fwd,
             "gaussian_count": gaussian_count,

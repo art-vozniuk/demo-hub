@@ -28,6 +28,7 @@ from common.lib import (
     poll_function_call,
     upload_to_s3,
 )
+from common.prebuild_gsplat import prebuild as _prebuild_gsplat_kernels
 
 
 CHECKPOINT_URL = "https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh.pt"
@@ -38,12 +39,27 @@ log = configure_logging("sharp")
 app, volume = make_app("demo-hub-sharp", "sharp-models")
 
 
+# Flip to False to skip the wobble-MP4 preview render (and shave the
+# gsplat/imageio cost off the inference path). Image deps are still
+# baked in regardless, so toggling does NOT require an image rebuild —
+# only the per-call extra ~1-3s on the GPU goes away.
+RENDER_VIDEO = True
+
+
 # ml-sharp recommends Python 3.13. torch 2.5.x has 3.13 wheels but matching
 # torchvision 0.20.x does not — bump the pair to 2.6/0.21, the first with
 # cp313 wheels on both sides.
+#
+# Base = nvidia/cuda:12.4.1-devel: gsplat builds CUDA kernels at
+# `pip install` time and needs `nvcc` + CUDA headers. The matching
+# `cu124`-built torch wheel links its own CUDA runtime so we don't
+# rely on system libs at execution time, only at build.
 sharp_image = (
-    modal.Image.debian_slim(python_version="3.13")
-    .apt_install("git", "libgl1", "libglib2.0-0")
+    modal.Image.from_registry(
+        "nvidia/cuda:12.4.1-devel-ubuntu22.04",
+        add_python="3.13",
+    )
+    .apt_install("git", "libgl1", "libglib2.0-0", "ffmpeg")
     .pip_install(
         "torch==2.6.0",
         "torchvision==0.21.0",
@@ -54,14 +70,50 @@ sharp_image = (
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
         "boto3==1.35.92",
+        # Wobble-preview MP4 render. gsplat ships only a py3-none-any
+        # wrapper and JIT-compiles its CUDA kernels via torch's
+        # cpp_extension on first call — we trigger that compile in
+        # .run_function below so each cold start doesn't pay it.
+        "gsplat==1.4.0",
+        "imageio[ffmpeg]==2.36.1",
         # ml-sharp is GitHub-only; pin to a commit once Apple ships a release.
         "git+https://github.com/apple/ml-sharp.git",
     )
-    # Modal no longer auto-mounts sibling files; ship common.lib +
-    # common.sharp_utils explicitly. (sharp_utils lives under common/
-    # rather than sharp/ to avoid clashing with the ml-sharp pip
-    # package's own `sharp` namespace.)
-    .add_local_python_source("common.lib", "common.sharp_utils")
+    .env(
+        {
+            # Narrow gsplat's nvcc compile to A10G (sm_86). Without
+            # this, nvcc compiles for every arch torch advertises,
+            # 5-10× slower build.
+            "TORCH_CUDA_ARCH_LIST": "8.6",
+            # Pin torch's JIT cache to a path that's part of the image
+            # layer (default `~/.cache/torch_extensions` works too on
+            # Modal, but being explicit guards against future $HOME
+            # changes upstream).
+            "TORCH_EXTENSIONS_DIR": "/root/torch_extensions",
+        }
+    )
+    # prebuild_gsplat is consumed by `.run_function` below — must be
+    # baked in (copy=True) since Modal forbids `add_local_*` before
+    # additional build steps without copying.
+    .add_local_python_source("common.prebuild_gsplat", copy=True)
+    # Bake gsplat's CUDA kernels into the image layer (~1-2 min A10G
+    # at build time); without this, cold starts wait ~1-3 min on JIT.
+    .run_function(_prebuild_gsplat_kernels, gpu="A10G")
+    # Rest is attached at container startup (no rebuild on edits).
+    # sharp_utils lives under common/ rather than sharp/ to avoid
+    # clashing with the ml-sharp pip package's own `sharp` namespace.
+    # prebuild_gsplat is intentionally listed in BOTH add_local steps:
+    # the copy=True one above makes it available to .run_function at
+    # build time; this one ensures sharp/app.py's top-level
+    # `from common.prebuild_gsplat import ...` resolves at runtime
+    # (otherwise the runtime-attached `common/` shadows the baked-in
+    # one and the prebuild module disappears from sys.path).
+    .add_local_python_source(
+        "common.lib",
+        "common.sharp_utils",
+        "common.sharp_video",
+        "common.prebuild_gsplat",
+    )
 )
 
 
@@ -259,6 +311,8 @@ class SharpInference:
             f"{(time.perf_counter() - t_up) * 1000:.0f}ms; url={result_url}"
         )
 
+        video_url = self._maybe_render_video(gaussians, image_bucket, request_id)
+
         total_ms = (time.perf_counter() - t0) * 1000
         log.info(
             f"[{request_id}] inference: done in {total_ms:.0f}ms "
@@ -267,11 +321,47 @@ class SharpInference:
 
         return {
             "result_url": result_url,
+            "video_url": video_url,
             "splat_size_bytes": len(splat_bytes),
             "gaussian_count": gaussian_count,
             "camera_eye": camera_eye,
             "camera_fwd": camera_fwd,
         }
+
+    def _maybe_render_video(
+        self,
+        gaussians: Any,
+        image_bucket: str,
+        request_id: str,
+    ) -> str | None:
+        """Render the wobble-preview MP4 + upload, or no-op if RENDER_VIDEO is off."""
+
+        if not RENDER_VIDEO:
+            return None
+
+        from common.sharp_video import render_wobble_mp4
+
+        t_video = time.perf_counter()
+        mp4_bytes = render_wobble_mp4(gaussians)
+        log.info(
+            f"[{request_id}] video: render done in "
+            f"{(time.perf_counter() - t_video) * 1000:.0f}ms "
+            f"({len(mp4_bytes) / 1024:.0f} KB)"
+        )
+
+        t_video_up = time.perf_counter()
+        video_url = upload_to_s3(
+            data_bytes=mp4_bytes,
+            bucket=image_bucket,
+            folder="sharp_results",
+            extension="mp4",
+        )
+        log.info(
+            f"[{request_id}] video: s3 put done in "
+            f"{(time.perf_counter() - t_video_up) * 1000:.0f}ms; "
+            f"url={video_url}"
+        )
+        return video_url
 
     def _run_inference(self, image: "np.ndarray", f_px: float) -> Any:
         """Inlined copy of sharp.cli.predict.predict_image — that lives under

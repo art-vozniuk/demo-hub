@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { v4 as uuidv4 } from "uuid";
-import { Github, Loader2 } from "lucide-react";
+import { Boxes, Github, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DemoHeader } from "@/components/DemoHeader";
-import { SplatViewer, type SplatViewerScene } from "@/components/SplatViewer";
 import UploadDropzone from "@/components/UploadDropzone";
 import {
   pipelinesApi,
@@ -32,14 +31,17 @@ const formatRemaining = (seconds: number): string => {
   return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
 };
 
-function resultToViewerScene(result: SharpResult): SplatViewerScene {
-  return {
-    slug: "sharp-result",
-    title: "SHARP result",
-    sceneUrl: result.result_url,
-    cameraEye: result.camera_eye,
-    cameraFwd: result.camera_fwd,
-  };
+function buildViewerHref(result: SharpResult): string {
+  const params = new URLSearchParams();
+  params.set("url", result.result_url);
+  params.set("title", "SHARP result");
+  if (result.camera_eye?.length === 3) {
+    params.set("eye", result.camera_eye.join(","));
+  }
+  if (result.camera_fwd?.length === 3) {
+    params.set("fwd", result.camera_fwd.join(","));
+  }
+  return `/sharp/view?${params.toString()}`;
 }
 
 const Sharp = () => {
@@ -403,8 +405,33 @@ const Sharp = () => {
         )}
 
         {result && (
-          <div className="flex flex-col gap-3">
-            <SplatViewer scene={resultToViewerScene(result)} height="60vh" />
+          <div className="flex flex-col gap-4">
+            {result.video_url ? (
+              <video
+                src={result.video_url}
+                className="w-full rounded-xl border border-border bg-black"
+                autoPlay
+                loop
+                muted
+                playsInline
+                controls={false}
+              />
+            ) : (
+              <div className="flex aspect-video items-center justify-center rounded-xl border border-dashed border-border bg-card text-sm text-muted-foreground">
+                Preview unavailable — open the renderer below.
+              </div>
+            )}
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <Button asChild>
+                <Link to={buildViewerHref(result)}>
+                  <Boxes className="h-4 w-4 mr-2" />
+                  Open renderer
+                </Link>
+              </Button>
+              <Button variant="outline" onClick={handleReset}>
+                Try another photo
+              </Button>
+            </div>
             <div className="flex flex-wrap items-center justify-center gap-3 text-xs text-muted-foreground">
               <span>
                 {result.gaussian_count?.toLocaleString() ?? "?"} gaussians
@@ -418,15 +445,6 @@ const Sharp = () => {
               >
                 Download .splat
               </a>
-              <span>•</span>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleReset}
-                className="h-7"
-              >
-                Try another photo
-              </Button>
             </div>
           </div>
         )}

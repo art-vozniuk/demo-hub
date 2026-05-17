@@ -10,6 +10,7 @@ interface Props {
 
 type SharpResult = {
   result_url?: string;
+  video_url?: string | null;
   camera_eye?: [number, number, number] | number[];
   camera_fwd?: [number, number, number] | number[];
   gaussian_count?: number;
@@ -45,6 +46,22 @@ const SharpDetails = ({ pipeline }: Props) => {
     <div className="space-y-3">
       <div className="flex flex-wrap gap-4 items-start">
         {sourceUrl && <PipelinePreviewImage url={sourceUrl} label="Source" />}
+        {result.video_url && (
+          <div className="space-y-1.5">
+            <div className="text-xs font-medium text-muted-foreground">
+              Wobble preview
+            </div>
+            <video
+              src={result.video_url}
+              className="h-32 w-32 sm:h-40 sm:w-40 rounded-md border border-border bg-black object-cover"
+              autoPlay
+              loop
+              muted
+              playsInline
+              controls={false}
+            />
+          </div>
+        )}
         {viewerHref && (
           <div className="space-y-1.5">
             <div className="text-xs font-medium text-muted-foreground">

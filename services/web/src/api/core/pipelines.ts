@@ -39,6 +39,8 @@ export interface GenerativeEditingResult {
 
 export interface SharpResult {
   result_url: string;
+  /** Optional wobble-preview MP4 (Modal-side `RENDER_VIDEO` flag). */
+  video_url?: string | null;
   camera_eye: [number, number, number];
   camera_fwd: [number, number, number];
   gaussian_count?: number;
