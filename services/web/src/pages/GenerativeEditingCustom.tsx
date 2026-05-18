@@ -55,12 +55,7 @@ const GenerativeEditingCustom = () => {
   const { track } = useAnalytics();
 
   const { user, loading: authLoading } = useAuth();
-  const {
-    balance,
-    getCost,
-    resolveCost,
-    refresh: refreshBalance,
-  } = useWallet();
+  const { balance, getCost, refresh: refreshBalance } = useWallet();
   const baseCost = getCost(PIPELINE_NAME);
 
   useEffect(() => {
@@ -187,9 +182,32 @@ const GenerativeEditingCustom = () => {
     [refreshBalance],
   );
 
-  const finalCost = resolveCost(PIPELINE_NAME, {
-    num_inference_steps: QUALITY_STEPS[quality],
-  });
+  // Final cost comes from the server (POST /pipelines/cost-preview); we
+  // bump a token on every Quality change and ignore stale responses so
+  // a slow earlier request can't overwrite a newer one. Local Math
+  // mirror would risk drifting from backend handlers.
+  const [finalCost, setFinalCost] = useState<number | undefined>(undefined);
+  const previewTokenRef = useRef(0);
+  useEffect(() => {
+    const token = ++previewTokenRef.current;
+    pipelinesApi
+      .previewCost({
+        pipeline_name: PIPELINE_NAME,
+        input: { num_inference_steps: QUALITY_STEPS[quality] },
+      })
+      .then((res) => {
+        if (previewTokenRef.current !== token) return;
+        setFinalCost(res.cost);
+      })
+      .catch((err) => {
+        if (previewTokenRef.current !== token) return;
+        console.warn("cost preview failed:", err);
+        // Fall back to base while preview is unavailable — server
+        // remains authoritative at charge time, so the user just sees
+        // the conservative price.
+        setFinalCost(baseCost);
+      });
+  }, [quality, baseCost]);
 
   const handleGenerate = useCallback(async () => {
     if (!uploadedRef) return;

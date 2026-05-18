@@ -9,7 +9,7 @@ from services.common.auth.models import User
 from services.core.app.pipelines.models import Pipeline
 from services.core.app.recast.models import RecastTemplate
 from services.core.app.generative.models import GenerativePreset
-from services.core.app.wallet.models import PipelineType
+from services.core.app.wallet.models import CostMultiplier, PipelineType
 
 
 # Use file-based URI with shared cache to ensure single database instance
@@ -20,7 +20,7 @@ TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:?cache=shared"
 async def engine():
     # Ensure models are loaded by referencing them
     # This ensures they're registered with Base.metadata
-    _ = [Pipeline, RecastTemplate, GenerativePreset, PipelineType]
+    _ = [Pipeline, RecastTemplate, GenerativePreset, PipelineType, CostMultiplier]
 
     engine = create_async_engine(
         TEST_DATABASE_URL,

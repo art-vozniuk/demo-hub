@@ -68,3 +68,14 @@ class UserPipelinesResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class CostPreviewRequest(BaseModel):
+    pipeline_name: str
+    input: dict[str, Any]
+
+
+class CostPreviewResponse(BaseModel):
+    pipeline_name: str
+    base_cost: int
+    cost: int

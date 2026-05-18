@@ -10,6 +10,8 @@ from services.common.redis.rate_limit import rate_limit
 from services.core.app.config import config
 
 from .schemas import (
+    CostPreviewRequest,
+    CostPreviewResponse,
     QueuePipelinesRequest,
     QueuePipelinesResponse,
     PipelineStatusRequest,
@@ -79,9 +81,10 @@ async def _process_pipeline(
             detail="Pipeline pricing not configured",
         )
 
-    final_cost = resolve_cost(
+    final_cost = await resolve_cost(
+        db=db,
+        pipeline_type_id=ptype.id,
         base_cost=ptype.base_cost,
-        rule=ptype.cost_multipliers,
         pipeline_input=pipeline.input,
     )
 
@@ -257,4 +260,46 @@ async def get_pipeline_estimate(
         queue_position=estimate.queue_position,
         worker_count=estimate.worker_count,
         workers_missing=estimate.workers_missing,
+    )
+
+
+@router.post(
+    "/cost-preview",
+    response_model=CostPreviewResponse,
+    dependencies=[
+        Depends(rate_limit("cost_preview", config.RATE_LIMIT_STATUS_PER_MINUTE, 60))
+    ],
+)
+async def preview_cost(
+    request: CostPreviewRequest,
+    db: DbSession,
+) -> CostPreviewResponse:
+    """Compute the final cost that would be charged for the given input,
+    without queuing anything. Lets the UI display "Final cost: N" live
+    as the user changes pricing-sensitive params. Server stays
+    authoritative — actual queue still re-resolves at charge time."""
+
+    if request.pipeline_name not in known_pipeline_names():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown pipeline_name: {request.pipeline_name!r}",
+        )
+
+    ptype = await wallet_service.get_pipeline_type(db, request.pipeline_name)
+    if ptype is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Pipeline pricing not configured",
+        )
+
+    cost = await resolve_cost(
+        db=db,
+        pipeline_type_id=ptype.id,
+        base_cost=ptype.base_cost,
+        pipeline_input=request.input,
+    )
+    return CostPreviewResponse(
+        pipeline_name=request.pipeline_name,
+        base_cost=ptype.base_cost,
+        cost=cost,
     )

@@ -1,23 +1,16 @@
-"""Generic input-driven cost scaling for queued pipelines.
+"""Resolve the final token cost for a queued pipeline.
 
-A pipeline_types row may carry a `cost_multipliers` rule describing how
-its `base_cost` scales with the input payload. The rule shape is:
+The wallet layer stays generic: each pipeline_type may have zero or more
+rows in `pipeline_cost_multipliers`. Every row carries a `type` (which
+handler to dispatch to) and a `params` JSON payload (validated by the
+handler's pydantic model). Handlers return a percent multiplier; the
+resolver composes them multiplicatively so additional rules can be
+added without revisiting existing pricing logic.
 
-    {
-        "input_field": "<key in pipeline.input>",
-        "values": {"<value>": <percent>, ...}
-    }
-
-`<percent>` is an integer where 100 means "charge base_cost". Final
-cost = base_cost * percent / 100. Input values are matched as strings so
-the rule survives JSON serialization (e.g. {"2": 70} matches both
-`num_inference_steps: 2` and `num_inference_steps: "2"`).
-
-If no rule is configured, or the input value isn't in the table, we fall
-back to `base_cost` — a missing entry never overcharges the user.
-
-This keeps wallet code free of per-pipeline branches: each pipeline
-declares its scaling in data (a migration), not in code.
+Composition example: base 10, rules return [70, 150] → 10 * 70 / 100 *
+150 / 100 = 10.5 → 10 (integer truncation favours the user). A handler
+that doesn't match the input returns IDENTITY_PCT (100) so the cost is
+unaffected by an inactive rule.
 """
 
 from __future__ import annotations
@@ -25,35 +18,58 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..wallet.models import CostMultiplier
+from .cost_multipliers import get_handler
+
 log = logging.getLogger(__name__)
 
 
-def resolve_cost(
+async def load_rules(
+    db: AsyncSession,
+    pipeline_type_id: int,
+) -> list[tuple[str, dict[str, Any]]]:
+    """Fetch all multiplier rules for a pipeline_type, ordered by id so
+    composition is deterministic (matters only for non-commutative
+    handlers added in the future)."""
+
+    result = await db.execute(
+        select(CostMultiplier.type, CostMultiplier.params)
+        .where(CostMultiplier.pipeline_type_id == pipeline_type_id)
+        .order_by(CostMultiplier.id)
+    )
+    return [(t, p) for t, p in result.all()]
+
+
+def apply_rules(
     base_cost: int,
-    rule: dict[str, Any] | None,
+    rules: list[tuple[str, dict[str, Any]]],
     pipeline_input: dict[str, Any],
 ) -> int:
-    if not rule:
-        return base_cost
+    """Walk every rule, multiply the percents into the running cost.
+    Unknown handler types are logged and skipped (rule treated as
+    identity) — fail open, never overcharge for a config typo."""
 
-    field = rule.get("input_field")
-    values = rule.get("values")
-    if not field or not isinstance(values, dict) or not values:
-        log.warning(f"cost_multipliers malformed; falling back to base: {rule!r}")
-        return base_cost
+    cost = base_cost
+    for rule_type, params in rules:
+        handler = get_handler(rule_type)
+        if handler is None:
+            log.warning(
+                f"unknown cost_multiplier type {rule_type!r}; treating as identity"
+            )
+            continue
+        pct = handler.resolve(params or {}, pipeline_input)
+        cost = max(0, cost * pct // 100)
+    return cost
 
-    raw_value = pipeline_input.get(field)
-    if raw_value is None:
-        return base_cost
 
-    pct = values.get(str(raw_value))
-    if pct is None:
-        return base_cost
-
-    try:
-        pct_int = int(pct)
-    except (TypeError, ValueError):
-        log.warning(f"cost_multipliers percent {pct!r} is not an int; using base")
-        return base_cost
-
-    return max(0, base_cost * pct_int // 100)
+async def resolve_cost(
+    db: AsyncSession,
+    pipeline_type_id: int,
+    base_cost: int,
+    pipeline_input: dict[str, Any],
+) -> int:
+    rules = await load_rules(db, pipeline_type_id)
+    return apply_rules(base_cost, rules, pipeline_input)

@@ -24,14 +24,31 @@ class PipelineType(Base, TimeStampMixin):
     visible_in_user_history = Column(
         Boolean, nullable=False, server_default="true", default=True
     )
-    # Optional pricing rule: {"input_field": <str>, "values": {<str>: <pct>}}.
-    # NULL → always charge base_cost. See pipelines.cost_resolution.
-    cost_multipliers = Column(JSON, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("name", name="uq_pipeline_types_name"),
         CheckConstraint("base_cost >= 0", name="ck_pipeline_types_base_cost_nonneg"),
     )
+
+
+class CostMultiplier(Base, TimeStampMixin):
+    """Per-pipeline pricing rule. Multiple rows per pipeline_type compose
+    multiplicatively. `type` selects a handler; `params` is the
+    handler-specific payload (validated by that handler's pydantic
+    model). See services/core/app/pipelines/cost_multipliers/.
+    """
+
+    __tablename__ = "pipeline_cost_multipliers"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pipeline_type_id = Column(
+        Integer,
+        ForeignKey("pipeline_types.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    type = Column(String, nullable=False)
+    params = Column(JSON, nullable=False)
 
 
 class TokenTransaction(Base):
