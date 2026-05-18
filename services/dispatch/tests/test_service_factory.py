@@ -2,12 +2,12 @@ import pytest
 
 from services.dispatch.app.pipelines.service import (
     create_service,
-    FluxService,
+    GenerativeEditingCustomService,
     GenerativeEditingService,
     SharpService,
 )
 from services.dispatch.app.pipelines.schemas import (
-    FluxPipelineInput,
+    GenerativeEditingCustomPipelineInput,
     GenerativeEditingPipelineInput,
     SharpPipelineInput,
 )
@@ -81,10 +81,10 @@ def test_create_service_sharp_invalid_input(mock_s3_client):
         )
 
 
-def test_create_service_flux(mock_s3_client):
+def test_create_service_generative_editing_custom(mock_s3_client):
     svc = create_service(
-        pipeline_id="flx",
-        pipeline_name="flux",
+        pipeline_id="gec",
+        pipeline_name="generative_editing_custom",
         pipeline_input={
             "image_bucket": "media",
             "image_key": "user/photo.jpg",
@@ -94,17 +94,17 @@ def test_create_service_flux(mock_s3_client):
         s3_client=mock_s3_client,
     )
 
-    assert isinstance(svc, FluxService)
-    assert svc.id == "flx"
-    assert isinstance(svc.pipeline_input, FluxPipelineInput)
+    assert isinstance(svc, GenerativeEditingCustomService)
+    assert svc.id == "gec"
+    assert isinstance(svc.pipeline_input, GenerativeEditingCustomPipelineInput)
     assert svc.pipeline_input.prompt == "cinematic portrait, golden hour"
     assert svc.pipeline_input.num_inference_steps == 8
 
 
-def test_create_service_flux_steps_optional(mock_s3_client):
+def test_create_service_generative_editing_custom_steps_optional(mock_s3_client):
     svc = create_service(
-        pipeline_id="flx",
-        pipeline_name="flux",
+        pipeline_id="gec",
+        pipeline_name="generative_editing_custom",
         pipeline_input={
             "image_bucket": "media",
             "image_key": "user/photo.jpg",
@@ -113,15 +113,15 @@ def test_create_service_flux_steps_optional(mock_s3_client):
         s3_client=mock_s3_client,
     )
 
-    assert isinstance(svc, FluxService)
+    assert isinstance(svc, GenerativeEditingCustomService)
     assert svc.pipeline_input.num_inference_steps is None
 
 
-def test_create_service_flux_invalid_input(mock_s3_client):
-    with pytest.raises(ValueError, match="Invalid input for flux"):
+def test_create_service_generative_editing_custom_invalid_input(mock_s3_client):
+    with pytest.raises(ValueError, match="Invalid input for generative_editing_custom"):
         create_service(
-            pipeline_id="flx",
-            pipeline_name="flux",
+            pipeline_id="gec",
+            pipeline_name="generative_editing_custom",
             pipeline_input={"image_bucket": "media"},  # missing image_key + prompt
             s3_client=mock_s3_client,
         )

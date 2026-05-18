@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { v4 as uuidv4 } from "uuid";
-import { Sparkles } from "lucide-react";
+import { ArrowLeft, ImagePlus, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -12,13 +12,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { DemoHeader } from "@/components/DemoHeader";
 import UploadDropzone from "@/components/UploadDropzone";
 import GenerationCard from "@/components/GenerationCard";
+import CostBadge from "@/components/CostBadge";
 import {
   pipelinesApi,
   ApiError,
-  type FluxResult,
+  type GenerativeEditingResult,
   type PipelineStatusItem,
 } from "@/api";
 import { uploadToS3, getFileExtension } from "@/lib/s3";
@@ -28,6 +28,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import OutOfTokensDialog from "@/components/OutOfTokensDialog";
 import { toast } from "sonner";
 
+const PIPELINE_NAME = "generative_editing_custom";
 const POLL_INTERVAL_MS = 1000;
 const POLL_TIMEOUT_MS = 240_000;
 
@@ -39,14 +40,28 @@ const QUALITY_STEPS: Record<Quality, number> = {
   high: 8,
 };
 
-const Flux = () => {
+// Multipliers mirror services/core/migrations/.../014_*.py — Fast/Std/High.
+// Shown to the user so the Quality dropdown is honest about the cost
+// tradeoff; the server re-resolves authoritatively at charge time.
+const QUALITY_MULTIPLIER_LABEL: Record<Quality, string> = {
+  fast: "×0.7",
+  standard: "×1",
+  high: "×1.5",
+};
+
+const GenerativeEditingCustom = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { track } = useAnalytics();
 
   const { user, loading: authLoading } = useAuth();
-  const { balance, getCost, refresh: refreshBalance } = useWallet();
-  const fluxCost = getCost("flux");
+  const {
+    balance,
+    getCost,
+    resolveCost,
+    refresh: refreshBalance,
+  } = useWallet();
+  const baseCost = getCost(PIPELINE_NAME);
 
   useEffect(() => {
     if (authLoading) return;
@@ -172,16 +187,20 @@ const Flux = () => {
     [refreshBalance],
   );
 
+  const finalCost = resolveCost(PIPELINE_NAME, {
+    num_inference_steps: QUALITY_STEPS[quality],
+  });
+
   const handleGenerate = useCallback(async () => {
     if (!uploadedRef) return;
-    if (fluxCost === undefined) return;
+    if (finalCost === undefined) return;
     const trimmedPrompt = prompt.trim();
     if (!trimmedPrompt) {
       toast.error("Please enter a prompt");
       return;
     }
 
-    if (balance !== null && balance < fluxCost) {
+    if (balance !== null && balance < finalCost) {
       setOutOfTokensDialogOpen(true);
       return;
     }
@@ -197,7 +216,7 @@ const Flux = () => {
       const newPipelineId = uuidv4();
 
       track({
-        name: "flux_generate_started",
+        name: "generative_custom_generate_started",
         params: {
           pipeline_id: newPipelineId,
           quality,
@@ -211,7 +230,7 @@ const Flux = () => {
           jobs: [
             {
               pipeline_id: newPipelineId,
-              pipeline_name: "flux",
+              pipeline_name: PIPELINE_NAME,
               input: {
                 image_bucket: uploadedRef.bucket,
                 image_key: uploadedRef.key,
@@ -267,7 +286,7 @@ const Flux = () => {
     uploadedRef,
     prompt,
     quality,
-    fluxCost,
+    finalCost,
     balance,
     refreshBalance,
     track,
@@ -286,7 +305,7 @@ const Flux = () => {
   };
 
   const resultUrl = (
-    pipelineStatus?.result as FluxResult | undefined
+    pipelineStatus?.result as GenerativeEditingResult | undefined
   )?.result_url;
 
   const canGenerate =
@@ -298,14 +317,28 @@ const Flux = () => {
 
   return (
     <main className="container mx-auto px-6 py-12 space-y-8 min-h-[calc(100vh-8rem)]">
-      <DemoHeader
-        title="Flux"
-        cost={fluxCost}
-        description="Direct access to FLUX.2 klein image-to-image editing on a serverless GPU. Drop in a photo, write any prompt — the same Modal app that powers Generative Editing, just without the preset gating."
-        tagline={
-          !photo ? "Upload a photo and describe the edit" : undefined
-        }
-      />
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => navigate("/generative-editing")}
+        className="gap-1"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Back to presets
+      </Button>
+
+      <header className="max-w-5xl mx-auto space-y-2">
+        <div className="flex items-center gap-3 flex-wrap">
+          <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
+            Your own prompt
+          </h1>
+          {baseCost !== undefined && <CostBadge cost={baseCost} />}
+        </div>
+        <p className="text-muted-foreground leading-relaxed max-w-3xl">
+          Skip the cinematic presets — drop in any photo and describe the edit
+          yourself. Same FLUX.2 klein backend, just with a free-form prompt.
+        </p>
+      </header>
 
       <section className="max-w-5xl mx-auto grid gap-8 lg:grid-cols-2 items-start">
         <div className="space-y-6">
@@ -344,9 +377,9 @@ const Flux = () => {
           )}
 
           <div className="space-y-2">
-            <Label htmlFor="flux-prompt">Prompt</Label>
+            <Label htmlFor="custom-prompt">Prompt</Label>
             <Textarea
-              id="flux-prompt"
+              id="custom-prompt"
               placeholder="e.g. cinematic portrait, golden hour, shallow depth of field"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
@@ -357,24 +390,32 @@ const Flux = () => {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="flux-quality">Quality</Label>
+            <Label htmlFor="custom-quality">Quality</Label>
             <Select
               value={quality}
               onValueChange={(v) => setQuality(v as Quality)}
               disabled={isProcessing || !!pipelineId}
             >
-              <SelectTrigger id="flux-quality">
+              <SelectTrigger id="custom-quality">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="fast">Fast · 2 steps</SelectItem>
-                <SelectItem value="standard">Standard · 4 steps</SelectItem>
-                <SelectItem value="high">High · 8 steps</SelectItem>
+                <SelectItem value="fast">
+                  Fast · 2 steps · {QUALITY_MULTIPLIER_LABEL.fast}
+                </SelectItem>
+                <SelectItem value="standard">
+                  Standard · 4 steps · {QUALITY_MULTIPLIER_LABEL.standard}
+                </SelectItem>
+                <SelectItem value="high">
+                  High · 8 steps · {QUALITY_MULTIPLIER_LABEL.high}
+                </SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">
-              Higher quality = more inference steps, longer wait.
-            </p>
+            {finalCost !== undefined && (
+              <p className="text-xs text-muted-foreground">
+                Final cost: <span className="font-medium text-foreground">{finalCost}</span> token{finalCost === 1 ? "" : "s"}
+              </p>
+            )}
           </div>
 
           {errorMessage && !pipelineId && (
@@ -385,20 +426,35 @@ const Flux = () => {
         </div>
 
         <div className="space-y-4">
-          <GenerationCard
-            imageUrl={previewUrl}
-            isProcessing={isProcessing}
-            generatedImage={resultUrl ?? undefined}
-            errorMessage={
-              pipelineStatus?.status === "FAILED"
-                ? (pipelineStatus.message ?? "Generation failed")
-                : undefined
-            }
-            templateName={null}
-            pipelineId={pipelineId}
-            estimatedFinishAt={estimatedFinishAt}
-            workersMissing={workersMissing}
-          />
+          {previewUrl ? (
+            <GenerationCard
+              imageUrl={previewUrl}
+              isProcessing={isProcessing}
+              generatedImage={resultUrl ?? undefined}
+              errorMessage={
+                pipelineStatus?.status === "FAILED"
+                  ? (pipelineStatus.message ?? "Generation failed")
+                  : undefined
+              }
+              templateName={null}
+              pipelineId={pipelineId}
+              estimatedFinishAt={estimatedFinishAt}
+              workersMissing={workersMissing}
+            />
+          ) : (
+            // No photo yet → show a placeholder tile that matches the
+            // generation card's aspect ratio so the layout doesn't jump
+            // when the upload lands. Avoids the broken-image icon a
+            // bare <img src=""/> would produce.
+            <div className="aspect-square rounded-xl border-2 border-dashed border-border bg-muted/10 flex flex-col items-center justify-center gap-3 text-center p-6">
+              <div className="rounded-full bg-muted p-4">
+                <ImagePlus className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <p className="text-sm text-muted-foreground max-w-[16rem]">
+                Your result appears here once you upload a photo and run a prompt.
+              </p>
+            </div>
+          )}
 
           {!isProcessing && !pipelineId && (
             <div className="flex justify-center animate-fade-in">
@@ -424,4 +480,4 @@ const Flux = () => {
   );
 };
 
-export default Flux;
+export default GenerativeEditingCustom;

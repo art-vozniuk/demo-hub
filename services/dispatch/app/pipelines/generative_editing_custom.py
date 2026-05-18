@@ -13,18 +13,18 @@ from typing import Any
 from services.common.s3.client import S3Client
 
 from .base import AsyncPipeline
-from .modal_client import invoke_flux
-from .schemas import FluxPipelineInput
+from .modal_client import invoke_generative_editing_custom
+from .schemas import GenerativeEditingCustomPipelineInput
 
 
 log = logging.getLogger(__name__)
 
 
-class FluxPipeline(AsyncPipeline):
+class GenerativeEditingCustomPipeline(AsyncPipeline):
     def __init__(
         self,
         s3: S3Client,
-        pipeline_input: FluxPipelineInput,
+        pipeline_input: GenerativeEditingCustomPipelineInput,
     ) -> None:
         # s3 is plumbed in by the service factory but unused — Modal owns
         # both the download and the upload.
@@ -40,7 +40,7 @@ class FluxPipeline(AsyncPipeline):
         if self.pipeline_input.num_inference_steps is not None:
             payload["num_inference_steps"] = self.pipeline_input.num_inference_steps
 
-        result = await invoke_flux(payload)
+        result = await invoke_generative_editing_custom(payload)
 
         result_url = result.get("result_url")
         if not result_url:
@@ -48,5 +48,7 @@ class FluxPipeline(AsyncPipeline):
                 f"Modal endpoint returned no result_url; keys: {list(result.keys())}"
             )
 
-        log.info(f"Dispatched flux complete; result at {result_url}")
+        log.info(
+            f"Dispatched generative_editing_custom complete; result at {result_url}"
+        )
         return {"result_url": result_url}

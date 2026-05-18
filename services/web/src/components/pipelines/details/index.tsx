@@ -1,6 +1,5 @@
 import type { UserPipelineItem } from "@/api";
 import GenerativeEditingDetails from "./GenerativeEditingDetails";
-import FluxDetails from "./FluxDetails";
 import FaceSwapDetails from "./FaceSwapDetails";
 import FaceRecognitionDetails from "./FaceRecognitionDetails";
 import SharpDetails from "./SharpDetails";
@@ -13,9 +12,10 @@ interface Props {
 const PipelineDetails = ({ pipeline }: Props) => {
   switch (pipeline.pipeline_name) {
     case "generative_editing":
+    case "generative_editing_custom":
+      // Same shape (prompt + source + result); the details view doesn't
+      // care whether the prompt came from a preset slug or free-form.
       return <GenerativeEditingDetails pipeline={pipeline} />;
-    case "flux":
-      return <FluxDetails pipeline={pipeline} />;
     case "face_swap":
       return <FaceSwapDetails pipeline={pipeline} />;
     case "face_recognition":
@@ -31,7 +31,7 @@ export default PipelineDetails;
 
 export const PIPELINE_DISPLAY_NAME: Record<string, string> = {
   generative_editing: "Generative Editing",
-  flux: "Flux",
+  generative_editing_custom: "Generative Editing (custom)",
   face_swap: "Face Swap",
   face_recognition: "Face Recognition",
   sharp: "SHARP",

@@ -6,6 +6,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    JSON,
     String,
     UniqueConstraint,
 )
@@ -23,6 +24,9 @@ class PipelineType(Base, TimeStampMixin):
     visible_in_user_history = Column(
         Boolean, nullable=False, server_default="true", default=True
     )
+    # Optional pricing rule: {"input_field": <str>, "values": {<str>: <pct>}}.
+    # NULL → always charge base_cost. See pipelines.cost_resolution.
+    cost_multipliers = Column(JSON, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("name", name="uq_pipeline_types_name"),

@@ -1,6 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 
-import { walletApi, type BalanceResponse, ApiError } from '@/api';
+import {
+  walletApi,
+  type BalanceResponse,
+  type CostMultiplierRule,
+  ApiError,
+} from '@/api';
 import { useAuth } from '@/contexts/AuthContext';
 
 interface WalletContextType {
@@ -9,6 +14,16 @@ interface WalletContextType {
   // pipeline_name -> base_cost, sourced from the DB via /me/balance.
   costs: Record<string, number> | null;
   getCost: (pipelineName: string) => number | undefined;
+  // Final cost preview given the input the user is about to send.
+  // Mirrors services/core/app/pipelines/cost_resolution.py — server
+  // remains authoritative at charge time.
+  resolveCost: (
+    pipelineName: string,
+    input?: Record<string, unknown>,
+  ) => number | undefined;
+  // pipeline_name -> rule, sourced from /me/balance. Only contains
+  // entries for pipelines whose cost varies with input.
+  costMultipliers: Record<string, CostMultiplierRule> | null;
   // One-time signup grant, sourced from core via /me/balance. Null until
   // the first balance fetch resolves.
   signupGrant: number | null;
@@ -21,6 +36,10 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
   const { loading: authLoading, user } = useAuth();
   const [balance, setBalance] = useState<number | null>(null);
   const [costs, setCosts] = useState<Record<string, number> | null>(null);
+  const [costMultipliers, setCostMultipliers] = useState<Record<
+    string,
+    CostMultiplierRule
+  > | null>(null);
   const [signupGrant, setSignupGrant] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   // Coalesce concurrent /me/balance calls so StrictMode + auth state
@@ -34,6 +53,7 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
         const resp: BalanceResponse = await walletApi.getBalance();
         setBalance(resp.tokens);
         setCosts(resp.pipeline_costs);
+        setCostMultipliers(resp.pipeline_cost_multipliers ?? {});
         setSignupGrant(resp.signup_grant);
       } catch (err) {
         if (!(err instanceof ApiError) || err.status !== 401) {
@@ -66,6 +86,21 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
     [costs],
   );
 
+  const resolveCost = useCallback(
+    (pipelineName: string, input?: Record<string, unknown>) => {
+      const base = costs?.[pipelineName];
+      if (base === undefined) return undefined;
+      const rule = costMultipliers?.[pipelineName];
+      if (!rule || !input) return base;
+      const raw = input[rule.input_field];
+      if (raw === undefined || raw === null) return base;
+      const pct = rule.values[String(raw)];
+      if (pct === undefined) return base;
+      return Math.max(0, Math.floor((base * pct) / 100));
+    },
+    [costs, costMultipliers],
+  );
+
   return (
     <WalletContext.Provider
       value={{
@@ -73,6 +108,8 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
         isLoading,
         costs,
         getCost,
+        resolveCost,
+        costMultipliers,
         signupGrant,
         refresh,
       }}

@@ -3,7 +3,11 @@ export { recastApi } from "./core/recast";
 export { splatsApi } from "./core/splats";
 export { pipelinesApi } from "./core/pipelines";
 export { generativeApi } from "./core/generative";
-export { walletApi, type BalanceResponse } from "./core/wallet";
+export {
+  walletApi,
+  type BalanceResponse,
+  type CostMultiplierRule,
+} from "./core/wallet";
 export type {
   RecastTemplateRead,
   SplatSceneRead,
@@ -20,7 +24,6 @@ export type {
   FaceRecognitionResult,
   FaceSwapResult,
   GenerativeEditingResult,
-  FluxResult,
   SharpResult,
   PipelineResult,
   PipelineStatus,

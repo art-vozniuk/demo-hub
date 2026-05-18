@@ -21,6 +21,7 @@ from .schemas import (
     UserPipelinesResponse,
 )
 from . import service
+from .cost_resolution import resolve_cost
 from .estimation import estimate_pipeline
 from .input_resolution import resolve_pipeline_input
 from .routing import (
@@ -78,12 +79,18 @@ async def _process_pipeline(
             detail="Pipeline pricing not configured",
         )
 
+    final_cost = resolve_cost(
+        base_cost=ptype.base_cost,
+        rule=ptype.cost_multipliers,
+        pipeline_input=pipeline.input,
+    )
+
     try:
         await wallet_service.charge(
             db,
             pipeline_id=pipeline_id,
             pipeline_type_id=ptype.id,
-            cost=ptype.base_cost,
+            cost=final_cost,
             user_id=user_uuid,
         )
     except wallet_service.InsufficientFunds:

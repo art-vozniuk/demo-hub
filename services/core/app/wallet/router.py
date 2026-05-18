@@ -33,13 +33,24 @@ async def get_balance(
     caller's balance when authenticated (and lazily issues the one-time
     signup grant), or 0 for anonymous callers."""
 
-    types_result = await db.execute(select(PipelineType.name, PipelineType.base_cost))
-    pipeline_costs = {name: cost for name, cost in types_result.all()}
+    types_result = await db.execute(
+        select(
+            PipelineType.name,
+            PipelineType.base_cost,
+            PipelineType.cost_multipliers,
+        )
+    )
+    rows = types_result.all()
+    pipeline_costs = {name: cost for name, cost, _ in rows}
+    pipeline_cost_multipliers = {
+        name: rule for name, _, rule in rows if rule is not None
+    }
 
     if user is None:
         return BalanceResponse(
             tokens=0,
             pipeline_costs=pipeline_costs,
+            pipeline_cost_multipliers=pipeline_cost_multipliers,
             signup_grant=service.SIGNUP_GRANT,
         )
 
@@ -49,5 +60,6 @@ async def get_balance(
     return BalanceResponse(
         tokens=balance,
         pipeline_costs=pipeline_costs,
+        pipeline_cost_multipliers=pipeline_cost_multipliers,
         signup_grant=service.SIGNUP_GRANT,
     )
