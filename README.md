@@ -6,6 +6,15 @@ Personal demo hub for showcasing side projects.
 
 **[artemv.tech](https://artemv.tech)**
 
+### SHARP
+
+Turn a single photo into an orbitable 3D Gaussian-Splatting scene in the
+browser. Wraps Apple's [ml-sharp](https://github.com/apple/ml-sharp)
+feed-forward predictor on a serverless Modal GPU; the platform side is
+an async dispatch worker draining a dedicated RabbitMQ queue.
+
+<img width="720" alt="SHARP demo: photo → orbitable 3D scene" src="docs/sharp-demo.gif" />
+
 ### Gaussian Spatting
 
 Gaussian Splatting renderer running entirely in the browser. Custom C++
