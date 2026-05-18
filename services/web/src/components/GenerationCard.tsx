@@ -233,7 +233,10 @@ const GenerationCard = ({
       </div>
 
       <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
-        <DialogContent className="max-w-[98vw] max-h-[98vh] w-fit h-fit p-0 bg-transparent border-none">
+        <DialogContent
+          className="max-w-[98vw] max-h-[98vh] w-fit h-fit p-0 bg-transparent border-none"
+          hideClose
+        >
           <div 
             className="relative cursor-pointer flex items-center justify-center"
             onClick={handleModalImageClick}

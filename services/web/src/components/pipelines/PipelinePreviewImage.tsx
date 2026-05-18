@@ -71,7 +71,10 @@ const PipelinePreviewImage = ({
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-[98vw] max-h-[98vh] w-fit h-fit p-0 bg-transparent border-none">
+        <DialogContent
+          className="max-w-[98vw] max-h-[98vh] w-fit h-fit p-0 bg-transparent border-none"
+          hideClose
+        >
           <div
             className="relative cursor-pointer flex items-center justify-center"
             onClick={() => setOpen(false)}
