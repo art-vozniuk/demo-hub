@@ -72,4 +72,10 @@ async def resolve_cost(
     pipeline_input: dict[str, Any],
 ) -> int:
     rules = await load_rules(db, pipeline_type_id)
-    return apply_rules(base_cost, rules, pipeline_input)
+    final = apply_rules(base_cost, rules, pipeline_input)
+    log.info(
+        f"resolve_cost: pipeline_type_id={pipeline_type_id} "
+        f"base={base_cost} rules={len(rules)} input={pipeline_input!r} "
+        f"final={final}"
+    )
+    return final
