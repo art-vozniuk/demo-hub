@@ -12,6 +12,7 @@ import Footer from "./components/Footer";
 import Home from "./pages/Home";
 import FaceFusion from "./pages/FaceFusion";
 import FaceFusionGenerate from "./pages/FaceFusionGenerate";
+import Flux from "./pages/Flux";
 import GenerativeEditing from "./pages/GenerativeEditing";
 import GenerativeEditingGenerate from "./pages/GenerativeEditingGenerate";
 import Renderer from "./pages/Renderer";
@@ -43,6 +44,7 @@ const App = () => (
                       <Route path="/face-fusion/generate" element={<FaceFusionGenerate />} />
                       <Route path="/generative-editing" element={<GenerativeEditing />} />
                       <Route path="/generative-editing/generate" element={<GenerativeEditingGenerate />} />
+                      <Route path="/flux" element={<Flux />} />
                       <Route path="/renderer" element={<Renderer />} />
                       <Route path="/sharp" element={<Sharp />} />
                       <Route path="/sharp/view" element={<SharpViewer />} />

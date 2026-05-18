@@ -125,6 +125,20 @@ async def invoke_generative_editing(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+async def invoke_flux(payload: dict[str, Any]) -> dict[str, Any]:
+    # Same Modal app as generative_editing — the only difference at the
+    # boundary is that the prompt arrives free-form from the user instead
+    # of being resolved from a preset on core.
+    return await _submit_and_poll(
+        label="flux",
+        submit_url=config.MODAL_GENERATIVE_SUBMIT_URL,
+        poll_url=config.MODAL_GENERATIVE_POLL_URL,
+        submit_url_label="MODAL_GENERATIVE_SUBMIT_URL",
+        poll_url_label="MODAL_GENERATIVE_POLL_URL",
+        payload=payload,
+    )
+
+
 async def invoke_sharp(payload: dict[str, Any]) -> dict[str, Any]:
     return await _submit_and_poll(
         label="sharp",

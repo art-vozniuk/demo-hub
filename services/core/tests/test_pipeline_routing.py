@@ -25,6 +25,10 @@ def test_sharp_routes_to_dispatch_queue():
     assert get_routing_key("sharp") == rabbitmq_config.routing_dispatch
 
 
+def test_flux_routes_to_dispatch_queue():
+    assert get_routing_key("flux") == rabbitmq_config.routing_dispatch
+
+
 def test_unknown_pipeline_raises():
     with pytest.raises(ValueError):
         get_routing_key("nope")
@@ -36,6 +40,7 @@ def test_known_pipeline_names_contains_all():
     assert "face_swap" in names
     assert "generative_editing" in names
     assert "sharp" in names
+    assert "flux" in names
 
 
 def test_compute_pool_is_sequential():
@@ -46,6 +51,7 @@ def test_compute_pool_is_sequential():
 def test_dispatch_pool_is_parallel():
     assert is_parallel_pipeline("generative_editing") is True
     assert is_parallel_pipeline("sharp") is True
+    assert is_parallel_pipeline("flux") is True
 
 
 def test_same_pool_names_for_compute():
@@ -53,5 +59,7 @@ def test_same_pool_names_for_compute():
 
 
 def test_same_pool_names_for_dispatch():
-    assert names_in_same_pool("generative_editing") == {"generative_editing", "sharp"}
-    assert names_in_same_pool("sharp") == {"generative_editing", "sharp"}
+    expected = {"generative_editing", "sharp", "flux"}
+    assert names_in_same_pool("generative_editing") == expected
+    assert names_in_same_pool("sharp") == expected
+    assert names_in_same_pool("flux") == expected

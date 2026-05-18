@@ -26,3 +26,16 @@ class SharpPipelineInput(PipelineInput):
 
     image_bucket: str
     image_key: str
+
+
+class FluxPipelineInput(PipelineInput):
+    """User-supplied photo + free-form prompt. Same Modal app as
+    generative_editing, but bypasses preset resolution — the user types
+    the prompt directly. `num_inference_steps` is exposed as a quality
+    knob; None falls back to the Modal default (4).
+    """
+
+    image_bucket: str
+    image_key: str
+    prompt: str
+    num_inference_steps: int | None = None

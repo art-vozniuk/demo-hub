@@ -24,6 +24,7 @@ type NavItem = { to: string; label: string; end?: boolean };
 
 const ALL_LINKS: NavItem[] = [
   { to: "/generative-editing", label: "Generative Editing" },
+  { to: "/flux", label: "Flux" },
   { to: "/sharp", label: "SHARP" },
   { to: "/renderer", label: "Gaussian Splatting" },
   { to: "/face-fusion", label: "Face Swap" },
@@ -125,6 +126,8 @@ const Navbar = () => {
       track({ name: 'nav_facefusion_clicked', params: {} });
     } else if (to === "/generative-editing") {
       track({ name: 'nav_generative_clicked', params: {} });
+    } else if (to === "/flux") {
+      track({ name: 'nav_flux_clicked', params: {} });
     } else if (to === "/renderer") {
       track({ name: 'nav_renderer_clicked', params: {} });
     } else if (to === "/sharp") {

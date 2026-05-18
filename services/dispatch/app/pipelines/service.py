@@ -15,8 +15,10 @@ from pydantic_core._pydantic_core import ValidationError
 from services.common.s3.client import S3Client
 
 from .base import AsyncPipeline
+from .flux import FluxPipeline
 from .generative_editing import GenerativeEditingPipeline
 from .schemas import (
+    FluxPipelineInput,
     GenerativeEditingPipelineInput,
     PipelineInput,
     SharpPipelineInput,
@@ -73,6 +75,16 @@ class SharpService(Service):
         )
 
 
+class FluxService(Service):
+    async def prepare_pipeline(self) -> AsyncPipeline:
+        if not isinstance(self.pipeline_input, FluxPipelineInput):
+            raise ValueError("Invalid pipeline input for FluxService")
+        return FluxPipeline(
+            s3=self.s3,
+            pipeline_input=self.pipeline_input,
+        )
+
+
 class PipelineType:
     def __init__(
         self,
@@ -91,6 +103,12 @@ pipeline_templates: dict[str, PipelineType] = {
     "generative_editing": PipelineType(
         service_type=GenerativeEditingService,
         input_type=GenerativeEditingPipelineInput,
+        estimated_time_ms=30_000,
+    ),
+    "flux": PipelineType(
+        service_type=FluxService,
+        input_type=FluxPipelineInput,
+        # Same Modal app as generative_editing; mirror its initial ETA.
         estimated_time_ms=30_000,
     ),
     "sharp": PipelineType(
