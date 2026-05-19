@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAnalytics } from "@/hooks/useAnalytics";
@@ -12,6 +12,15 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { cn } from "@/lib/utils";
 import { pipelinesApi, type UserPipelineItem } from "@/api";
 import PipelineStatusBadge from "@/components/pipelines/PipelineStatusBadge";
@@ -21,6 +30,20 @@ import PipelineDetails, {
 
 const PAGE_SIZE = 50;
 const POLL_INTERVAL_MS = 3000;
+
+const buildPageList = (current: number, total: number): (number | "ellipsis")[] => {
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i + 1);
+  }
+  const pages = new Set<number>([1, total, current, current - 1, current + 1]);
+  const sorted = [...pages].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  const result: (number | "ellipsis")[] = [];
+  for (let i = 0; i < sorted.length; i += 1) {
+    if (i > 0 && sorted[i] - sorted[i - 1] > 1) result.push("ellipsis");
+    result.push(sorted[i]);
+  }
+  return result;
+};
 
 const formatRelativeTime = (iso: string) => {
   const d = new Date(iso);
@@ -46,6 +69,11 @@ const MyPipelines = () => {
   const { user, loading: authLoading } = useAuth();
   const { track } = useAnalytics();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const pageParam = Number.parseInt(searchParams.get("page") ?? "1", 10);
+  const page = Number.isFinite(pageParam) && pageParam >= 1 ? pageParam : 1;
+  const offset = (page - 1) * PAGE_SIZE;
 
   useEffect(() => {
     if (authLoading) return;
@@ -61,16 +89,42 @@ const MyPipelines = () => {
     if (user) track({ name: "my_pipelines_viewed", params: {} });
   }, [user, track]);
 
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ["my-pipelines", user?.id],
+  const { data, isLoading, isError, isFetching } = useQuery({
+    queryKey: ["my-pipelines", user?.id, page],
     enabled: !!user,
-    queryFn: () => pipelinesApi.getMine(PAGE_SIZE, 0),
+    queryFn: () => pipelinesApi.getMine(PAGE_SIZE, offset),
     refetchInterval: (query) => {
       const items = query.state.data?.pipelines ?? [];
       return hasInFlight(items) ? POLL_INTERVAL_MS : false;
     },
     refetchOnWindowFocus: true,
+    placeholderData: keepPreviousData,
   });
+
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  useEffect(() => {
+    if (data && page > totalPages) {
+      const next = new URLSearchParams(searchParams);
+      if (totalPages <= 1) next.delete("page");
+      else next.set("page", String(totalPages));
+      setSearchParams(next, { replace: true });
+    }
+  }, [data, page, totalPages, searchParams, setSearchParams]);
+
+  const goToPage = (target: number) => {
+    const clamped = Math.min(Math.max(1, target), totalPages);
+    if (clamped === page) return;
+    const next = new URLSearchParams(searchParams);
+    if (clamped === 1) next.delete("page");
+    else next.set("page", String(clamped));
+    setSearchParams(next);
+    setExpanded({});
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
 
   const pipelines = useMemo(() => data?.pipelines ?? [], [data?.pipelines]);
   const inFlightCount = useMemo(
@@ -116,7 +170,12 @@ const MyPipelines = () => {
           You haven't run any pipelines yet.
         </div>
       ) : (
-        <div className="rounded-md border border-border overflow-hidden">
+        <div
+          className={cn(
+            "rounded-md border border-border overflow-hidden transition-opacity",
+            isFetching && "opacity-70",
+          )}
+        >
           <Table>
             <TableHeader>
               <TableRow>
@@ -172,10 +231,64 @@ const MyPipelines = () => {
         </div>
       )}
 
-      {data && data.total > pipelines.length && (
-        <p className="mt-3 text-xs text-muted-foreground">
-          Showing {pipelines.length} of {data.total}.
-        </p>
+      {data && total > 0 && (
+        <div className="mt-4 flex flex-col items-center gap-3 sm:flex-row sm:justify-between">
+          <p className="text-xs text-muted-foreground">
+            Showing {offset + 1}–{offset + pipelines.length} of {total}.
+          </p>
+          {totalPages > 1 && (
+            <Pagination className="mx-0 w-auto justify-end">
+              <PaginationContent>
+                <PaginationItem>
+                  <PaginationPrevious
+                    href="#"
+                    aria-disabled={page <= 1}
+                    className={cn(
+                      page <= 1 && "pointer-events-none opacity-50",
+                    )}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      goToPage(page - 1);
+                    }}
+                  />
+                </PaginationItem>
+                {buildPageList(page, totalPages).map((entry, idx) =>
+                  entry === "ellipsis" ? (
+                    <PaginationItem key={`ellipsis-${idx}`}>
+                      <PaginationEllipsis />
+                    </PaginationItem>
+                  ) : (
+                    <PaginationItem key={entry}>
+                      <PaginationLink
+                        href="#"
+                        isActive={entry === page}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          goToPage(entry);
+                        }}
+                      >
+                        {entry}
+                      </PaginationLink>
+                    </PaginationItem>
+                  ),
+                )}
+                <PaginationItem>
+                  <PaginationNext
+                    href="#"
+                    aria-disabled={page >= totalPages}
+                    className={cn(
+                      page >= totalPages && "pointer-events-none opacity-50",
+                    )}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      goToPage(page + 1);
+                    }}
+                  />
+                </PaginationItem>
+              </PaginationContent>
+            </Pagination>
+          )}
+        </div>
       )}
     </div>
   );
