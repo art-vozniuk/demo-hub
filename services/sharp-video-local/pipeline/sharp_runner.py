@@ -32,15 +32,9 @@ INTERNAL_SHAPE = (1536, 1536)
 
 
 def _patch_sharp_for_mps() -> None:
-    """Force tensor args through .contiguous() before each upsample block.
-
-    Why: ml-sharp's SPN encoder feeds the third output of `torch.split(...)`
-    (a non-contiguous view) straight into a 1×1 Conv2d. MPS's conv kernel
-    internally calls `.view()` and crashes with "view size is not compatible
-    with input tensor's size and stride". Wrapping `checkpoint_wrapper` to
-    pre-contiguous tensor args is targeted (every upsample call already goes
-    through this helper) and avoids touching ml-sharp's site-packages.
-    """
+    """Force tensor args through .contiguous() before each upsample block —
+    SPN encoder feeds non-contiguous torch.split views into conv2d, which
+    MPS rejects with 'view size is not compatible with stride'."""
     from sharp.utils import training as _t
 
     if getattr(_t, "_meme_fusion_mps_patched", False):
@@ -186,10 +180,7 @@ class SharpRunner:
             torch.mps.synchronize()
         fwd_s = time.perf_counter() - t_fwd
 
-        # MPS memory accounting (only valid on MPS; reports allocator state
-        # AFTER the forward — peak during forward will be higher, but this
-        # plus per-frame throughput is enough to judge whether batch size
-        # leaves headroom or is starving the GPU).
+        # Post-forward MPS pool snapshot (peak during forward is higher).
         mem_msg = ""
         if self.device.type == "mps":
             curr_gb = torch.mps.current_allocated_memory() / (1024 ** 3)
@@ -214,22 +205,18 @@ class SharpRunner:
                     INTERNAL_SHAPE,
                 )
             )
+
+        # MPS pool creeps to ~28GB on M2 Max otherwise → swap thrash.
+        del gaussians_batched, batch, disparity_factor
+        if self.device.type == "mps":
+            torch.mps.empty_cache()
+
         return results
 
 
 def _slice_gaussians_batch(g, i: int):
-    """Pick the i-th item from a batched Gaussians3D.
-
-    ml-sharp's Gaussians3D stacks every tensor along dim 0 with the
-    batch index — so a 1-element slice (kept as a singleton, not
-    indexed scalar) keeps the unproject_gaussians flatten(0,1) math
-    happy downstream.
-    """
-
-    # ml-sharp's Gaussians3D is a NamedTuple. Walk _fields; .contiguous()
-    # the slice so downstream unproject_gaussians (which does flatten(0,1)
-    # + view) doesn't trip on a non-contiguous tensor on MPS — same
-    # stride bug we patch around in checkpoint_wrapper.
+    """Slice 1-element from a batched Gaussians3D NamedTuple; .contiguous()
+    sidesteps the same MPS stride bug patched in checkpoint_wrapper."""
     cls = type(g)
     fields = list(getattr(g, "_fields", ()))
     kwargs = {}
