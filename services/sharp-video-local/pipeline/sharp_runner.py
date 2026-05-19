@@ -31,6 +31,39 @@ CHECKPOINT_URL = "https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh.pt
 INTERNAL_SHAPE = (1536, 1536)
 
 
+def _patch_sharp_for_mps() -> None:
+    """Force tensor args through .contiguous() before each upsample block.
+
+    Why: ml-sharp's SPN encoder feeds the third output of `torch.split(...)`
+    (a non-contiguous view) straight into a 1×1 Conv2d. MPS's conv kernel
+    internally calls `.view()` and crashes with "view size is not compatible
+    with input tensor's size and stride". Wrapping `checkpoint_wrapper` to
+    pre-contiguous tensor args is targeted (every upsample call already goes
+    through this helper) and avoids touching ml-sharp's site-packages.
+    """
+    from sharp.utils import training as _t
+
+    if getattr(_t, "_meme_fusion_mps_patched", False):
+        return
+
+    _orig = _t.checkpoint_wrapper
+
+    def _patched(self, fn, *args):
+        fixed = tuple(
+            a.contiguous() if isinstance(a, torch.Tensor) and not a.is_contiguous() else a
+            for a in args
+        )
+        return _orig(self, fn, *fixed)
+
+    _t.checkpoint_wrapper = _patched
+    _t._meme_fusion_mps_patched = True
+
+    # Same alias the encoder imported `from sharp.utils.training import checkpoint_wrapper`,
+    # which captures the original function reference. Override that too.
+    import sharp.models.encoders.spn_encoder as _spn
+    _spn.checkpoint_wrapper = _patched
+
+
 def pick_device(requested: str) -> torch.device:
     """Resolve 'auto' / 'mps' / 'cuda' / 'cpu' against what's actually available."""
 
@@ -86,6 +119,9 @@ class SharpRunner:
 
     def __init__(self, device: torch.device):
         from sharp.models import PredictorParams, create_predictor
+
+        if device.type == "mps":
+            _patch_sharp_for_mps()
 
         ckpt_path = _ensure_checkpoint()
         log.info("loading ml-sharp predictor (device=%s)", device)
@@ -143,7 +179,26 @@ class SharpRunner:
         disparity_factor = torch.tensor(disparities).float().to(self.device)
 
         # The batched forward is the win — predictor() is the slow op.
+        t_fwd = time.perf_counter()
         gaussians_batched = self.predictor(batch, disparity_factor)
+        # MPS dispatches are async; sync so the timing reflects real GPU work.
+        if self.device.type == "mps":
+            torch.mps.synchronize()
+        fwd_s = time.perf_counter() - t_fwd
+
+        # MPS memory accounting (only valid on MPS; reports allocator state
+        # AFTER the forward — peak during forward will be higher, but this
+        # plus per-frame throughput is enough to judge whether batch size
+        # leaves headroom or is starving the GPU).
+        mem_msg = ""
+        if self.device.type == "mps":
+            curr_gb = torch.mps.current_allocated_memory() / (1024 ** 3)
+            drv_gb = torch.mps.driver_allocated_memory() / (1024 ** 3)
+            mem_msg = f", mps_alloc={curr_gb:.2f}GB, mps_driver={drv_gb:.2f}GB"
+        log.info(
+            "forward: batch=%d fwd=%.2fs (%.2fs/frame)%s",
+            len(image_paths), fwd_s, fwd_s / max(1, len(image_paths)), mem_msg,
+        )
 
         # ml-sharp's unproject_gaussians takes a single image's intrinsics
         # + a single Gaussians3D batch element. Loop in Python — cheap
@@ -171,15 +226,17 @@ def _slice_gaussians_batch(g, i: int):
     happy downstream.
     """
 
-    # Clone the dataclass / attrs object preserving its type. ml-sharp
-    # exposes Gaussians3D as a frozen-ish container of named tensors;
-    # easiest reliable construction is to walk the field names.
+    # ml-sharp's Gaussians3D is a NamedTuple. Walk _fields; .contiguous()
+    # the slice so downstream unproject_gaussians (which does flatten(0,1)
+    # + view) doesn't trip on a non-contiguous tensor on MPS — same
+    # stride bug we patch around in checkpoint_wrapper.
     cls = type(g)
+    fields = list(getattr(g, "_fields", ()))
     kwargs = {}
-    for field in g.__dataclass_fields__ if hasattr(g, "__dataclass_fields__") else vars(g):
+    for field in fields:
         val = getattr(g, field)
         if isinstance(val, torch.Tensor):
-            kwargs[field] = val[i : i + 1]
+            kwargs[field] = val[i : i + 1].contiguous()
         else:
             kwargs[field] = val
     return cls(**kwargs)

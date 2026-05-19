@@ -85,7 +85,10 @@ def run_pipeline(video: Path, output: Path, config: PipelineConfig) -> Path:
         "pad": config.output_pad,
         "source_video": video.name,
     }
-    (output / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    # Write manifest alongside the .splat files — the renderer scene takes
+    # --player_dir pointing at the splats folder and expects to find
+    # manifest.json there. Self-contained dir = trivially portable / shareable.
+    (splats_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
     if not config.keep_frames and frames_dir.exists():
         shutil.rmtree(frames_dir, ignore_errors=True)
