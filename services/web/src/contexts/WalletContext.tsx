@@ -7,6 +7,8 @@ interface WalletContextType {
   balance: number | null;
   isLoading: boolean;
   // pipeline_name -> base_cost, sourced from the DB via /me/balance.
+  // For variable-priced pipelines, use pipelinesApi.previewCost() to get
+  // the final cost for a given input.
   costs: Record<string, number> | null;
   getCost: (pipelineName: string) => number | undefined;
   // One-time signup grant, sourced from core via /me/balance. Null until

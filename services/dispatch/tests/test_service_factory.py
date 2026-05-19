@@ -2,10 +2,12 @@ import pytest
 
 from services.dispatch.app.pipelines.service import (
     create_service,
+    GenerativeEditingCustomService,
     GenerativeEditingService,
     SharpService,
 )
 from services.dispatch.app.pipelines.schemas import (
+    GenerativeEditingCustomPipelineInput,
     GenerativeEditingPipelineInput,
     SharpPipelineInput,
 )
@@ -75,5 +77,51 @@ def test_create_service_sharp_invalid_input(mock_s3_client):
             pipeline_id="xyz",
             pipeline_name="sharp",
             pipeline_input={"image_bucket": "media"},  # missing image_key
+            s3_client=mock_s3_client,
+        )
+
+
+def test_create_service_generative_editing_custom(mock_s3_client):
+    svc = create_service(
+        pipeline_id="gec",
+        pipeline_name="generative_editing_custom",
+        pipeline_input={
+            "image_bucket": "media",
+            "image_key": "user/photo.jpg",
+            "prompt": "cinematic portrait, golden hour",
+            "num_inference_steps": 8,
+        },
+        s3_client=mock_s3_client,
+    )
+
+    assert isinstance(svc, GenerativeEditingCustomService)
+    assert svc.id == "gec"
+    assert isinstance(svc.pipeline_input, GenerativeEditingCustomPipelineInput)
+    assert svc.pipeline_input.prompt == "cinematic portrait, golden hour"
+    assert svc.pipeline_input.num_inference_steps == 8
+
+
+def test_create_service_generative_editing_custom_steps_optional(mock_s3_client):
+    svc = create_service(
+        pipeline_id="gec",
+        pipeline_name="generative_editing_custom",
+        pipeline_input={
+            "image_bucket": "media",
+            "image_key": "user/photo.jpg",
+            "prompt": "ok",
+        },
+        s3_client=mock_s3_client,
+    )
+
+    assert isinstance(svc, GenerativeEditingCustomService)
+    assert svc.pipeline_input.num_inference_steps is None
+
+
+def test_create_service_generative_editing_custom_invalid_input(mock_s3_client):
+    with pytest.raises(ValueError, match="Invalid input for generative_editing_custom"):
+        create_service(
+            pipeline_id="gec",
+            pipeline_name="generative_editing_custom",
+            pipeline_input={"image_bucket": "media"},  # missing image_key + prompt
             s3_client=mock_s3_client,
         )

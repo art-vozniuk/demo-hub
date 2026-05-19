@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { DemoHeader } from "@/components/DemoHeader";
+import CustomPresetCard from "@/components/CustomPresetCard";
 import PresetCard from "@/components/PresetCard";
 import { useWallet } from "@/contexts/WalletContext";
 import { generativeApi, type GenerativePresetRead } from "@/api";
@@ -42,6 +43,14 @@ const GenerativeEditing = () => {
     navigate(`/generative-editing/generate?preset=${preset.slug}`);
   };
 
+  const handleCustom = () => {
+    track({
+      name: "generative_preset_opened",
+      params: { preset_slug: "__custom__" },
+    });
+    navigate("/generative-editing/custom");
+  };
+
   return (
     <main className="container mx-auto px-6 py-16 space-y-12 min-h-[calc(100vh-8rem)]">
       <DemoHeader
@@ -64,12 +73,9 @@ const GenerativeEditing = () => {
               />
             ))}
           </div>
-        ) : presets.length === 0 && !error ? (
-          <p className="text-center text-muted-foreground">
-            No presets available
-          </p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <CustomPresetCard onSelect={handleCustom} />
             {presets.map((preset) => (
               <PresetCard
                 key={preset.id}

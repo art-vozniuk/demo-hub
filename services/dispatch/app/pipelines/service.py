@@ -16,7 +16,9 @@ from services.common.s3.client import S3Client
 
 from .base import AsyncPipeline
 from .generative_editing import GenerativeEditingPipeline
+from .generative_editing_custom import GenerativeEditingCustomPipeline
 from .schemas import (
+    GenerativeEditingCustomPipelineInput,
     GenerativeEditingPipelineInput,
     PipelineInput,
     SharpPipelineInput,
@@ -73,6 +75,18 @@ class SharpService(Service):
         )
 
 
+class GenerativeEditingCustomService(Service):
+    async def prepare_pipeline(self) -> AsyncPipeline:
+        if not isinstance(self.pipeline_input, GenerativeEditingCustomPipelineInput):
+            raise ValueError(
+                "Invalid pipeline input for GenerativeEditingCustomService"
+            )
+        return GenerativeEditingCustomPipeline(
+            s3=self.s3,
+            pipeline_input=self.pipeline_input,
+        )
+
+
 class PipelineType:
     def __init__(
         self,
@@ -91,6 +105,12 @@ pipeline_templates: dict[str, PipelineType] = {
     "generative_editing": PipelineType(
         service_type=GenerativeEditingService,
         input_type=GenerativeEditingPipelineInput,
+        estimated_time_ms=30_000,
+    ),
+    "generative_editing_custom": PipelineType(
+        service_type=GenerativeEditingCustomService,
+        input_type=GenerativeEditingCustomPipelineInput,
+        # Same Modal app as generative_editing; mirror its initial ETA.
         estimated_time_ms=30_000,
     ),
     "sharp": PipelineType(

@@ -90,6 +90,17 @@ export interface UserPipelinesResponse {
   offset: number;
 }
 
+export interface CostPreviewRequest {
+  pipeline_name: string;
+  input: Record<string, unknown>;
+}
+
+export interface CostPreviewResponse {
+  pipeline_name: string;
+  base_cost: number;
+  cost: number;
+}
+
 export const pipelinesApi = {
   queuePipelines: async (
     request: QueuePipelinesRequest,
@@ -120,6 +131,15 @@ export const pipelinesApi = {
   ): Promise<UserPipelinesResponse> => {
     return apiClient.get<UserPipelinesResponse>(
       `/pipelines/mine?limit=${limit}&offset=${offset}`,
+    );
+  },
+
+  previewCost: async (
+    request: CostPreviewRequest,
+  ): Promise<CostPreviewResponse> => {
+    return apiClient.post<CostPreviewResponse>(
+      "/pipelines/cost-preview",
+      request,
     );
   },
 };
