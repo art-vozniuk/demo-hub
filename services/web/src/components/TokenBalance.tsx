@@ -52,15 +52,17 @@ const TokenBalance = () => {
       >
         <p className="mb-2 font-medium">Your tokens</p>
         <p className="text-muted-foreground">
-          Generations on this site consume tokens to limit GPU abuse.
+          This is a personal projects site — everything here is completely
+          free. Tokens exist only to prevent GPU abuse on generations.
         </p>
         {!isSignedIn && signupGrant !== null ? (
           <p className="text-muted-foreground mt-2">
+            Please{" "}
             <Link
               to="/auth"
               className="text-primary hover:underline font-medium"
             >
-              Sign in
+              sign in
             </Link>{" "}
             to get {signupGrant} tokens.
           </p>
