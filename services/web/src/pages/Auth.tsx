@@ -55,10 +55,11 @@ const Auth = () => {
         <div className="space-y-4">
           <h1 className="text-4xl font-bold">Sign in</h1>
           <p className="text-base text-muted-foreground leading-relaxed">
-            To prevent abuse, generations are gated by tokens.
+            This is a personal projects site — everything here is completely
+            free. Tokens exist only to prevent GPU abuse on generations.
             {signupGrant !== null
-              ? ` Sign in with Google to add ${signupGrant} tokens to your balance and keep generating.`
-              : ' Sign in with Google to get tokens and start generating.'}
+              ? ` Please sign in with Google to add ${signupGrant} tokens to your balance and start generating.`
+              : ' Please sign in with Google to get tokens and start generating.'}
           </p>
         </div>
 
