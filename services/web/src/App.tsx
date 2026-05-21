@@ -20,6 +20,7 @@ import Sharp from "./pages/Sharp";
 import SharpViewer from "./pages/SharpViewer";
 import Auth from "./pages/Auth";
 import MyPipelines from "./pages/MyPipelines";
+import PipelineShare from "./pages/PipelineShare";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -49,6 +50,7 @@ const App = () => (
                       <Route path="/sharp" element={<Sharp />} />
                       <Route path="/sharp/view" element={<SharpViewer />} />
                       <Route path="/me/pipelines" element={<MyPipelines />} />
+                      <Route path="/p/:pipelineId" element={<PipelineShare />} />
                       <Route path="/auth" element={<Auth />} />
                       <Route path="*" element={<NotFound />} />
                     </Routes>

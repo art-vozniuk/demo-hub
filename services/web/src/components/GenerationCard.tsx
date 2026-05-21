@@ -6,6 +6,7 @@ import {
   DialogContent,
 } from "@/components/ui/dialog";
 import {toast} from "sonner";
+import SharePipelineButton from "@/components/SharePipelineButton";
 
 interface GenerationCardProps {
   imageUrl: string;
@@ -194,7 +195,17 @@ const GenerationCard = ({
             )}
 
             {generatedImage && blurAmount === 0 && (
-              <div className="absolute top-2 right-2" onClick={(e) => e.stopPropagation()}>
+              <div
+                className="absolute top-2 right-2 flex items-center gap-1.5"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {pipelineId && (
+                  <SharePipelineButton
+                    pipelineId={pipelineId}
+                    pipelineDisplayName={templateName ?? undefined}
+                    variant="icon"
+                  />
+                )}
                 <Button
                   onClick={handleDownload}
                   size="sm"
@@ -218,7 +229,14 @@ const GenerationCard = ({
         </div>
         
         {pipelineId && (
-          <div className="flex justify-end items-center gap-2">
+          <div className="flex justify-end items-center gap-1">
+            {generatedImage && blurAmount === 0 && (
+              <SharePipelineButton
+                pipelineId={pipelineId}
+                pipelineDisplayName={templateName ?? undefined}
+                variant="compact"
+              />
+            )}
             <Button
               onClick={handleCopyPipelineId}
               size="sm"

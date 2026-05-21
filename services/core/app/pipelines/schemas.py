@@ -70,6 +70,20 @@ class UserPipelinesResponse(BaseModel):
     offset: int
 
 
+class PublicPipelineResponse(BaseModel):
+    # Shape used by the shareable /p/:id page. Anyone with the UUID can
+    # read it — no auth — since UUIDs are unguessable and S3 keys exposed
+    # via `input` already resolve to publicly-readable images.
+    id: UUID
+    pipeline_name: str
+    status: PipelineStatus
+    input: dict[str, Any] | None = None
+    result: dict[str, Any] | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class CostPreviewRequest(BaseModel):
     pipeline_name: str
     input: dict[str, Any]

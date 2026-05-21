@@ -90,6 +90,15 @@ export interface UserPipelinesResponse {
   offset: number;
 }
 
+export interface PublicPipeline {
+  id: string;
+  pipeline_name: string;
+  status: PipelineStatus;
+  input?: Record<string, any> | null;
+  result?: PipelineResult | null;
+  created_at: string;
+}
+
 export interface CostPreviewRequest {
   pipeline_name: string;
   input: Record<string, unknown>;
@@ -131,6 +140,12 @@ export const pipelinesApi = {
   ): Promise<UserPipelinesResponse> => {
     return apiClient.get<UserPipelinesResponse>(
       `/pipelines/mine?limit=${limit}&offset=${offset}`,
+    );
+  },
+
+  getPublic: async (pipelineId: string): Promise<PublicPipeline> => {
+    return apiClient.get<PublicPipeline>(
+      `/pipelines/${pipelineId}/public`,
     );
   },
 

@@ -19,6 +19,7 @@ from .schemas import (
     PipelineStatusItem,
     PipelineEstimateResponse,
     PipelineJobInput,
+    PublicPipelineResponse,
     UserPipelineItem,
     UserPipelinesResponse,
 )
@@ -261,6 +262,29 @@ async def get_pipeline_estimate(
         worker_count=estimate.worker_count,
         workers_missing=estimate.workers_missing,
     )
+
+
+@router.get(
+    "/{pipeline_id}/public",
+    response_model=PublicPipelineResponse,
+    dependencies=[
+        Depends(rate_limit("public", config.RATE_LIMIT_STATUS_PER_MINUTE, 60))
+    ],
+)
+async def get_public_pipeline(
+    pipeline_id: UUID,
+    db: DbSession,
+) -> PublicPipelineResponse:
+    """Read-only view of a pipeline for the /p/:id share page.
+    Unauthenticated: anyone with the (unguessable) UUID can fetch it.
+    Mirrors how the result image URLs themselves are already public."""
+    pipeline = await service.get_pipeline_by_id(db, pipeline_id)
+    if pipeline is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Pipeline {pipeline_id} not found",
+        )
+    return PublicPipelineResponse.model_validate(pipeline)
 
 
 @router.post(
