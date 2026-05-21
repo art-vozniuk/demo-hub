@@ -48,19 +48,9 @@ const Sharp = () => {
   const location = useLocation();
   const { track } = useAnalytics();
 
-  const { user, loading: authLoading } = useAuth();
+  const { user } = useAuth();
   const { balance, getCost, refresh: refreshBalance } = useWallet();
   const sharpCost = getCost("sharp");
-
-  useEffect(() => {
-    if (authLoading) return;
-    if (!user) {
-      navigate(
-        `/auth?redirect=${encodeURIComponent(location.pathname + location.search)}`,
-        { replace: true },
-      );
-    }
-  }, [authLoading, user, navigate, location.pathname, location.search]);
 
   const [outOfTokensDialogOpen, setOutOfTokensDialogOpen] = useState(false);
 
@@ -191,6 +181,14 @@ const Sharp = () => {
 
   const handleGenerate = useCallback(async () => {
     if (!uploadedRef) return;
+
+    if (!user) {
+      navigate(
+        `/auth?redirect=${encodeURIComponent(location.pathname + location.search)}`,
+      );
+      return;
+    }
+
     if (sharpCost === undefined) return;
 
     if (balance !== null && balance < sharpCost) {
@@ -269,7 +267,18 @@ const Sharp = () => {
       setIsProcessing(false);
       setPipelineId(null);
     }
-  }, [uploadedRef, sharpCost, balance, refreshBalance, track, pollOnce]);
+  }, [
+    uploadedRef,
+    user,
+    sharpCost,
+    balance,
+    refreshBalance,
+    track,
+    pollOnce,
+    navigate,
+    location.pathname,
+    location.search,
+  ]);
 
   const handleReset = useCallback(() => {
     setPhoto(null);
@@ -391,7 +400,9 @@ const Sharp = () => {
                     ? pipelineStatus?.status === "RUNNING"
                       ? "Running on GPU…"
                       : "Queued…"
-                    : "Generate splat"}
+                    : !user
+                      ? "Sign in to generate"
+                      : "Generate splat"}
               </Button>
               <Button
                 variant="outline"
