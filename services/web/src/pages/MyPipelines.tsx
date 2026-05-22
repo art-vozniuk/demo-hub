@@ -27,6 +27,7 @@ import PipelineStatusBadge from "@/components/pipelines/PipelineStatusBadge";
 import PipelineDetails, {
   getPipelineDisplayName,
 } from "@/components/pipelines/details";
+import SharePipelineButton from "@/components/SharePipelineButton";
 
 const PAGE_SIZE = 50;
 const POLL_INTERVAL_MS = 3000;
@@ -220,6 +221,20 @@ const MyPipelines = () => {
                             </div>
                           )}
                           <PipelineDetails pipeline={p} />
+                          {p.status === "COMPLETED" && (
+                            <div
+                              className="mt-3 flex justify-end"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <SharePipelineButton
+                                pipelineId={p.id}
+                                pipelineDisplayName={getPipelineDisplayName(
+                                  p.pipeline_name,
+                                )}
+                                variant="full"
+                              />
+                            </div>
+                          )}
                         </TableCell>
                       </TableRow>
                     )}

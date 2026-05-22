@@ -33,7 +33,13 @@ export type AnalyticsEvent =
   | { name: 'facefusion_github_repo_clicked'; params: Record<string, never> }
   | { name: 'renderer_github_repo_clicked'; params: Record<string, never> }
   | { name: 'renderer_scene_opened'; params: { scene_slug: string } }
-  | { name: 'renderer_scene_back'; params: { scene_slug: string } };
+  | { name: 'renderer_scene_back'; params: { scene_slug: string } }
+  | { name: 'my_pipelines_viewed'; params: Record<string, never> }
+  | { name: 'pipeline_share_opened'; params: { pipeline_id: string } }
+  | { name: 'pipeline_share_copy'; params: { pipeline_id: string } }
+  | { name: 'pipeline_share_native'; params: { pipeline_id: string } }
+  | { name: 'pipeline_share_viewed'; params: { pipeline_id: string; pipeline_name: string } }
+  | { name: 'pipeline_share_try_clicked'; params: { pipeline_id: string; pipeline_name: string } };
 
 export interface GtagConfig {
   page_path?: string;

@@ -17,6 +17,7 @@ import { useAnalytics } from "@/hooks/useAnalytics";
 import { useWallet } from "@/contexts/WalletContext";
 import { useAuth } from "@/contexts/AuthContext";
 import OutOfTokensDialog from "@/components/OutOfTokensDialog";
+import SharePipelineButton from "@/components/SharePipelineButton";
 import { toast } from "sonner";
 import sharpDemoVideo from "@/assets/sharp-demo.mp4";
 
@@ -457,6 +458,16 @@ const Sharp = () => {
               >
                 Try another photo
               </Button>
+              {pipelineId && (
+                <>
+                  <span>•</span>
+                  <SharePipelineButton
+                    pipelineId={pipelineId}
+                    pipelineDisplayName="SHARP"
+                    variant="compact"
+                  />
+                </>
+              )}
             </div>
           </div>
         )}

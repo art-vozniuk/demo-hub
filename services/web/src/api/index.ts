@@ -23,6 +23,7 @@ export type {
   SharpResult,
   PipelineResult,
   PipelineStatus,
+  PublicPipeline,
   UserPipelineItem,
   UserPipelinesResponse,
 } from "./core/pipelines";
