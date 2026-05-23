@@ -25,7 +25,7 @@ Same code path runs natively on macOS via Dawn → Metal.
 
 Source: [renderer](https://github.com/art-vozniuk/renderer)
 
-### Generative Editing
+### Flux
 
 Image-conditioned generative editing on FLUX.2 klein. Pick a cinematic
 preset, upload a photo, get the same subject in the chosen style. The
@@ -96,7 +96,7 @@ bash scripts/setup-local-env.sh             # one-time env scaffolding
 docker compose -f docker-compose.local.yml up --build
 ```
 
-For the Generative Editing demo additionally:
+For the Flux demo additionally:
 
 ```bash
 cd services/modal

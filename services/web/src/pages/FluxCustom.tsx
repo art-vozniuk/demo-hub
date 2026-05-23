@@ -18,7 +18,7 @@ import CostBadge from "@/components/CostBadge";
 import {
   pipelinesApi,
   ApiError,
-  type GenerativeEditingResult,
+  type FluxResult,
   type PipelineStatusItem,
 } from "@/api";
 import { uploadToS3, getFileExtension } from "@/lib/s3";
@@ -49,7 +49,7 @@ const QUALITY_MULTIPLIER_LABEL: Record<Quality, string> = {
   high: "×1.5",
 };
 
-const GenerativeEditingCustom = () => {
+const FluxCustom = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { track } = useAnalytics();
@@ -323,7 +323,7 @@ const GenerativeEditingCustom = () => {
   };
 
   const resultUrl = (
-    pipelineStatus?.result as GenerativeEditingResult | undefined
+    pipelineStatus?.result as FluxResult | undefined
   )?.result_url;
 
   const canGenerate =
@@ -338,7 +338,7 @@ const GenerativeEditingCustom = () => {
       <Button
         variant="ghost"
         size="sm"
-        onClick={() => navigate("/generative-editing")}
+        onClick={() => navigate("/flux")}
         className="gap-1"
       >
         <ArrowLeft className="h-4 w-4" />
@@ -498,4 +498,4 @@ const GenerativeEditingCustom = () => {
   );
 };
 
-export default GenerativeEditingCustom;
+export default FluxCustom;

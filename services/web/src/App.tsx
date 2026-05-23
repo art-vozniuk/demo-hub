@@ -12,9 +12,9 @@ import Footer from "./components/Footer";
 import Home from "./pages/Home";
 import FaceFusion from "./pages/FaceFusion";
 import FaceFusionGenerate from "./pages/FaceFusionGenerate";
-import GenerativeEditing from "./pages/GenerativeEditing";
-import GenerativeEditingCustom from "./pages/GenerativeEditingCustom";
-import GenerativeEditingGenerate from "./pages/GenerativeEditingGenerate";
+import Flux from "./pages/Flux";
+import FluxCustom from "./pages/FluxCustom";
+import FluxGenerate from "./pages/FluxGenerate";
 import Renderer from "./pages/Renderer";
 import Sharp from "./pages/Sharp";
 import SharpViewer from "./pages/SharpViewer";
@@ -39,13 +39,13 @@ const App = () => (
                   <Navbar />
                   <div className="flex-1">
                     <Routes>
-                      <Route path="/" element={<Navigate to="/generative-editing" replace />} />
+                      <Route path="/" element={<Navigate to="/flux" replace />} />
                       <Route path="/author" element={<Home />} />
                       <Route path="/face-fusion" element={<FaceFusion />} />
                       <Route path="/face-fusion/generate" element={<FaceFusionGenerate />} />
-                      <Route path="/generative-editing" element={<GenerativeEditing />} />
-                      <Route path="/generative-editing/generate" element={<GenerativeEditingGenerate />} />
-                      <Route path="/generative-editing/custom" element={<GenerativeEditingCustom />} />
+                      <Route path="/flux" element={<Flux />} />
+                      <Route path="/flux/generate" element={<FluxGenerate />} />
+                      <Route path="/flux/custom" element={<FluxCustom />} />
                       <Route path="/renderer" element={<Renderer />} />
                       <Route path="/sharp" element={<Sharp />} />
                       <Route path="/sharp/view" element={<SharpViewer />} />
