@@ -268,7 +268,7 @@ const Editor = () => {
   const onPanelKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (renamingId !== null) return;
-      if (e.key === "Delete" || e.key === "Backspace") {
+      if (e.key === "Delete") {
         if (selectedId) postToIframe({ type: "editor-delete-object", id: selectedId });
       } else if (e.key === "F2") {
         const o = objects.find((x) => x.id === selectedId);
