@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { Coins } from "lucide-react";
 
 import {
@@ -13,6 +13,8 @@ import { cn } from "@/lib/utils";
 const TokenBalance = () => {
   const { user } = useAuth();
   const { balance, signupGrant, isLoading } = useWallet();
+  const location = useLocation();
+  const authHref = `/auth?redirect=${encodeURIComponent(location.pathname + location.search)}`;
 
   // Suppress flicker before first fetch resolves; once we know, we
   // always show the chip so users notice their balance.
@@ -59,7 +61,7 @@ const TokenBalance = () => {
           <p className="text-muted-foreground mt-2">
             Please{" "}
             <Link
-              to="/auth"
+              to={authHref}
               className="text-primary hover:underline font-medium"
             >
               sign in

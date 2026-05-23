@@ -21,7 +21,7 @@ const Auth = () => {
   const returnPath =
     searchParams.get('redirect') ||
     location.state?.returnPath ||
-    '/face-fusion';
+    '/';
 
   useEffect(() => {
     if (!authLoading && user) {

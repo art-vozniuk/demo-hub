@@ -307,7 +307,11 @@ const Navbar = () => {
               size="sm"
               className="h-7 sm:h-8 px-2 sm:px-3 text-xs sm:text-sm"
             >
-              <Link to="/auth">Sign in</Link>
+              <Link
+                to={`/auth?redirect=${encodeURIComponent(location.pathname + location.search)}`}
+              >
+                Sign in
+              </Link>
             </Button>
           )}
         </div>
