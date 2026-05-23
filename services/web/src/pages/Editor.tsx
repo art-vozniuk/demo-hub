@@ -13,20 +13,32 @@ import {
   Loader2,
   Trash2,
   Save,
+  FolderOpen,
+  Check,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { RendererUnsupported } from "@/components/RendererUnsupported";
 import { checkWebGpu, type WebGpuStatus } from "@/lib/webgpu";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
-import { editorScenesApi, ApiError } from "@/api";
+import { editorScenesApi, ApiError, type EditorSceneListItem } from "@/api";
 import {
   eulerDegToQuat,
   extOf,
+  forwardToQuat,
   quatToEulerDeg,
+  quatToForward,
   sha256Hex,
   type ManifestAsset,
   type ManifestObject,
+  type ObjectKind,
   type SceneManifest,
   type Vec3Tuple,
 } from "@/lib/scene-manifest";
@@ -80,9 +92,10 @@ type SceneObject = {
 // Save time. URLs survive across saves so we can skip re-upload; bytes
 // only exist for objects added in this session.
 type AssetEntry = {
-  name: string;
+  name: string;            // display name (matches renderer-side, stripped)
+  filename: string;        // original filename with extension — used for S3 key ext
   size: number;
-  bytes?: ArrayBuffer; // present until first successful upload
+  bytes?: ArrayBuffer;
   sha256?: string;
   url?: string;
 };
@@ -142,6 +155,27 @@ const Editor = () => {
   const [nameDraft, setNameDraft] = useState<string>("Untitled");
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [sceneList, setSceneList] = useState<EditorSceneListItem[]>([]);
+  // Set true once we've decided whether to auto-load — prevents the
+  // effect from firing twice (e.g. on user→sceneList state churn).
+  const autoLoadHandledRef = useRef(false);
+  // Names of objects that the hydrate flow is currently fetching/parsing
+  // (one entry per pending object, kept in FIFO order). Surfaces as ghost
+  // rows + a viewport pill so the user sees the slow asset download.
+  const [loadingPlaceholders, setLoadingPlaceholders] = useState<
+    { name: string; kind: ObjectKind }[]
+  >([]);
+
+  // Camera state — synced with the C++ side via editor-camera-pose. Treated
+  // as a singleton "object" in the scene panel (kind=camera, id sentinel = -1).
+  const [cameraPose, setCameraPose] = useState<{ position: Vec3Tuple; forward: Vec3Tuple }>({
+    position: [0, 2.5, 6],
+    forward: [0, -0.25, -1],
+  });
+  const [cameraSelected, setCameraSelected] = useState(false);
+  // Last camera pose at the most recent successful save. Anything different
+  // → dirty. Updated by hydrate (initial pose loaded) and Save.
+  const lastSavedCameraRef = useRef<{ position: Vec3Tuple; forward: Vec3Tuple } | null>(null);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -153,7 +187,7 @@ const Editor = () => {
   // FIFO queue of bytes/sha for incoming objects (matched on the next
   // editor-objects message that surfaces a new id with the same name).
   const pendingAssetsRef = useRef<
-    Array<{ name: string; bytes: ArrayBuffer; sha256: string; size: number }>
+    Array<{ name: string; originalName: string; bytes: ArrayBuffer; sha256: string; size: number }>
   >([]);
   const transformsRef = useRef<TransformCache>({});
   // Set of ids seen previously — used to spot newly-added ids per
@@ -207,16 +241,23 @@ const Editor = () => {
               const claim = pending.splice(idx, 1)[0];
               assetsRef.current.set(o.id, {
                 name: claim.name,
+                filename: claim.originalName,
                 size: claim.size,
                 bytes: claim.bytes,
                 sha256: claim.sha256,
               });
             } else if (!assetsRef.current.has(o.id)) {
-              // No pending bytes — likely a hydrate result or a light
-              // (no asset). Leave an empty placeholder so save can still
-              // emit transform-only objects.
-              assetsRef.current.set(o.id, { name: o.name, size: 0 });
+              assetsRef.current.set(o.id, { name: o.name, filename: o.name, size: 0 });
             }
+            // Pop the matching loading placeholder so its spinner goes
+            // away as soon as the engine surfaces the new object.
+            setLoadingPlaceholders((prev) => {
+              const i = prev.findIndex((p) => p.name === o.name);
+              if (i < 0) return prev;
+              const next = prev.slice();
+              next.splice(i, 1);
+              return next;
+            });
           } else {
             // Existing object — keep rename in sync.
             const a = assetsRef.current.get(o.id);
@@ -238,7 +279,9 @@ const Editor = () => {
         setObjects(next);
         if (mutated) markDirty();
       } else if (t === "editor-selection-changed") {
-        setSelectedId(Number(e.data.id) || 0);
+        const nextId = Number(e.data.id) || 0;
+        setSelectedId(nextId);
+        if (nextId !== 0) setCameraSelected(false);
       } else if (t === "editor-transform") {
         const m = e.data as TransformMsg;
         setTransform(m);
@@ -250,6 +293,24 @@ const Editor = () => {
           scale: m.scale,
         };
         if (m.final) markDirty();
+      } else if (t === "editor-camera-pose") {
+        const pos = e.data.position as Vec3Tuple;
+        const fwd = e.data.forward as Vec3Tuple;
+        setCameraPose({ position: pos, forward: fwd });
+        const last = lastSavedCameraRef.current;
+        if (!suppressDirtyRef.current && last) {
+          const d =
+            Math.abs(last.position[0] - pos[0]) +
+            Math.abs(last.position[1] - pos[1]) +
+            Math.abs(last.position[2] - pos[2]) +
+            Math.abs(last.forward[0] - fwd[0]) +
+            Math.abs(last.forward[1] - fwd[1]) +
+            Math.abs(last.forward[2] - fwd[2]);
+          if (d > 0.001) markDirty();
+        } else if (!last) {
+          // Capture the initial pose as the save baseline on first emit.
+          lastSavedCameraRef.current = { position: pos, forward: fwd };
+        }
       } else if (t === "editor-error") {
         toast.error(String(e.data?.message ?? "Renderer error"));
       }
@@ -305,13 +366,16 @@ const Editor = () => {
       setUploadingCount((c) => c + 1);
       try {
         const bytes = await file.arrayBuffer();
-        // Keep our own copy in the pending queue — the iframe consumes
-        // the buffer it receives (transferred), so we can't reuse it
-        // for the S3 upload at Save time.
         const ours = bytes.slice(0);
         const sha = await sha256Hex(ours);
+        // C++ side strips path + extension when assigning object.name,
+        // so push the stripped basename so the FIFO claim-by-name later
+        // actually matches. Keep file.name on the asset entry only via
+        // sha (used for S3 key), and the extension is recovered by extOf.
+        const stem = file.name.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
         pendingAssetsRef.current.push({
-          name: file.name,
+          name: stem,
+          originalName: file.name,
           bytes: ours,
           sha256: sha,
           size: file.size,
@@ -453,20 +517,37 @@ const Editor = () => {
             rotation: [0, 0, 0, 1] as [number, number, number, number],
             scale: [1, 1, 1] as Vec3Tuple,
           };
-      const asset: ManifestAsset | null =
-        a && a.url && a.sha256 ? { url: a.url, sha256: a.sha256, size: a.size } : null;
-      out.push({
+      const isLight = kind === "light_directional";
+      const asset: ManifestAsset | undefined =
+        !isLight && a && a.url && a.sha256
+          ? { url: a.url, sha256: a.sha256, size: a.size }
+          : undefined;
+      const light = isLight && o.light ? o.light : undefined;
+      const entry: ManifestObject = {
         id: String(o.id),
         kind,
         name: o.name,
         visible: o.visible,
         transform,
-        asset,
-        light: o.light ?? null,
-      });
+      };
+      if (asset) entry.asset = asset;
+      if (light) entry.light = light;
+      out.push(entry);
     }
-    return { schema: 1, name: sceneName, objects: out };
-  }, [objects, sceneName]);
+    // Prepend camera singleton so it lands as the first manifest object.
+    const cameraEntry: ManifestObject = {
+      id: "camera",
+      kind: "camera",
+      name: "Camera",
+      visible: true,
+      transform: {
+        position: cameraPose.position,
+        rotation: forwardToQuat(cameraPose.forward),
+        scale: [1, 1, 1] as Vec3Tuple,
+      },
+    };
+    return { schema: 1, name: sceneName, objects: [cameraEntry, ...out] };
+  }, [objects, sceneName, cameraPose]);
 
   const uploadPendingAssets = useCallback(
     async (effectiveSceneId: string, effectiveUserId: string) => {
@@ -475,10 +556,10 @@ const Editor = () => {
       const tasks: Promise<void>[] = [];
       for (const [id, a] of assetsRef.current.entries()) {
         if (a.url || !a.bytes || !a.sha256) continue;
-        const ext = extOf(a.name);
+        const ext = extOf(a.filename);
         const key = `${ASSET_KEY_PREFIX}/${effectiveUserId}/${effectiveSceneId}/${a.sha256}.${ext}`;
         const blob = new Blob([a.bytes], { type: "application/octet-stream" });
-        const file = new File([blob], a.name, { type: "application/octet-stream" });
+        const file = new File([blob], a.filename, { type: "application/octet-stream" });
         tasks.push(
           uploadToS3(file, ASSET_BUCKET, key).then((res) => {
             const cur = assetsRef.current.get(id);
@@ -503,6 +584,22 @@ const Editor = () => {
       preloadedBytes?: SceneBytesMap,
     ): Promise<void> => {
       suppressDirtyRef.current = true;
+      // Apply camera pose first so the user sees the right viewpoint
+      // while assets are still streaming in.
+      const camObj = manifest.objects.find((o) => o.kind === "camera");
+      if (camObj) {
+        const fwd = quatToForward(camObj.transform.rotation);
+        const pos = camObj.transform.position;
+        setCameraPose({ position: pos, forward: fwd });
+        lastSavedCameraRef.current = { position: pos, forward: fwd };
+        postToIframe({ type: "editor-set-camera-pose", position: pos, forward: fwd });
+      }
+      // Show ghost rows + viewport pill for every asset we're about to fetch.
+      setLoadingPlaceholders(
+        manifest.objects
+          .filter((o) => o.kind === "splat" || o.kind === "mesh")
+          .map((o) => ({ name: o.name, kind: o.kind })),
+      );
       try {
         for (const o of manifest.objects) {
           if (o.kind === "splat" || o.kind === "mesh") {
@@ -512,12 +609,28 @@ const Editor = () => {
               if (!r.ok) throw new Error(`Asset fetch failed: ${o.asset.url}`);
               bytes = await r.arrayBuffer();
             }
-            if (!bytes) continue;
+            if (!bytes) {
+              // Couldn't fetch — remove its placeholder so the user isn't
+              // stuck staring at a never-resolving spinner.
+              setLoadingPlaceholders((prev) => {
+                const idx = prev.findIndex((p) => p.name === o.name);
+                if (idx < 0) return prev;
+                const next = prev.slice();
+                next.splice(idx, 1);
+                return next;
+              });
+              continue;
+            }
             // Queue the asset so the editor-objects handler links the
             // upcoming new id to its bytes/sha/url (so we don't re-upload).
             const sha = o.asset?.sha256 ?? (await sha256Hex(bytes));
+            // Recover filename (with ext) from asset URL when possible.
+            const fn = o.asset?.url
+              ? o.asset.url.split("/").pop() ?? `${o.name}.splat`
+              : `${o.name}.${o.kind === "mesh" ? "glb" : "splat"}`;
             pendingAssetsRef.current.push({
               name: o.name,
+              originalName: fn,
               bytes: bytes.slice(0),
               sha256: sha,
               size: o.asset?.size ?? bytes.byteLength,
@@ -546,23 +659,38 @@ const Editor = () => {
         for (const [id, a] of assetsRef.current.entries()) {
           (nameToIds[a.name] = nameToIds[a.name] ?? []).push(id);
         }
+        // Skip applying transforms that are exactly identity — those usually
+        // come from legacy saves (before lift-to-floor) or buggy first saves.
+        // Letting the C++ default lift stick puts the object on the grid
+        // instead of stranding it in the raw-splat coordinate frame.
+        const isIdentityTransform = (t: ManifestObject["transform"]): boolean => {
+          const pZero = t.position.every((v) => Math.abs(v) < 1e-3);
+          const sOne = t.scale.every((v) => Math.abs(v - 1) < 1e-3);
+          const rIdentity =
+            Math.abs(t.rotation[0]) < 1e-3 &&
+            Math.abs(t.rotation[1]) < 1e-3 &&
+            Math.abs(t.rotation[2]) < 1e-3 &&
+            Math.abs(t.rotation[3] - 1) < 1e-3;
+          return pZero && sOne && rIdentity;
+        };
         for (const o of manifest.objects) {
           const ids = nameToIds[o.name];
           if (!ids || ids.length === 0) continue;
           const id = ids.shift()!;
-          // Mark asset url so we don't re-upload.
           if (o.asset?.url) {
             const cur = assetsRef.current.get(id);
             if (cur) cur.url = o.asset.url;
           }
-          const eulerDeg = quatToEulerDeg(o.transform.rotation);
-          postToIframe({
-            type: "editor-set-transform",
-            id,
-            position: o.transform.position,
-            rotationDeg: eulerDeg,
-            scale: o.transform.scale,
-          });
+          if (!isIdentityTransform(o.transform)) {
+            const eulerDeg = quatToEulerDeg(o.transform.rotation);
+            postToIframe({
+              type: "editor-set-transform",
+              id,
+              position: o.transform.position,
+              rotationDeg: eulerDeg,
+              scale: o.transform.scale,
+            });
+          }
           if (!o.visible) {
             postToIframe({ type: "editor-set-visibility", id, visible: false });
           }
@@ -623,7 +751,13 @@ const Editor = () => {
       const finalManifest = buildManifest();
       await editorScenesApi.update(id, { name: sceneName, manifest: finalManifest });
       setDirty(false);
+      lastSavedCameraRef.current = {
+        position: cameraPose.position,
+        forward: cameraPose.forward,
+      };
       toast.success("Scene saved");
+      // Refresh dropdown list so the new/updated scene surfaces immediately.
+      editorScenesApi.list().then((r) => setSceneList(r.scenes)).catch(() => {});
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Save failed";
       toast.error(msg);
@@ -635,11 +769,51 @@ const Editor = () => {
     user,
     sceneId,
     sceneName,
+    cameraPose,
     buildManifest,
     uploadPendingAssets,
     navigate,
     setSearchParams,
   ]);
+
+  // Fetch user's scenes once we know they're logged in. Drives both the
+  // Load dropdown and the auto-load-latest behaviour.
+  useEffect(() => {
+    if (!user) {
+      setSceneList([]);
+      autoLoadHandledRef.current = false;
+      return;
+    }
+    let cancelled = false;
+    editorScenesApi
+      .list()
+      .then((r) => {
+        if (!cancelled) setSceneList(r.scenes);
+      })
+      .catch(() => {
+        /* non-fatal */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  // Auto-load the most recently-updated scene when the user lands on
+  // /editor with no scene or restore param. Runs once per user session.
+  useEffect(() => {
+    if (autoLoadHandledRef.current) return;
+    if (!user) return;
+    if (searchParams.get("scene") || searchParams.get("restore") === "1") {
+      autoLoadHandledRef.current = true;
+      return;
+    }
+    if (sceneList.length === 0) return; // no scenes yet — stay blank.
+    autoLoadHandledRef.current = true;
+    const latest = sceneList[0]; // server returns updated_at desc.
+    const next = new URLSearchParams();
+    next.set("scene", latest.id);
+    setSearchParams(next, { replace: true });
+  }, [user, sceneList, searchParams, setSearchParams]);
 
   // URL-driven scene load: ?scene=<uuid>.
   useEffect(() => {
@@ -794,6 +968,17 @@ const Editor = () => {
         {transform?.drag && transform.kind !== "none" && (
           <DragHud t={transform} />
         )}
+        {loadingPlaceholders.length > 0 && (
+          <div className="absolute top-3 right-3 z-20 pointer-events-none">
+            <div className="rounded-full border border-border bg-background/85 backdrop-blur px-3 py-1 flex items-center gap-1.5 shadow-md">
+              <Loader2 className="h-3 w-3 animate-spin text-primary" />
+              <span className="text-[11px] text-foreground/90 tabular-nums">
+                Loading {loadingPlaceholders.length} asset
+                {loadingPlaceholders.length > 1 ? "s" : ""}…
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Right panel — Scene on top, Transform below. */}
@@ -821,13 +1006,76 @@ const Editor = () => {
             dirty={dirty}
             saving={saving}
             onSave={() => void doSave()}
+            scenes={sceneList}
+            currentSceneId={sceneId}
+            onLoad={(id) => {
+              if (id === sceneId) return;
+              if (dirty && !window.confirm("Unsaved changes will be lost. Switch scene?")) return;
+              const next = new URLSearchParams();
+              next.set("scene", id);
+              setSearchParams(next, { replace: false });
+            }}
+            onNewScene={() => {
+              if (dirty && !window.confirm("Unsaved changes will be lost. Start a new scene?")) return;
+              // Reset everything in-place, then clean URL. Marking autoLoad
+              // as handled prevents the auto-load effect from immediately
+              // bouncing us back to the latest scene.
+              autoLoadHandledRef.current = true;
+              postToIframe({ type: "editor-clear-scene" });
+              assetsRef.current.clear();
+              pendingAssetsRef.current = [];
+              transformsRef.current = {};
+              knownIdsRef.current = new Set();
+              setObjects([]);
+              setSelectedId(0);
+              setTransform(null);
+              setLoadingPlaceholders([]);
+              setCameraSelected(false);
+              lastSavedCameraRef.current = null;
+              setSceneId(null);
+              setSceneName("Untitled");
+              setNameDraft("Untitled");
+              setDirty(false);
+              setSearchParams(new URLSearchParams(), { replace: true });
+            }}
           />
           <div className="overflow-y-auto max-h-[55vh] border-b border-border/60">
-            {objects.length === 0 && (
+            {objects.length === 0 && loadingPlaceholders.length === 0 && (
               <div className="px-3 py-3 text-[11px] text-muted-foreground/80">
                 No objects. Drop a .splat file anywhere, or click + below.
               </div>
             )}
+            {/* Camera singleton — always at the top, never deletable. */}
+            <div
+              onClick={() => {
+                setCameraSelected(true);
+                postToIframe({ type: "editor-select-object", id: 0 });
+              }}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1 cursor-pointer text-[11px] leading-tight",
+                "hover:bg-muted/40",
+                cameraSelected && "bg-primary/20 text-foreground",
+              )}
+            >
+              <span className="text-muted-foreground/80 inline-flex h-3 w-3 items-center justify-center">
+                {/* tiny camera glyph */}
+                <svg viewBox="0 0 16 16" className="h-3 w-3" fill="currentColor">
+                  <path d="M2 4h3l1-1h4l1 1h3v8H2z" stroke="currentColor" strokeWidth="1" fill="none"/>
+                  <circle cx="8" cy="8.5" r="2" stroke="currentColor" strokeWidth="1" fill="none"/>
+                </svg>
+              </span>
+              <span className="flex-1 min-w-0 truncate">Camera</span>
+            </div>
+            {loadingPlaceholders.map((p, i) => (
+              <div
+                key={`ghost-${i}-${p.name}`}
+                className="flex items-center gap-1.5 px-3 py-1 text-[11px] leading-tight text-muted-foreground/70 italic"
+              >
+                <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                <span className="flex-1 min-w-0 truncate">{p.name}</span>
+                <span className="text-[10px]">loading…</span>
+              </div>
+            ))}
             {objects.map((o) => {
               const isSel = o.id === selectedId;
               const isRen = renamingId === o.id;
@@ -926,8 +1174,44 @@ const Editor = () => {
           </div>
         </div>
 
-        {/* Transform section — only when selection exists. */}
-        {selected && (
+        {/* Transform section — camera takes priority over splat selection. */}
+        {cameraSelected && (
+          <div className="flex flex-col min-h-0">
+            <SectionHeader title="Camera" />
+            <div className="px-3 py-1.5 space-y-1">
+              <TransformRow
+                label="Position"
+                values={cameraPose.position}
+                digits={2}
+                onCommit={(next) => {
+                  setCameraPose((prev) => ({ ...prev, position: next }));
+                  postToIframe({
+                    type: "editor-set-camera-pose",
+                    position: next,
+                    forward: cameraPose.forward,
+                  });
+                }}
+              />
+              <TransformRow
+                label="Forward"
+                values={cameraPose.forward}
+                digits={3}
+                onCommit={(next) => {
+                  // Renormalize so degenerate input doesn't kill the camera.
+                  const len = Math.hypot(next[0], next[1], next[2]) || 1;
+                  const fwd: Vec3Tuple = [next[0] / len, next[1] / len, next[2] / len];
+                  setCameraPose((prev) => ({ ...prev, forward: fwd }));
+                  postToIframe({
+                    type: "editor-set-camera-pose",
+                    position: cameraPose.position,
+                    forward: fwd,
+                  });
+                }}
+              />
+            </div>
+          </div>
+        )}
+        {!cameraSelected && selected && (
           <div className="flex flex-col min-h-0">
             <SectionHeader title="Transform" />
             <div className="px-3 py-1.5 space-y-1">
@@ -1016,6 +1300,10 @@ const SceneHeader = ({
   dirty,
   saving,
   onSave,
+  scenes,
+  currentSceneId,
+  onLoad,
+  onNewScene,
 }: {
   name: string;
   editing: boolean;
@@ -1029,6 +1317,10 @@ const SceneHeader = ({
   dirty: boolean;
   saving: boolean;
   onSave: () => void;
+  scenes: EditorSceneListItem[];
+  currentSceneId: string | null;
+  onLoad: (id: string) => void;
+  onNewScene: () => void;
 }) => (
   <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/60">
     {editing ? (
@@ -1058,6 +1350,41 @@ const SceneHeader = ({
         {objectCount}
       </span>
     )}
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider border border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/40 outline-none"
+        aria-label="Load scene"
+        title="Load scene"
+      >
+        <FolderOpen className="h-3 w-3" />
+        <span>Load</span>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[220px]">
+        <DropdownMenuItem onClick={onNewScene} className="cursor-pointer">
+          <Plus className="h-3.5 w-3.5 mr-1.5" />
+          New scene
+        </DropdownMenuItem>
+        {scenes.length > 0 && <DropdownMenuSeparator />}
+        {scenes.map((s) => {
+          const isCurrent = s.id === currentSceneId;
+          return (
+            <DropdownMenuItem
+              key={s.id}
+              onClick={() => onLoad(s.id)}
+              className="cursor-pointer flex items-center gap-1.5"
+            >
+              <Check
+                className={cn(
+                  "h-3 w-3",
+                  isCurrent ? "opacity-100 text-primary" : "opacity-0",
+                )}
+              />
+              <span className="flex-1 truncate">{s.name}</span>
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
     <button
       type="button"
       onClick={onSave}

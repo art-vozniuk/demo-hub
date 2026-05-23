@@ -7,6 +7,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import EditorScene
+from .storage import (
+    delete_keys,
+    list_keys_under_prefix,
+    manifest_asset_urls,
+    url_to_key,
+)
 
 log = logging.getLogger(__name__)
 
@@ -64,14 +70,30 @@ async def update_scene(
     name: str,
     manifest: dict[str, Any],
 ) -> EditorScene:
+    # Diff asset URLs to find ones dropped this save; delete from storage.
+    old_urls = manifest_asset_urls(scene.manifest or {})
+    new_urls = manifest_asset_urls(manifest or {})
+    dropped = [u for u in (old_urls - new_urls)]
     scene.name = name
     scene.manifest = manifest
     await db.flush()
     await db.commit()
     await db.refresh(scene)
+    if dropped:
+        keys = [k for k in (url_to_key(u) for u in dropped) if k]
+        if keys:
+            await delete_keys(keys)
     return scene
 
 
 async def delete_scene(db: AsyncSession, scene: EditorScene) -> None:
+    # Capture the scene_id before SQLAlchemy expires the row on delete.
+    user_id = scene.user_id
+    scene_id = scene.id
     await db.delete(scene)
     await db.commit()
+    # Best-effort: list everything under the scene's asset prefix and drop it.
+    prefix = f"editor-assets/{user_id}/{scene_id}"
+    keys = await list_keys_under_prefix(prefix)
+    if keys:
+        await delete_keys(keys)

@@ -9,6 +9,7 @@ class Config(BaseSettings):
     SENTRY_DSN: str | None = None
 
     SUPABASE_URL: str
+    SUPABASE_SERVICE_ROLE_KEY: str | None = None
     ALLOWED_ORIGINS: str
 
     RATE_LIMIT_QUEUE_PER_MINUTE: int = 100

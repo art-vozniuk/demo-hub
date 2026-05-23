@@ -4,7 +4,7 @@
 
 export const MANIFEST_SCHEMA_VERSION = 1;
 
-export type ObjectKind = "splat" | "mesh" | "light_directional";
+export type ObjectKind = "splat" | "mesh" | "light_directional" | "camera";
 
 export interface Vec3 {
   0: number;
@@ -39,8 +39,10 @@ export interface ManifestObject {
   name: string;
   visible: boolean;
   transform: ManifestTransform;
-  asset: ManifestAsset | null;
-  light: ManifestLight | null;
+  // Only set on splat/mesh; omitted for lights.
+  asset?: ManifestAsset;
+  // Only set on light_*; omitted for splats/meshes.
+  light?: ManifestLight;
 }
 
 export interface SceneManifest {
@@ -70,6 +72,33 @@ export function eulerDegToQuat(degXYZ: Vec3Tuple): Vec4Tuple {
   const z = cx * cy * sz + sx * sy * cz;
   const w = cx * cy * cz - sx * sy * sz;
   return [x, y, z, w];
+}
+
+// Camera convention: default-forward = (0, 0, -1) (right-handed, -Z fwd).
+// Compose Y-yaw * X-pitch into a quat; roll always zero.
+export function forwardToQuat(fwd: Vec3Tuple): Vec4Tuple {
+  const [fx, fy, fz] = fwd;
+  const len = Math.hypot(fx, fy, fz) || 1;
+  const x = fx / len, y = fy / len, z = fz / len;
+  const pitch = Math.asin(Math.max(-1, Math.min(1, y)));
+  // forward = (-sin(yaw)*cos(pitch), sin(pitch), -cos(yaw)*cos(pitch))
+  // → sin(yaw) = -Fx/cos(pitch), cos(yaw) = -Fz/cos(pitch)
+  // → yaw = atan2(-Fx, -Fz). Earlier atan2(x, -z) mirrored the X axis.
+  const yaw = Math.atan2(-x, -z);
+  const cy = Math.cos(yaw / 2), sy = Math.sin(yaw / 2);
+  const cp = Math.cos(pitch / 2), sp = Math.sin(pitch / 2);
+  // q_yaw_y * q_pitch_x:
+  return [cy * sp, sy * cp, -sy * sp, cy * cp];
+}
+
+export function quatToForward(q: Vec4Tuple): Vec3Tuple {
+  const [x, y, z, w] = q;
+  // Rotate (0, 0, -1) by quaternion.
+  return [
+    -2 * (x * z + w * y),
+    -2 * (y * z - w * x),
+    -(1 - 2 * (x * x + y * y)),
+  ];
 }
 
 export function quatToEulerDeg(q: Vec4Tuple): Vec3Tuple {
