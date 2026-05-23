@@ -474,17 +474,47 @@ const Editor = () => {
               <TransformRow
                 label="Position"
                 values={transform?.position ?? [0, 0, 0]}
-                fmt={(n) => n.toFixed(2)}
+                digits={2}
+                onCommit={(next) => {
+                  if (!transform) return;
+                  postToIframe({
+                    type: "editor-set-transform",
+                    id: selected.id,
+                    position: next,
+                    rotationDeg: transform.rotationDeg,
+                    scale: transform.scale,
+                  });
+                }}
               />
               <TransformRow
                 label="Rotation"
                 values={transform?.rotationDeg ?? [0, 0, 0]}
-                fmt={(n) => n.toFixed(1)}
+                digits={1}
+                onCommit={(next) => {
+                  if (!transform) return;
+                  postToIframe({
+                    type: "editor-set-transform",
+                    id: selected.id,
+                    position: transform.position,
+                    rotationDeg: next,
+                    scale: transform.scale,
+                  });
+                }}
               />
               <TransformRow
                 label="Scale"
                 values={transform?.scale ?? [1, 1, 1]}
-                fmt={(n) => n.toFixed(2)}
+                digits={2}
+                onCommit={(next) => {
+                  if (!transform) return;
+                  postToIframe({
+                    type: "editor-set-transform",
+                    id: selected.id,
+                    position: transform.position,
+                    rotationDeg: transform.rotationDeg,
+                    scale: next,
+                  });
+                }}
               />
             </div>
           </div>
@@ -516,29 +546,90 @@ const SectionHeader = ({
 const TransformRow = ({
   label,
   values,
-  fmt,
+  digits,
+  onCommit,
 }: {
   label: string;
   values: [number, number, number];
-  fmt: (n: number) => string;
+  digits: number;
+  onCommit: (next: [number, number, number]) => void;
 }) => (
   <div className="flex items-baseline gap-1.5 text-[11px] leading-tight font-mono tabular-nums">
     <span className="text-muted-foreground w-[58px] shrink-0 font-sans not-italic">
       {label}
     </span>
     {values.map((v, i) => (
-      <div
+      <NumberField
         key={i}
-        className="flex items-baseline gap-0.5 flex-1 min-w-0 rounded px-1 bg-muted/30"
-      >
-        <span className={cn("text-[9px] font-bold shrink-0", AXIS_COLOR[i])}>
-          {"XYZ"[i]}
-        </span>
-        <span className="text-foreground/95 truncate">{fmt(v)}</span>
-      </div>
+        value={v}
+        digits={digits}
+        axis={i}
+        onCommit={(nv) => {
+          const next: [number, number, number] = [values[0], values[1], values[2]];
+          next[i] = nv;
+          onCommit(next);
+        }}
+      />
     ))}
   </div>
 );
+
+const NumberField = ({
+  value,
+  digits,
+  axis,
+  onCommit,
+}: {
+  value: number;
+  digits: number;
+  axis: number;
+  onCommit: (n: number) => void;
+}) => {
+  const [draft, setDraft] = useState<string>(value.toFixed(digits));
+  const [focused, setFocused] = useState(false);
+
+  // Sync external updates when not actively editing.
+  useEffect(() => {
+    if (!focused) setDraft(value.toFixed(digits));
+  }, [value, digits, focused]);
+
+  const commit = () => {
+    const parsed = parseFloat(draft);
+    if (Number.isFinite(parsed) && parsed !== value) onCommit(parsed);
+    else setDraft(value.toFixed(digits));
+  };
+
+  return (
+    <div className="flex items-baseline gap-0.5 flex-1 min-w-0 rounded px-1 bg-muted/30 focus-within:bg-muted/60 focus-within:ring-1 focus-within:ring-primary/40">
+      <span className={cn("text-[9px] font-bold shrink-0", AXIS_COLOR[axis])}>
+        {"XYZ"[axis]}
+      </span>
+      <input
+        type="text"
+        inputMode="decimal"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onFocus={(e) => {
+          setFocused(true);
+          e.currentTarget.select();
+        }}
+        onBlur={() => {
+          setFocused(false);
+          commit();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            (e.currentTarget as HTMLInputElement).blur();
+          } else if (e.key === "Escape") {
+            setDraft(value.toFixed(digits));
+            (e.currentTarget as HTMLInputElement).blur();
+          }
+        }}
+        className="w-full min-w-0 bg-transparent text-foreground/95 outline-none truncate"
+      />
+    </div>
+  );
+};
 
 const DragHud = ({ t }: { t: TransformMsg }) => {
   if (t.axis < 0 || t.axis > 2) return null;
