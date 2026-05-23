@@ -13,7 +13,7 @@ const UploadDropzone = ({ onFileSelect, selectedFile }: UploadDropzoneProps) => 
 
   const validateFile = (file: File): boolean => {
     const validTypes = ["image/jpeg", "image/png", "image/webp"];
-    const maxSize = 5 * 1024 * 1024; // 5MB
+    const maxSize = 10 * 1024 * 1024; // 10MB
 
     if (!validTypes.includes(file.type)) {
       toast.error("Please upload a valid image file (JPEG, PNG, or WebP)");
@@ -21,7 +21,7 @@ const UploadDropzone = ({ onFileSelect, selectedFile }: UploadDropzoneProps) => 
     }
 
     if (file.size > maxSize) {
-      toast.error("File size must be less than 5MB");
+      toast.error("File size must be less than 10MB");
       return false;
     }
 
@@ -92,7 +92,7 @@ const UploadDropzone = ({ onFileSelect, selectedFile }: UploadDropzoneProps) => 
                 </label>
               </p>
               <p className="mt-2 text-sm text-muted-foreground">
-                JPEG, PNG, or WebP · Max 5MB
+                JPEG, PNG, or WebP · Max 10MB
               </p>
             </div>
           </div>
