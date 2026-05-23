@@ -15,6 +15,7 @@ from services.core.app.splats.router import router as splats_router
 from services.core.app.pipelines.router import router as pipelines_router
 from services.core.app.generative.router import router as generative_router
 from services.core.app.wallet.router import router as wallet_router
+from services.core.app.editor_scenes.router import router as editor_scenes_router
 from services.common.middleware.exception import ExceptionMiddleware
 from services.common.database.middleware import DatabaseMiddleware
 from services.core.app.dependencies import (
@@ -100,3 +101,4 @@ app.include_router(splats_router, prefix="/api/v1/splats", tags=["splats"])
 app.include_router(pipelines_router, prefix="/api/v1/pipelines", tags=["pipelines"])
 app.include_router(generative_router, prefix="/api/v1/generative", tags=["generative"])
 app.include_router(wallet_router, prefix="/api/v1/me", tags=["wallet"])
+app.include_router(editor_scenes_router, prefix="/api/v1/editor", tags=["editor_scenes"])
