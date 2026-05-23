@@ -348,15 +348,14 @@ const Editor = () => {
     [],
   );
 
-  const sendSplatFile = useCallback(
+  const sendAssetFile = useCallback(
     async (file: File) => {
       devLog("react.file", `name=${file.name} size=${file.size}`);
-      if (!file.name.toLowerCase().endsWith(".splat")) {
-        if (file.name.toLowerCase().endsWith(".glb")) {
-          toast.error(".glb is coming — splat only for now");
-        } else {
-          toast.error(`Unsupported file: ${file.name}`);
-        }
+      const lower = file.name.toLowerCase();
+      const isSplat = lower.endsWith(".splat");
+      const isMesh  = lower.endsWith(".glb");
+      if (!isSplat && !isMesh) {
+        toast.error(`Unsupported file: ${file.name}`);
         return;
       }
       if (file.size > MAX_SPLAT_BYTES) {
@@ -368,10 +367,8 @@ const Editor = () => {
         const bytes = await file.arrayBuffer();
         const ours = bytes.slice(0);
         const sha = await sha256Hex(ours);
-        // C++ side strips path + extension when assigning object.name,
-        // so push the stripped basename so the FIFO claim-by-name later
-        // actually matches. Keep file.name on the asset entry only via
-        // sha (used for S3 key), and the extension is recovered by extOf.
+        // C++ strips path+ext when assigning object.name, so push the
+        // stripped stem so the FIFO claim-by-name later actually matches.
         const stem = file.name.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
         pendingAssetsRef.current.push({
           name: stem,
@@ -380,8 +377,9 @@ const Editor = () => {
           sha256: sha,
           size: file.size,
         });
+        const msgType = isSplat ? "editor-load-splat" : "editor-load-mesh";
         postToIframe(
-          { type: "editor-load-splat", bytes, name: file.name },
+          { type: msgType, bytes, name: file.name },
           [bytes],
         );
       } catch (err) {
@@ -401,14 +399,14 @@ const Editor = () => {
       for (const f of list) {
         try {
           // eslint-disable-next-line no-await-in-loop
-          await sendSplatFile(f);
+          await sendAssetFile(f);
         } catch (err) {
           devLog("react.send.error", String(err));
         }
       }
       devLog("react.send.end");
     },
-    [sendSplatFile],
+    [sendAssetFile],
   );
 
   const onPickFiles = useCallback(() => {
@@ -905,7 +903,7 @@ const Editor = () => {
       <input
         ref={fileInputRef}
         type="file"
-        accept=".splat"
+        accept=".splat,.glb"
         multiple
         className="hidden"
         onChange={onFileInputChange}
