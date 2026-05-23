@@ -39,6 +39,11 @@ export const editorScenesApi = {
     return apiClient.get<EditorSceneRead>(`/editor/scenes/${id}`);
   },
 
+  // Public read-only — returns the curated default scene shown to anon visitors.
+  getDefault: async (): Promise<EditorSceneRead> => {
+    return apiClient.get<EditorSceneRead>(`/editor/scenes/default`);
+  },
+
   update: async (
     id: string,
     payload: EditorScenePayload,

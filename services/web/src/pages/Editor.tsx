@@ -150,6 +150,10 @@ const Editor = () => {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [sceneList, setSceneList] = useState<EditorSceneListItem[]>([]);
+  // Flips true once the list has been fetched for the current user.
+  // Autoload uses this to distinguish "not fetched yet" from "0 scenes".
+  // State so the autoload effect re-runs when it changes.
+  const [sceneListLoaded, setSceneListLoaded] = useState(false);
   // Set true once we've decided whether to auto-load — prevents the
   // effect from firing twice (e.g. on user→sceneList state churn).
   const autoLoadHandledRef = useRef(false);
@@ -791,6 +795,7 @@ const Editor = () => {
   useEffect(() => {
     if (!user) {
       setSceneList([]);
+      setSceneListLoaded(false);
       autoLoadHandledRef.current = false;
       return;
     }
@@ -802,6 +807,9 @@ const Editor = () => {
       })
       .catch(() => {
         /* non-fatal */
+      })
+      .finally(() => {
+        if (!cancelled) setSceneListLoaded(true);
       });
     return () => {
       cancelled = true;
@@ -809,7 +817,9 @@ const Editor = () => {
   }, [user]);
 
   // Auto-load the most recently-updated scene when the logged-in user
-  // lands on /editor with no ?scene param. Runs once per user session.
+  // lands on /editor with no ?scene param. First-time users (no scenes
+  // yet) get a fresh "Untitled" seeded from the public default scene's
+  // manifest, so they start with content instead of a blank grid.
   useEffect(() => {
     if (autoLoadHandledRef.current) return;
     if (!user) return;
@@ -817,13 +827,69 @@ const Editor = () => {
       autoLoadHandledRef.current = true;
       return;
     }
-    if (sceneList.length === 0) return;
+    // sceneList=[] could mean "not fetched yet" or "user has zero scenes".
+    // Wait until the list-fetch effect has resolved for this user.
+    if (!sceneListLoaded) return;
     autoLoadHandledRef.current = true;
-    const latest = sceneList[0];
-    const next = new URLSearchParams();
-    next.set("scene", latest.id);
-    setSearchParams(next, { replace: true });
-  }, [user, sceneList, searchParams, setSearchParams]);
+    if (sceneList.length > 0) {
+      const latest = sceneList[0];
+      const next = new URLSearchParams();
+      next.set("scene", latest.id);
+      setSearchParams(next, { replace: true });
+      return;
+    }
+    // No scenes yet — clone the default scene as the user's first Untitled.
+    let cancelled = false;
+    (async () => {
+      try {
+        const def = await editorScenesApi.getDefault();
+        if (cancelled) return;
+        const created = await editorScenesApi.create({
+          name: "Untitled",
+          manifest: { ...def.manifest, name: "Untitled" },
+        });
+        if (cancelled) return;
+        const next = new URLSearchParams();
+        next.set("scene", created.id);
+        setSearchParams(next, { replace: true });
+        editorScenesApi.list().then((r) => setSceneList(r.scenes)).catch(() => {});
+      } catch (err) {
+        devLog("react.seed-default.error", String(err));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, sceneList, sceneListLoaded, searchParams, setSearchParams]);
+
+  // Anon visitors get a curated read-only default scene. Don't touch the
+  // URL (sceneId stays null so Save would create a new scene if they
+  // sign in mid-session). Runs once per session.
+  const defaultHandledRef = useRef(false);
+  useEffect(() => {
+    if (defaultHandledRef.current) return;
+    if (user) return;
+    if (!rendererReady) return;
+    if (searchParams.get("scene")) return;
+    defaultHandledRef.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        const scene = await editorScenesApi.getDefault();
+        if (cancelled) return;
+        setSceneName(scene.name);
+        setNameDraft(scene.name);
+        await hydrateFromManifest(scene.manifest);
+      } catch (err) {
+        // Non-fatal: anon visitor just sees the empty grid.
+        devLog("react.default.error", String(err));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, rendererReady, searchParams]);
 
   // URL-driven scene load: ?scene=<uuid>.
   useEffect(() => {

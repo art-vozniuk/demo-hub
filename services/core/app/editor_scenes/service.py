@@ -48,6 +48,13 @@ async def list_scenes_for_user(
     return list(result.scalars().all())
 
 
+async def get_scene_by_id(db: AsyncSession, scene_id: UUID) -> EditorScene | None:
+    # Owner-less lookup. Only used by the public default-scene endpoint —
+    # callers MUST NOT expose this to user-supplied ids.
+    result = await db.execute(select(EditorScene).where(EditorScene.id == scene_id))
+    return result.scalar_one_or_none()
+
+
 async def get_scene_for_user(
     db: AsyncSession,
     user_id: UUID,

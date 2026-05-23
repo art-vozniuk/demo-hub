@@ -19,6 +19,11 @@ log = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Scene shown to anonymous visitors on /editor. Read-only via the
+# /scenes/default route below. Hardcoded ID is fine while we have one
+# curated demo scene.
+DEFAULT_SCENE_ID = UUID("9a84f51e-54bf-4201-a094-56dd9fb41af3")
+
 
 def _get_user_dep():
     # Lazy import to avoid circular-import friction with tests.
@@ -50,6 +55,17 @@ async def list_scenes(
     return EditorSceneListResponse(
         scenes=[EditorSceneListItem.model_validate(s) for s in scenes]
     )
+
+
+@router.get("/scenes/default", response_model=EditorSceneRead)
+async def get_default_scene(db: DbSession) -> EditorSceneRead:
+    # Public; no auth dependency. Reads exactly DEFAULT_SCENE_ID.
+    scene = await service.get_scene_by_id(db, DEFAULT_SCENE_ID)
+    if scene is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Default scene not found"
+        )
+    return EditorSceneRead.model_validate(scene)
 
 
 @router.get("/scenes/{scene_id}", response_model=EditorSceneRead)
