@@ -15,7 +15,7 @@ import {
   pipelinesApi,
   ApiError,
   type GenerativePresetRead,
-  type GenerativeEditingResult,
+  type FluxResult,
   type PipelineStatusItem,
 } from "@/api";
 import { uploadToS3, parseS3Url, getFileExtension } from "@/lib/s3";
@@ -29,7 +29,7 @@ import { toast } from "sonner";
 const POLL_INTERVAL_MS = 1000;
 const POLL_TIMEOUT_MS = 240_000;
 
-const GenerativeEditingGenerate = () => {
+const FluxGenerate = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { track } = useAnalytics();
@@ -333,7 +333,7 @@ const GenerativeEditingGenerate = () => {
     if (!uploadedRef) return;
     if (faceSwapCost === undefined) return;
     const fluxResultUrl = (
-      pipelineStatus?.result as GenerativeEditingResult | undefined
+      pipelineStatus?.result as FluxResult | undefined
     )?.result_url;
     if (!fluxResultUrl) return;
 
@@ -466,7 +466,7 @@ const GenerativeEditingGenerate = () => {
           <h2 className="text-2xl font-bold">Preset unavailable</h2>
           <p className="text-muted-foreground">{presetError}</p>
           <Button
-            onClick={() => navigate("/generative-editing")}
+            onClick={() => navigate("/flux")}
             variant="outline"
           >
             <ArrowLeft className="mr-2 h-4 w-4" />
@@ -486,7 +486,7 @@ const GenerativeEditingGenerate = () => {
   }
 
   const resultUrl = (pipelineStatus?.result as
-    | GenerativeEditingResult
+    | FluxResult
     | undefined)?.result_url;
   const refineResultUrl = (refinePipelineStatus?.result as
     | { result_url?: string }
@@ -503,7 +503,7 @@ const GenerativeEditingGenerate = () => {
       <Button
         variant="ghost"
         size="sm"
-        onClick={() => navigate("/generative-editing")}
+        onClick={() => navigate("/flux")}
         className="gap-1"
       >
         <ArrowLeft className="h-4 w-4" />
@@ -657,4 +657,4 @@ const GenerativeEditingGenerate = () => {
   );
 };
 
-export default GenerativeEditingGenerate;
+export default FluxGenerate;

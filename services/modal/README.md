@@ -6,7 +6,7 @@ endpoints, and proxy-auth tokens.
 
 | App | Demo | Entry file | Volume | Endpoint env vars |
 |---|---|---|---|---|
-| `demo-hub-flux` | Generative Editing | `flux/app.py` | `flux-models` | `MODAL_GENERATIVE_SUBMIT_URL`, `MODAL_GENERATIVE_POLL_URL` |
+| `demo-hub-flux` | Flux | `flux/app.py` | `flux-models` | `MODAL_GENERATIVE_SUBMIT_URL`, `MODAL_GENERATIVE_POLL_URL` |
 | `demo-hub-sharp` | SHARP (single-image → 3DGS) | `sharp/app.py` | `sharp-models` | `MODAL_SHARP_SUBMIT_URL`, `MODAL_SHARP_POLL_URL` |
 
 Every app exposes the same shape: a `submit` endpoint that spawns the
@@ -42,9 +42,9 @@ Each per-app script is a 3-line wrapper around a function in
 preamble pins `cwd` + `sys.path` to `services/modal/` so the modal CLI
 can resolve `from common.lib import ...` inside the app files.
 
-## FLUX.2 klein — Generative Editing
+## FLUX.2 klein — Flux
 
-Serverless GPU backend for the **Generative Editing** demo.
+Serverless GPU backend for the **Flux** demo.
 Runs FLUX.2 klein 4B image-conditioned editing on a Modal GPU, fronted
 by submit + poll HTTP endpoints that the platform's
 [dispatch worker](../dispatch) calls.

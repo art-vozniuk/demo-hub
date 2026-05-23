@@ -7,7 +7,7 @@ import { useWallet } from "@/contexts/WalletContext";
 import { generativeApi, type GenerativePresetRead } from "@/api";
 import { useAnalytics } from "@/hooks/useAnalytics";
 
-const GenerativeEditing = () => {
+const Flux = () => {
   const navigate = useNavigate();
   const { track } = useAnalytics();
   const { getCost } = useWallet();
@@ -40,7 +40,7 @@ const GenerativeEditing = () => {
       name: "generative_preset_opened",
       params: { preset_slug: preset.slug },
     });
-    navigate(`/generative-editing/generate?preset=${preset.slug}`);
+    navigate(`/flux/generate?preset=${preset.slug}`);
   };
 
   const handleCustom = () => {
@@ -48,13 +48,13 @@ const GenerativeEditing = () => {
       name: "generative_preset_opened",
       params: { preset_slug: "__custom__" },
     });
-    navigate("/generative-editing/custom");
+    navigate("/flux/custom");
   };
 
   return (
     <main className="container mx-auto px-6 py-16 space-y-12 min-h-[calc(100vh-8rem)]">
       <DemoHeader
-        title="Generative Editing"
+        title="Flux"
         cost={fluxCost}
         description="Image-conditioned generative editing on FLUX.2 klein. Pick a cinematic preset and the platform routes your photo through a serverless GPU on Modal — async dispatch worker, RabbitMQ orchestration."
         tagline="Pick a cinematic preset"
@@ -90,4 +90,4 @@ const GenerativeEditing = () => {
   );
 };
 
-export default GenerativeEditing;
+export default Flux;

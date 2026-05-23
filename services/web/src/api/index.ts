@@ -19,7 +19,7 @@ export type {
   DetectedFace,
   FaceRecognitionResult,
   FaceSwapResult,
-  GenerativeEditingResult,
+  FluxResult,
   SharpResult,
   PipelineResult,
   PipelineStatus,
