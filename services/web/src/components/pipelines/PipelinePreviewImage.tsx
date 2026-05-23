@@ -52,6 +52,7 @@ const PipelinePreviewImage = ({
             alt={label}
             className="h-32 w-32 sm:h-40 sm:w-40 object-cover"
             loading="lazy"
+            decoding="async"
           />
         </button>
         <div

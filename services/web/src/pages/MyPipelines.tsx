@@ -135,8 +135,23 @@ const MyPipelines = () => {
     [pipelines],
   );
 
+  useEffect(() => {
+    if (pipelines.length === 0) return;
+    setExpanded((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const p of pipelines) {
+        if (!(p.id in next)) {
+          next[p.id] = true;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [pipelines]);
+
   const toggleRow = (id: string) =>
-    setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
+    setExpanded((prev) => ({ ...prev, [id]: !(prev[id] ?? true) }));
 
   if (authLoading || !user) {
     return null;
@@ -188,7 +203,7 @@ const MyPipelines = () => {
             </TableHeader>
             <TableBody>
               {pipelines.map((p) => {
-                const isOpen = !!expanded[p.id];
+                const isOpen = expanded[p.id] ?? true;
                 return (
                   <Fragment key={p.id}>
                     <TableRow
