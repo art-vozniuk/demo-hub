@@ -45,8 +45,12 @@ else
         echo "REDIS_URL=redis://redis:6379" >> "$CORE_DST"
     fi
 
-    # Allow requests from both the nginx proxy (8080) and direct web dev server (5173)
-    portable_sed 's|^ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=http://localhost:5173,http://localhost:8080|' "$CORE_DST"
+    # Allow:
+    #   :5173 — web container's dev server inside docker compose
+    #   :8080 — nginx (single docker entry point)
+    #   :8085 — standalone `npm run dev` outside docker (host-side hot-reload
+    #           against the live docker stack; see services/web/.env.local)
+    portable_sed 's|^ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=http://localhost:5173,http://localhost:8080,http://localhost:8085|' "$CORE_DST"
 
     strip_comments_and_blanks "$CORE_DST"
 
