@@ -6,7 +6,7 @@ interface Props {
   pipeline: UserPipelineItem;
 }
 
-const GenerativeEditingDetails = ({ pipeline }: Props) => {
+const FluxDetails = ({ pipeline }: Props) => {
   const input = pipeline.input ?? {};
   const result = (pipeline.result ?? {}) as { result_url?: string };
   const prompt = typeof input.prompt === "string" ? input.prompt : null;
@@ -47,4 +47,4 @@ const GenerativeEditingDetails = ({ pipeline }: Props) => {
   );
 };
 
-export default GenerativeEditingDetails;
+export default FluxDetails;

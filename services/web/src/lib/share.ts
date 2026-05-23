@@ -8,8 +8,8 @@ export const canUseWebShare = (): boolean =>
 
 export const PIPELINE_TRY_HREF: Record<string, string> = {
   face_swap: "/face-fusion",
-  generative_editing: "/generative-editing",
-  generative_editing_custom: "/generative-editing/custom",
+  generative_editing: "/flux",
+  generative_editing_custom: "/flux/custom",
   sharp: "/sharp",
 };
 

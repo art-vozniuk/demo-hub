@@ -33,7 +33,7 @@ export interface FaceSwapResult {
   result_url: string;
 }
 
-export interface GenerativeEditingResult {
+export interface FluxResult {
   result_url: string;
 }
 
@@ -47,7 +47,7 @@ export interface SharpResult {
 export type PipelineResult =
   | FaceRecognitionResult
   | FaceSwapResult
-  | GenerativeEditingResult
+  | FluxResult
   | SharpResult
   | Record<string, any>;
 
