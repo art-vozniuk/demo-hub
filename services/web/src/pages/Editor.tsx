@@ -42,12 +42,6 @@ import {
   type SceneManifest,
   type Vec3Tuple,
 } from "@/lib/scene-manifest";
-import {
-  clearRestorePayload,
-  loadRestorePayload,
-  saveRestorePayload,
-  type SceneBytesMap,
-} from "@/lib/editor-idb";
 import { uploadToS3 } from "@/lib/s3";
 
 const RENDERER_URL = import.meta.env.VITE_RENDERER_URL as string | undefined;
@@ -182,6 +176,11 @@ const Editor = () => {
   const renameInputRef = useRef<HTMLInputElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
+  // Mirror of `objects` state, updated synchronously inside the
+  // editor-objects handler. buildManifest iterates over this so that
+  // doSave called immediately after hydrate (before React has re-rendered)
+  // still sees the freshly-loaded objects instead of the stale [] closure.
+  const objectsRef = useRef<SceneObject[]>([]);
   // Asset + transform caches keyed by renderer-assigned object id.
   const assetsRef = useRef<Map<number, AssetEntry>>(new Map());
   // FIFO queue of bytes/sha for incoming objects (matched on the next
@@ -276,6 +275,7 @@ const Editor = () => {
           }
         }
         knownIdsRef.current = seen;
+        objectsRef.current = next;
         setObjects(next);
         if (mutated) markDirty();
       } else if (t === "editor-selection-changed") {
@@ -502,7 +502,9 @@ const Editor = () => {
 
   const buildManifest = useCallback((): SceneManifest => {
     const out: ManifestObject[] = [];
-    for (const o of objects) {
+    // Use the ref (not state) so a save fired immediately after hydrate
+    // sees the just-loaded objects.
+    for (const o of objectsRef.current) {
       const a = assetsRef.current.get(o.id);
       const tr = transformsRef.current[o.id];
       const kind: ManifestObject["kind"] = (o.kind as ManifestObject["kind"]) ?? "splat";
@@ -547,7 +549,7 @@ const Editor = () => {
       },
     };
     return { schema: 1, name: sceneName, objects: [cameraEntry, ...out] };
-  }, [objects, sceneName, cameraPose]);
+  }, [sceneName, cameraPose]);
 
   const uploadPendingAssets = useCallback(
     async (effectiveSceneId: string, effectiveUserId: string) => {
@@ -575,14 +577,10 @@ const Editor = () => {
     [],
   );
 
-  // Hydrate the editor from a manifest. Loads bytes from each asset URL
-  // (or from a pre-fetched bytes map for the IDB restore case), posts
-  // editor-load-* messages, then editor-set-transform.
+  // Hydrate the editor from a manifest. Loads bytes from each asset URL,
+  // posts editor-load-* messages, then editor-set-transform.
   const hydrateFromManifest = useCallback(
-    async (
-      manifest: SceneManifest,
-      preloadedBytes?: SceneBytesMap,
-    ): Promise<void> => {
+    async (manifest: SceneManifest): Promise<void> => {
       suppressDirtyRef.current = true;
       // Apply camera pose first so the user sees the right viewpoint
       // while assets are still streaming in.
@@ -603,8 +601,8 @@ const Editor = () => {
       try {
         for (const o of manifest.objects) {
           if (o.kind === "splat" || o.kind === "mesh") {
-            let bytes: ArrayBuffer | undefined = preloadedBytes?.[o.id];
-            if (!bytes && o.asset?.url) {
+            let bytes: ArrayBuffer | undefined;
+            if (o.asset?.url) {
               const r = await fetch(o.asset.url);
               if (!r.ok) throw new Error(`Asset fetch failed: ${o.asset.url}`);
               bytes = await r.arrayBuffer();
@@ -648,10 +646,21 @@ const Editor = () => {
             }
           }
         }
-        // Apply transforms after a tick so the renderer has finished
-        // loading and assigned ids. Match by name (FIFO) since we don't
-        // have an explicit confirmation message.
-        await new Promise((r) => setTimeout(r, 50));
+        // Wait for the renderer to surface every loaded splat/mesh via
+        // editor-objects (each one populates assetsRef). 50ms is not
+        // enough for real-world splats — poll the ref instead, with a
+        // generous upper bound.
+        const expected = manifest.objects.filter(
+          (o) => o.kind === "splat" || o.kind === "mesh",
+        ).length;
+        const startedAt = Date.now();
+        while (assetsRef.current.size < expected && Date.now() - startedAt < 30_000) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        devLog(
+          "react.hydrate.wait",
+          `expected=${expected} got=${assetsRef.current.size} elapsedMs=${Date.now() - startedAt}`,
+        );
         // Pair manifest objects to the corresponding new object ids by
         // name. Read from assetsRef (mutated synchronously by the
         // editor-objects handler) — React state may not have rendered yet.
@@ -709,21 +718,13 @@ const Editor = () => {
   );
 
   const doSave = useCallback(async () => {
+    devLog(
+      "react.doSave.start",
+      `user=${user?.id ?? "null"} sceneId=${sceneId ?? "null"} saving=${saving} objects=${objectsRef.current.length}`,
+    );
     if (saving) return;
     if (!user) {
-      // Stash the current state in IDB then bounce through auth.
-      const manifest = buildManifest();
-      const bytes: SceneBytesMap = {};
-      for (const [id, a] of assetsRef.current.entries()) {
-        if (a.bytes) bytes[String(id)] = a.bytes;
-      }
-      try {
-        await saveRestorePayload({ manifest, bytes });
-      } catch (err) {
-        toast.error("Couldn't stash scene for sign-in");
-        return;
-      }
-      navigate("/auth?redirect=/editor?restore=1");
+      toast.error("Sign in to save scenes");
       return;
     }
     setSaving(true);
@@ -732,11 +733,17 @@ const Editor = () => {
       // trips through the backend so we get a real UUID.
       let id = sceneId;
       if (!id) {
+        const initialManifest = buildManifest();
+        devLog(
+          "react.doSave.create",
+          `name=${sceneName} objects=${initialManifest.objects.length}`,
+        );
         const created = await editorScenesApi.create({
           name: sceneName,
-          manifest: buildManifest(),
+          manifest: initialManifest,
         });
         id = created.id;
+        devLog("react.doSave.created", `id=${id}`);
         setSceneId(id);
         setSearchParams(
           (prev) => {
@@ -749,7 +756,12 @@ const Editor = () => {
       }
       await uploadPendingAssets(id, user.id);
       const finalManifest = buildManifest();
+      devLog(
+        "react.doSave.update",
+        `id=${id} objects=${finalManifest.objects.length}`,
+      );
       await editorScenesApi.update(id, { name: sceneName, manifest: finalManifest });
+      devLog("react.doSave.updated");
       setDirty(false);
       lastSavedCameraRef.current = {
         position: cameraPose.position,
@@ -760,6 +772,7 @@ const Editor = () => {
       editorScenesApi.list().then((r) => setSceneList(r.scenes)).catch(() => {});
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Save failed";
+      devLog("react.doSave.error", msg);
       toast.error(msg);
     } finally {
       setSaving(false);
@@ -772,7 +785,6 @@ const Editor = () => {
     cameraPose,
     buildManifest,
     uploadPendingAssets,
-    navigate,
     setSearchParams,
   ]);
 
@@ -798,18 +810,18 @@ const Editor = () => {
     };
   }, [user]);
 
-  // Auto-load the most recently-updated scene when the user lands on
-  // /editor with no scene or restore param. Runs once per user session.
+  // Auto-load the most recently-updated scene when the logged-in user
+  // lands on /editor with no ?scene param. Runs once per user session.
   useEffect(() => {
     if (autoLoadHandledRef.current) return;
     if (!user) return;
-    if (searchParams.get("scene") || searchParams.get("restore") === "1") {
+    if (searchParams.get("scene")) {
       autoLoadHandledRef.current = true;
       return;
     }
-    if (sceneList.length === 0) return; // no scenes yet — stay blank.
+    if (sceneList.length === 0) return;
     autoLoadHandledRef.current = true;
-    const latest = sceneList[0]; // server returns updated_at desc.
+    const latest = sceneList[0];
     const next = new URLSearchParams();
     next.set("scene", latest.id);
     setSearchParams(next, { replace: true });
@@ -818,8 +830,6 @@ const Editor = () => {
   // URL-driven scene load: ?scene=<uuid>.
   useEffect(() => {
     const id = searchParams.get("scene");
-    const restore = searchParams.get("restore");
-    if (restore === "1") return; // handled by separate effect.
     if (!id || !rendererReady) return;
     if (id === sceneId) return;
     let cancelled = false;
@@ -849,46 +859,6 @@ const Editor = () => {
     // changes or renderer becomes ready.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, rendererReady]);
-
-  // IDB restore after sign-in detour: ?restore=1.
-  useEffect(() => {
-    if (searchParams.get("restore") !== "1") return;
-    if (!rendererReady) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const payload = await loadRestorePayload();
-        if (!payload) {
-          // Nothing to restore — clean URL and bail.
-          setSearchParams(new URLSearchParams(), { replace: true });
-          return;
-        }
-        setSceneName(payload.manifest.name);
-        setNameDraft(payload.manifest.name);
-        await hydrateFromManifest(payload.manifest, payload.bytes);
-        await clearRestorePayload();
-        if (cancelled) return;
-        // Re-enable dirty so the auto-save fires (hydrate cleared it).
-        setDirty(true);
-        await doSave();
-        // Strip ?restore=1 (sceneId param is set by doSave).
-        setSearchParams(
-          (prev) => {
-            const next = new URLSearchParams(prev);
-            next.delete("restore");
-            return next;
-          },
-          { replace: true },
-        );
-      } catch (err) {
-        toast.error("Couldn't restore scene");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rendererReady]);
 
   // onbeforeunload warning while dirty.
   useEffect(() => {
@@ -987,6 +957,17 @@ const Editor = () => {
         onKeyDown={onPanelKeyDown}
         className="w-72 shrink-0 border-l border-border bg-card flex flex-col overflow-hidden outline-none"
       >
+        {!user && (
+          <div className="px-3 py-2 bg-amber-500/15 border-b border-amber-500/40 text-amber-200 text-[11px] leading-snug">
+            <a
+              href={`/auth?redirect=${encodeURIComponent("/editor")}`}
+              className="font-semibold underline underline-offset-2 hover:text-amber-100"
+            >
+              Sign in
+            </a>
+            {" "}to save scenes and run generations.
+          </div>
+        )}
         {/* Scene section. */}
         <div className="flex flex-col min-h-0">
           <SceneHeader
@@ -1005,6 +986,7 @@ const Editor = () => {
             objectCount={objects.length}
             dirty={dirty}
             saving={saving}
+            loggedIn={!!user}
             onSave={() => void doSave()}
             scenes={sceneList}
             currentSceneId={sceneId}
@@ -1026,6 +1008,7 @@ const Editor = () => {
               pendingAssetsRef.current = [];
               transformsRef.current = {};
               knownIdsRef.current = new Set();
+              objectsRef.current = [];
               setObjects([]);
               setSelectedId(0);
               setTransform(null);
@@ -1299,6 +1282,7 @@ const SceneHeader = ({
   objectCount,
   dirty,
   saving,
+  loggedIn,
   onSave,
   scenes,
   currentSceneId,
@@ -1316,6 +1300,7 @@ const SceneHeader = ({
   objectCount: number;
   dirty: boolean;
   saving: boolean;
+  loggedIn: boolean;
   onSave: () => void;
   scenes: EditorSceneListItem[];
   currentSceneId: string | null;
@@ -1352,9 +1337,15 @@ const SceneHeader = ({
     )}
     <DropdownMenu>
       <DropdownMenuTrigger
-        className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider border border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/40 outline-none"
+        disabled={!loggedIn}
+        className={cn(
+          "shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider border border-border/60 outline-none",
+          loggedIn
+            ? "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+            : "text-muted-foreground/40 cursor-not-allowed",
+        )}
         aria-label="Load scene"
-        title="Load scene"
+        title={loggedIn ? "Load scene" : "Sign in to open scenes"}
       >
         <FolderOpen className="h-3 w-3" />
         <span>Load</span>
@@ -1388,16 +1379,24 @@ const SceneHeader = ({
     <button
       type="button"
       onClick={onSave}
-      disabled={!dirty || saving}
+      disabled={!loggedIn || !dirty || saving}
       className={cn(
         "shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider",
         "border border-border/60",
-        !dirty || saving
+        !loggedIn || !dirty || saving
           ? "text-muted-foreground/50 cursor-not-allowed"
           : "text-foreground hover:bg-primary/20 hover:text-foreground",
       )}
       aria-label="Save scene"
-      title={saving ? "Saving…" : dirty ? "Save scene" : "No changes"}
+      title={
+        !loggedIn
+          ? "Sign in to save scenes"
+          : saving
+            ? "Saving…"
+            : dirty
+              ? "Save scene"
+              : "No changes"
+      }
     >
       {saving ? (
         <Loader2 className="h-3 w-3 animate-spin" />
