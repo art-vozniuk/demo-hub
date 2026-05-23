@@ -16,6 +16,7 @@ import GenerativeEditing from "./pages/GenerativeEditing";
 import GenerativeEditingCustom from "./pages/GenerativeEditingCustom";
 import GenerativeEditingGenerate from "./pages/GenerativeEditingGenerate";
 import Renderer from "./pages/Renderer";
+import Editor from "./pages/Editor";
 import Sharp from "./pages/Sharp";
 import SharpViewer from "./pages/SharpViewer";
 import Auth from "./pages/Auth";
@@ -47,6 +48,7 @@ const App = () => (
                       <Route path="/generative-editing/generate" element={<GenerativeEditingGenerate />} />
                       <Route path="/generative-editing/custom" element={<GenerativeEditingCustom />} />
                       <Route path="/renderer" element={<Renderer />} />
+                      <Route path="/editor" element={<Editor />} />
                       <Route path="/sharp" element={<Sharp />} />
                       <Route path="/sharp/view" element={<SharpViewer />} />
                       <Route path="/me/pipelines" element={<MyPipelines />} />

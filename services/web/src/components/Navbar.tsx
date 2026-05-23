@@ -27,6 +27,7 @@ const ALL_LINKS: NavItem[] = [
   { to: "/sharp", label: "SHARP" },
   { to: "/renderer", label: "Gaussian Splatting" },
   { to: "/face-fusion", label: "Face Swap" },
+  { to: "/editor", label: "3D Editor" },
   { to: "/author", label: "Author", end: true },
 ];
 
@@ -127,6 +128,8 @@ const Navbar = () => {
       track({ name: 'nav_generative_clicked', params: {} });
     } else if (to === "/renderer") {
       track({ name: 'nav_renderer_clicked', params: {} });
+    } else if (to === "/editor") {
+      track({ name: 'nav_editor_clicked', params: {} });
     } else if (to === "/sharp") {
       track({ name: 'nav_sharp_clicked', params: {} });
     }
