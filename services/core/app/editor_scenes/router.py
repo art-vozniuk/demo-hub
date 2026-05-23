@@ -32,7 +32,9 @@ def _get_user_dep():
     return get_current_user
 
 
-@router.post("/scenes", response_model=EditorSceneRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/scenes", response_model=EditorSceneRead, status_code=status.HTTP_201_CREATED
+)
 async def create_scene(
     payload: EditorSceneCreate,
     db: DbSession,

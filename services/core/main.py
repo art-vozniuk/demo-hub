@@ -101,4 +101,6 @@ app.include_router(splats_router, prefix="/api/v1/splats", tags=["splats"])
 app.include_router(pipelines_router, prefix="/api/v1/pipelines", tags=["pipelines"])
 app.include_router(generative_router, prefix="/api/v1/generative", tags=["generative"])
 app.include_router(wallet_router, prefix="/api/v1/me", tags=["wallet"])
-app.include_router(editor_scenes_router, prefix="/api/v1/editor", tags=["editor_scenes"])
+app.include_router(
+    editor_scenes_router, prefix="/api/v1/editor", tags=["editor_scenes"]
+)

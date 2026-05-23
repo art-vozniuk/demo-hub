@@ -46,9 +46,13 @@ async def delete_keys(keys: Iterable[str]) -> None:
     }
     async with httpx.AsyncClient(timeout=10.0) as cx:
         try:
-            r = await cx.request("DELETE", url, headers=headers, json={"prefixes": list(keys)})
+            r = await cx.request(
+                "DELETE", url, headers=headers, json={"prefixes": list(keys)}
+            )
             if r.status_code >= 400:
-                log.warning("editor_scenes.storage: delete failed %s %s", r.status_code, r.text)
+                log.warning(
+                    "editor_scenes.storage: delete failed %s %s", r.status_code, r.text
+                )
         except Exception as e:
             log.warning("editor_scenes.storage: delete exception %s", e)
 
@@ -75,7 +79,11 @@ async def list_keys_under_prefix(prefix: str) -> list[str]:
                     json={"prefix": prefix, "limit": page, "offset": cursor},
                 )
                 if r.status_code >= 400:
-                    log.warning("editor_scenes.storage: list failed %s %s", r.status_code, r.text)
+                    log.warning(
+                        "editor_scenes.storage: list failed %s %s",
+                        r.status_code,
+                        r.text,
+                    )
                     break
                 rows = r.json() or []
                 if not isinstance(rows, list) or not rows:

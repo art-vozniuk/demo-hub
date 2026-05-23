@@ -21,7 +21,14 @@ TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:?cache=shared"
 async def engine():
     # Ensure models are loaded by referencing them
     # This ensures they're registered with Base.metadata
-    _ = [Pipeline, RecastTemplate, GenerativePreset, PipelineType, CostMultiplier, EditorScene]
+    _ = [
+        Pipeline,
+        RecastTemplate,
+        GenerativePreset,
+        PipelineType,
+        CostMultiplier,
+        EditorScene,
+    ]
 
     engine = create_async_engine(
         TEST_DATABASE_URL,
