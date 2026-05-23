@@ -6,18 +6,12 @@ import {
   useState,
 } from "react";
 import {
-  Upload,
-  Trash2,
-  AlertCircle,
+  Eye,
+  EyeOff,
+  Plus,
   Loader2,
-  Move,
-  RotateCw,
-  Maximize2,
-  Magnet,
+  Trash2,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
-import { Toggle } from "@/components/ui/toggle";
 import { RendererUnsupported } from "@/components/RendererUnsupported";
 import { checkWebGpu, type WebGpuStatus } from "@/lib/webgpu";
 import { toast } from "sonner";
@@ -26,32 +20,47 @@ import { cn } from "@/lib/utils";
 const RENDERER_URL = import.meta.env.VITE_RENDERER_URL as string | undefined;
 const MAX_SPLAT_BYTES = 256 * 1024 * 1024;
 
-type WebGpuState = { kind: "checking" } | WebGpuStatus;
-type Tool = "translate" | "rotate" | "scale";
+// Fire-and-forget dev log — Vite middleware appends to
+// services/external/renderer/dev.log and echoes to its terminal.
+function devLog(tag: string, ...parts: unknown[]) {
+  if (!import.meta.env.DEV) return;
+  try {
+    const msg = parts
+      .map((p) => (typeof p === "string" ? p : JSON.stringify(p)))
+      .join(" ");
+    fetch("/__dev_log", {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: `[${tag}] ${msg}`,
+      keepalive: true,
+    }).catch(() => {});
+  } catch {
+    /* never throw from logging */
+  }
+}
 
-type LoadState =
-  | { kind: "idle" }
-  | { kind: "uploading"; name: string; size: number }
-  | { kind: "loaded"; name: string; size: number; count: number }
-  | { kind: "error"; message: string };
+type WebGpuState = { kind: "checking" } | WebGpuStatus;
+
+type SceneObject = {
+  id: number;
+  name: string;
+  visible: boolean;
+  count: number;
+};
 
 type TransformMsg = {
   type: "editor-transform";
   final: boolean;
   drag: boolean;
-  tool: Tool;
-  axis: number; // -1 / 0=X / 1=Y / 2=Z
+  kind: "translate" | "rotate" | "scale" | "none";
+  axis: number;
+  id: number;
   position: [number, number, number];
   rotationDeg: [number, number, number];
   scale: [number, number, number];
 };
 
-type SelectionMsg = {
-  type: "editor-selection-changed";
-  selected: boolean;
-  hasContent: boolean;
-  count: number;
-};
+const AXIS_COLOR = ["text-rose-400", "text-emerald-400", "text-sky-400"];
 
 function buildEditorIframeSrc(base: string): string {
   try {
@@ -64,30 +73,22 @@ function buildEditorIframeSrc(base: string): string {
   }
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-const AXIS_LABEL = ["X", "Y", "Z"];
-const AXIS_COLOR = ["text-red-400", "text-green-400", "text-blue-400"];
-
 const Editor = () => {
   const [webGpu, setWebGpu] = useState<WebGpuState>({ kind: "checking" });
   const [rendererReady, setRendererReady] = useState(false);
-  const [load, setLoad] = useState<LoadState>({ kind: "idle" });
-  const [dragOver, setDragOver] = useState(false);
-
-  const [tool, setTool] = useState<Tool>("translate");
-  const [snap, setSnap] = useState(false);
-
-  const [selection, setSelection] = useState<SelectionMsg | null>(null);
+  const [objects, setObjects] = useState<SceneObject[]>([]);
+  const [selectedId, setSelectedId] = useState<number>(0);
   const [transform, setTransform] = useState<TransformMsg | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [uploadingCount, setUploadingCount] = useState(0);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
 
+  // WebGPU preflight.
   useEffect(() => {
     let alive = true;
     checkWebGpu().then((s) => {
@@ -98,43 +99,29 @@ const Editor = () => {
     };
   }, []);
 
-  // postMessage listener for renderer-side events.
+  // postMessage listener.
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       const t = e.data?.type;
+      if (t && typeof t === "string" && (t.startsWith("editor-") || t.startsWith("renderer-") || t === "splat-ready")) {
+        devLog(
+          "react.in",
+          t,
+          t === "editor-objects" ? `n=${e.data.objects?.length ?? 0}` : "",
+          t === "editor-selection-changed" ? `id=${e.data.id}` : "",
+          t === "editor-transform" ? `final=${e.data.final} drag=${e.data.drag}` : "",
+        );
+      }
       if (t === "renderer-ready" || t === "editor-ready" || t === "splat-ready") {
         setRendererReady(true);
-      } else if (t === "editor-splat-loaded") {
-        setLoad((prev) =>
-          prev.kind === "uploading"
-            ? {
-                kind: "loaded",
-                name: prev.name,
-                size: prev.size,
-                count: Number(e.data.count) || 0,
-              }
-            : prev,
-        );
-        toast.success("Splat loaded");
-      } else if (t === "editor-error") {
-        const message = String(e.data?.message ?? "Renderer error");
-        setLoad({ kind: "error", message });
-        toast.error(message);
-      } else if (t === "editor-scene-cleared") {
-        setLoad({ kind: "idle" });
-        setSelection(null);
-        setTransform(null);
+      } else if (t === "editor-objects") {
+        setObjects((e.data.objects as SceneObject[]) ?? []);
       } else if (t === "editor-selection-changed") {
-        setSelection(e.data as SelectionMsg);
+        setSelectedId(Number(e.data.id) || 0);
       } else if (t === "editor-transform") {
         setTransform(e.data as TransformMsg);
-      } else if (t === "editor-tool-changed") {
-        const next = e.data?.tool as Tool;
-        if (next === "translate" || next === "rotate" || next === "scale") {
-          setTool(next);
-        }
-      } else if (t === "editor-snap") {
-        setSnap(Boolean(e.data?.on));
+      } else if (t === "editor-error") {
+        toast.error(String(e.data?.message ?? "Renderer error"));
       }
     };
     window.addEventListener("message", onMessage);
@@ -146,74 +133,165 @@ const Editor = () => {
     [],
   );
 
-  const postToIframe = useCallback((msg: unknown, transfer?: Transferable[]) => {
-    const w = iframeRef.current?.contentWindow;
-    if (!w) return;
-    if (transfer) w.postMessage(msg, "*", transfer);
-    else w.postMessage(msg, "*");
-  }, []);
+  const postToIframe = useCallback(
+    (msg: unknown, transfer?: Transferable[]) => {
+      const w = iframeRef.current?.contentWindow;
+      const m = msg as { type?: string; id?: number; name?: string; bytes?: ArrayBuffer };
+      devLog(
+        "react.out",
+        m?.type ?? "?",
+        m?.id !== undefined ? `id=${m.id}` : "",
+        m?.name !== undefined ? `name=${m.name}` : "",
+        m?.bytes ? `bytes=${m.bytes.byteLength}` : "",
+        w ? "" : "(no iframe!)",
+      );
+      if (!w) return;
+      try {
+        if (transfer) w.postMessage(msg, "*", transfer);
+        else w.postMessage(msg, "*");
+        devLog("react.out.ok", m?.type ?? "?");
+      } catch (err) {
+        devLog("react.out.error", m?.type ?? "?", String(err));
+      }
+    },
+    [],
+  );
 
-  // Push tool / snap whenever user toggles them in the UI.
-  useEffect(() => {
-    if (!rendererReady) return;
-    postToIframe({ type: "editor-set-tool", tool });
-  }, [tool, rendererReady, postToIframe]);
-
-  useEffect(() => {
-    if (!rendererReady) return;
-    postToIframe({ type: "editor-set-snap", on: snap });
-  }, [snap, rendererReady, postToIframe]);
-
-  const sendSplatBytes = useCallback(
+  const sendSplatFile = useCallback(
     async (file: File) => {
+      devLog("react.file", `name=${file.name} size=${file.size}`);
       if (!file.name.toLowerCase().endsWith(".splat")) {
-        toast.error("Please pick a .splat file");
+        if (file.name.toLowerCase().endsWith(".glb")) {
+          toast.error(".glb is coming — splat only for now");
+        } else {
+          toast.error(`Unsupported file: ${file.name}`);
+        }
         return;
       }
       if (file.size > MAX_SPLAT_BYTES) {
-        toast.error(`File too large (${formatBytes(file.size)} > 256 MB cap)`);
+        toast.error(`File too large: ${file.name}`);
         return;
       }
-
-      setLoad({ kind: "uploading", name: file.name, size: file.size });
-
-      let bytes: ArrayBuffer;
+      setUploadingCount((c) => c + 1);
       try {
-        bytes = await file.arrayBuffer();
+        const bytes = await file.arrayBuffer();
+        postToIframe(
+          { type: "editor-load-splat", bytes, name: file.name },
+          [bytes],
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : "Read failed";
-        setLoad({ kind: "error", message });
         toast.error(message);
-        return;
+      } finally {
+        setUploadingCount((c) => Math.max(0, c - 1));
       }
-
-      postToIframe({ type: "editor-load-splat", bytes }, [bytes]);
     },
     [postToIframe],
   );
 
-  const onFileChange = useCallback(
+  const sendFiles = useCallback(
+    async (files: FileList | File[]) => {
+      const list = Array.from(files);
+      devLog("react.send.start", `n=${list.length}`);
+      for (const f of list) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await sendSplatFile(f);
+        } catch (err) {
+          devLog("react.send.error", String(err));
+        }
+      }
+      devLog("react.send.end");
+    },
+    [sendSplatFile],
+  );
+
+  const onPickFiles = useCallback(() => {
+    devLog("react.pick", `input=${fileInputRef.current ? "ok" : "null"}`);
+    fileInputRef.current?.click();
+  }, []);
+
+  const onFileInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      const f = e.target.files?.[0];
-      e.target.value = "";
-      if (f) void sendSplatBytes(f);
+      const inputEl = e.target;
+      // Snapshot the FileList into a stable array BEFORE clearing the
+      // input — Chrome mutates the live FileList in-place when value="".
+      const snapshot = inputEl.files ? Array.from(inputEl.files) : [];
+      devLog("react.input.change", `n=${snapshot.length}`);
+      if (snapshot.length > 0) void sendFiles(snapshot);
+      inputEl.value = "";
     },
-    [sendSplatBytes],
+    [sendFiles],
   );
 
-  const onDrop = useCallback(
-    (e: React.DragEvent) => {
+  // Whole-page drag-drop (panel + iframe). We count enter/leave events
+  // because dragleave fires when crossing into the iframe and the
+  // single-flag heuristic gets stuck if files are dropped over the
+  // iframe (which intercepts the drop in its own document if we're
+  // not careful).
+  useEffect(() => {
+    let depth = 0;
+    const onDragEnter = (e: DragEvent) => {
       e.preventDefault();
+      depth += 1;
+      setDragOver(true);
+    };
+    const onDragOver = (e: DragEvent) => {
+      e.preventDefault();
+    };
+    const onDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setDragOver(false);
+    };
+    const onDrop = (e: DragEvent) => {
+      e.preventDefault();
+      depth = 0;
       setDragOver(false);
-      const f = e.dataTransfer.files?.[0];
-      if (f) void sendSplatBytes(f);
+      const files = e.dataTransfer?.files;
+      devLog("react.drop", `files=${files?.length ?? 0}`);
+      if (files && files.length > 0) void sendFiles(files);
+    };
+    window.addEventListener("dragenter", onDragEnter);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragleave", onDragLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragenter", onDragEnter);
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragleave", onDragLeave);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, [sendFiles]);
+
+  // Delete shortcut when focus is inside the panel.
+  const onPanelKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (renamingId !== null) return;
+      if (e.key === "Delete" || e.key === "Backspace") {
+        if (selectedId) postToIframe({ type: "editor-delete-object", id: selectedId });
+      } else if (e.key === "F2") {
+        const o = objects.find((x) => x.id === selectedId);
+        if (o) startRename(o);
+      }
     },
-    [sendSplatBytes],
+    [renamingId, selectedId, objects, postToIframe],
   );
 
-  const onClearClick = useCallback(() => {
-    postToIframe({ type: "editor-clear-scene" });
-  }, [postToIframe]);
+  const startRename = useCallback((o: SceneObject) => {
+    setRenamingId(o.id);
+    setRenameDraft(o.name);
+    requestAnimationFrame(() => renameInputRef.current?.select());
+  }, []);
+
+  const commitRename = useCallback(() => {
+    if (renamingId === null) return;
+    const name = renameDraft.trim();
+    if (name) {
+      postToIframe({ type: "editor-rename-object", id: renamingId, name });
+    }
+    setRenamingId(null);
+  }, [renamingId, renameDraft, postToIframe]);
 
   if (webGpu.kind === "checking") {
     return (
@@ -233,7 +311,7 @@ const Editor = () => {
     );
   }
 
-  const hasContent = load.kind === "loaded";
+  const selected = objects.find((o) => o.id === selectedId) ?? null;
 
   return (
     <div className="flex h-[calc(100vh-4rem)] w-full bg-background">
@@ -241,11 +319,12 @@ const Editor = () => {
         ref={fileInputRef}
         type="file"
         accept=".splat"
+        multiple
         className="hidden"
-        onChange={onFileChange}
+        onChange={onFileInputChange}
       />
 
-      {/* Renderer canvas + HUD overlay. */}
+      {/* Renderer canvas + global drop indicator. */}
       <div className="relative flex-1 min-w-0 bg-black">
         <iframe
           ref={iframeRef}
@@ -256,165 +335,160 @@ const Editor = () => {
         />
         {!rendererReady && (
           <div className="absolute inset-0 flex items-center justify-center bg-background/80 backdrop-blur-sm">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
               Starting renderer…
             </div>
           </div>
         )}
-
-        {/* Mode hint top-left, helps surface RMB convention. */}
-        {rendererReady && (
-          <div className="absolute top-3 left-3 px-2.5 py-1 rounded-md bg-background/70 backdrop-blur text-[11px] leading-tight text-muted-foreground pointer-events-none">
-            <span className="font-semibold text-foreground/80">Editor mode</span>
-            <span className="mx-2">·</span>
-            RMB = camera · LMB = select / gizmo
+        {dragOver && (
+          <div className="absolute inset-0 pointer-events-none border-2 border-dashed border-primary/60 bg-primary/10 rounded-md flex items-center justify-center">
+            <div className="text-sm text-foreground/90 font-medium">
+              Drop .splat to add to scene
+            </div>
           </div>
         )}
-
-        {/* Drag HUD — only while a drag is in progress. */}
-        {transform?.drag && <DragHud t={transform} snap={snap} />}
+        {transform?.drag && transform.kind !== "none" && (
+          <DragHud t={transform} />
+        )}
       </div>
 
-      {/* Right side panel. */}
-      <aside className="w-80 shrink-0 border-l border-border bg-card flex flex-col overflow-y-auto">
-        <header className="px-4 py-3 border-b border-border">
-          <h1 className="text-sm font-semibold tracking-tight">3D Editor</h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Splat-first scene editor. GLTF / mesh coming.
-          </p>
-        </header>
-
-        {/* Drop-area for asset import. */}
-        <div className="px-4 pt-4">
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            onDragEnter={(e) => {
-              e.preventDefault();
-              setDragOver(true);
-            }}
-            onDragOver={(e) => e.preventDefault()}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={onDrop}
-            disabled={!rendererReady || load.kind === "uploading"}
-            className={cn(
-              "w-full rounded-md border-2 border-dashed px-3 py-6 text-center transition-colors outline-none",
-              "border-border bg-muted/20 hover:bg-muted/40",
-              dragOver && "border-primary bg-primary/10",
-              (!rendererReady || load.kind === "uploading") && "opacity-50 cursor-not-allowed",
-            )}
-          >
-            {load.kind === "uploading" ? (
-              <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Uploading {load.name}…
+      {/* Right panel — Scene on top, Transform below. */}
+      <aside
+        tabIndex={0}
+        onKeyDown={onPanelKeyDown}
+        className="w-72 shrink-0 border-l border-border bg-card flex flex-col overflow-hidden outline-none"
+      >
+        {/* Scene section. */}
+        <div className="flex flex-col min-h-0">
+          <SectionHeader title="Scene" subtitle={objects.length ? `${objects.length}` : undefined} />
+          <div className="overflow-y-auto max-h-[55vh] border-b border-border/60">
+            {objects.length === 0 && (
+              <div className="px-3 py-3 text-[11px] text-muted-foreground/80">
+                No objects. Drop a .splat file anywhere, or click + below.
               </div>
-            ) : (
-              <>
-                <Upload className="h-5 w-5 mx-auto text-muted-foreground" />
-                <div className="mt-2 text-sm font-medium">Drop object</div>
-                <div className="mt-0.5 text-[11px] text-muted-foreground">
-                  click or drop (.splat)
-                </div>
-              </>
             )}
-          </button>
-
-          {hasContent && (
-            <Button
-              onClick={onClearClick}
-              variant="ghost"
-              size="sm"
-              className="w-full gap-2 text-muted-foreground mt-2"
+            {objects.map((o) => {
+              const isSel = o.id === selectedId;
+              const isRen = renamingId === o.id;
+              return (
+                <div
+                  key={o.id}
+                  onClick={() => postToIframe({ type: "editor-select-object", id: o.id })}
+                  onDoubleClick={() => {
+                    if (isRen) return;
+                    postToIframe({ type: "editor-focus-object", id: o.id });
+                  }}
+                  className={cn(
+                    "flex items-center gap-1.5 px-3 py-1 cursor-pointer text-[11px] leading-tight",
+                    "hover:bg-muted/40",
+                    isSel && "bg-primary/20 text-foreground",
+                    !o.visible && !isSel && "text-muted-foreground/60",
+                  )}
+                >
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      postToIframe({
+                        type: "editor-set-visibility",
+                        id: o.id,
+                        visible: !o.visible,
+                      });
+                    }}
+                    className="text-muted-foreground/80 hover:text-foreground"
+                    aria-label={o.visible ? "Hide" : "Show"}
+                  >
+                    {o.visible ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+                  </button>
+                  {isRen ? (
+                    <input
+                      ref={renameInputRef}
+                      value={renameDraft}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onBlur={commitRename}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitRename();
+                        if (e.key === "Escape") setRenamingId(null);
+                        e.stopPropagation();
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex-1 min-w-0 bg-transparent border border-primary/60 px-1 py-0 text-[11px] outline-none"
+                    />
+                  ) : (
+                    <span
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        startRename(o);
+                      }}
+                      className="flex-1 min-w-0 truncate"
+                      title={o.name}
+                    >
+                      {o.name}
+                    </span>
+                  )}
+                  <span className="text-[10px] tabular-nums text-muted-foreground/80 shrink-0">
+                    {o.count > 0 ? `${(o.count / 1000).toFixed(0)}k` : ""}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      postToIframe({ type: "editor-delete-object", id: o.id });
+                    }}
+                    className="text-muted-foreground/60 hover:text-destructive"
+                    aria-label="Delete"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              );
+            })}
+            {/* Add object row. */}
+            <div
+              onClick={onPickFiles}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 cursor-pointer text-[11px] leading-tight",
+                "text-muted-foreground hover:bg-muted/40 hover:text-foreground border-t border-border/40",
+                uploadingCount > 0 && "opacity-60 pointer-events-none",
+              )}
             >
-              <Trash2 className="h-3.5 w-3.5" />
-              Clear scene
-            </Button>
-          )}
-        </div>
-
-        {/* Toolbar — W/E/R + Snap. */}
-        <div className="px-4 pt-4">
-          <h2 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-2">
-            Tools
-          </h2>
-          <div className="flex items-center gap-1">
-            <ToolButton
-              icon={Move}
-              label="Move (W)"
-              active={tool === "translate"}
-              onClick={() => setTool("translate")}
-            />
-            <ToolButton
-              icon={RotateCw}
-              label="Rotate (E)"
-              active={tool === "rotate"}
-              onClick={() => setTool("rotate")}
-            />
-            <ToolButton
-              icon={Maximize2}
-              label="Scale (R)"
-              active={tool === "scale"}
-              onClick={() => setTool("scale")}
-            />
-            <div className="flex-1" />
-            <Toggle
-              pressed={snap}
-              onPressedChange={setSnap}
-              size="sm"
-              className="h-8 w-8 p-0"
-              title={`Snap ${snap ? "on" : "off"} (hold Ctrl)`}
-              aria-label="Toggle snap"
-            >
-              <Magnet className="h-3.5 w-3.5" />
-            </Toggle>
+              {uploadingCount > 0 ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Plus className="h-3 w-3" />
+              )}
+              <span className="flex-1">
+                {uploadingCount > 0 ? `Loading ${uploadingCount}…` : "Add object"}
+              </span>
+              <span className="text-[10px] text-muted-foreground/70">.splat, .glb</span>
+            </div>
           </div>
-          <p className="mt-1.5 text-[10px] text-muted-foreground">
-            Snap steps: 0.25 m / 15° / 10 %. Hold Ctrl for momentary snap.
-          </p>
         </div>
 
-        <Separator className="mt-4" />
-
-        {/* Inspector. */}
-        <section className="px-4 py-3 space-y-3 text-xs">
-          <h2 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
-            Inspector
-          </h2>
-          {!hasContent ? (
-            <p className="text-muted-foreground">No object loaded.</p>
-          ) : !selection?.selected ? (
-            <p className="text-muted-foreground">
-              Click the object to select. Then use the gizmo or hotkeys.
-            </p>
-          ) : (
-            <InspectorReadout transform={transform} />
-          )}
-        </section>
-
-        {/* Status. */}
-        <div className="px-4 py-3 border-t border-border text-xs text-muted-foreground">
-          {load.kind === "loaded" && (
-            <div className="space-y-0.5">
-              <p className="text-foreground/80 truncate">{load.name}</p>
-              <p>
-                {load.count.toLocaleString()} splats · {formatBytes(load.size)}
-              </p>
+        {/* Transform section — only when selection exists. */}
+        {selected && (
+          <div className="flex flex-col min-h-0">
+            <SectionHeader title="Transform" />
+            <div className="px-3 py-1.5 space-y-1">
+              <TransformRow
+                label="Position"
+                values={transform?.position ?? [0, 0, 0]}
+                fmt={(n) => n.toFixed(2)}
+              />
+              <TransformRow
+                label="Rotation"
+                values={transform?.rotationDeg ?? [0, 0, 0]}
+                fmt={(n) => n.toFixed(1)}
+              />
+              <TransformRow
+                label="Scale"
+                values={transform?.scale ?? [1, 1, 1]}
+                fmt={(n) => n.toFixed(2)}
+              />
             </div>
-          )}
-          {load.kind === "error" && (
-            <div className="flex items-start gap-1.5 text-destructive">
-              <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-              <span>{load.message}</span>
-            </div>
-          )}
-        </div>
-
-        <div className="mt-auto px-4 py-3 border-t border-border text-[10px] leading-snug text-muted-foreground/70">
-          RMB drag = camera · WASD + QE while RMB held = fly · W/E/R = tool ·
-          Ctrl = snap
-        </div>
+          </div>
+        )}
       </aside>
     </div>
   );
@@ -422,126 +496,78 @@ const Editor = () => {
 
 // --- Subcomponents -----------------------------------------------------------
 
-const ToolButton = ({
-  icon: Icon,
-  label,
-  active,
-  onClick,
+const SectionHeader = ({
+  title,
+  subtitle,
 }: {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  active: boolean;
-  onClick: () => void;
+  title: string;
+  subtitle?: string;
 }) => (
-  <button
-    type="button"
-    onClick={onClick}
-    title={label}
-    aria-label={label}
-    aria-pressed={active}
-    className={cn(
-      "h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors",
-      active
-        ? "bg-primary text-primary-foreground border-primary"
-        : "border-border bg-muted/30 text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+  <div className="flex items-baseline justify-between px-3 py-1.5 border-b border-border/60">
+    <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+      {title}
+    </h2>
+    {subtitle && (
+      <span className="text-[10px] text-muted-foreground/70 tabular-nums">{subtitle}</span>
     )}
-  >
-    <Icon className="h-3.5 w-3.5" />
-  </button>
+  </div>
 );
 
-const InspectorReadout = ({ transform }: { transform: TransformMsg | null }) => {
-  if (!transform) {
-    return <p className="text-muted-foreground">Selected. Drag a gizmo handle.</p>;
-  }
-  const fmt = (n: number, digits = 3) => n.toFixed(digits);
-  return (
-    <div className="space-y-2 font-mono text-[11px]">
-      <Row label="Position" values={transform.position} fmt={(n) => fmt(n, 3)} unit="m" />
-      <Row
-        label="Rotation"
-        values={transform.rotationDeg}
-        fmt={(n) => fmt(n, 1)}
-        unit="°"
-      />
-      <Row label="Scale" values={transform.scale} fmt={(n) => fmt(n, 3)} unit="×" />
-    </div>
-  );
-};
-
-const Row = ({
+const TransformRow = ({
   label,
   values,
   fmt,
-  unit,
 }: {
   label: string;
   values: [number, number, number];
   fmt: (n: number) => string;
-  unit: string;
 }) => (
-  <div>
-    <div className="text-muted-foreground text-[10px] uppercase tracking-wider mb-0.5">
+  <div className="flex items-baseline gap-1.5 text-[11px] leading-tight font-mono tabular-nums">
+    <span className="text-muted-foreground w-[58px] shrink-0 font-sans not-italic">
       {label}
-    </div>
-    <div className="grid grid-cols-3 gap-1.5">
-      {values.map((v, i) => (
-        <div
-          key={i}
-          className={cn(
-            "rounded bg-muted/40 px-1.5 py-1 flex items-baseline gap-1 tabular-nums",
-          )}
-        >
-          <span className={cn("text-[9px] font-bold", AXIS_COLOR[i])}>
-            {AXIS_LABEL[i]}
-          </span>
-          <span className="text-foreground/90 truncate">{fmt(v)}</span>
-        </div>
-      ))}
-    </div>
-    <div className="text-[9px] text-muted-foreground/60 mt-0.5">{unit}</div>
+    </span>
+    {values.map((v, i) => (
+      <div
+        key={i}
+        className="flex items-baseline gap-0.5 flex-1 min-w-0 rounded px-1 bg-muted/30"
+      >
+        <span className={cn("text-[9px] font-bold shrink-0", AXIS_COLOR[i])}>
+          {"XYZ"[i]}
+        </span>
+        <span className="text-foreground/95 truncate">{fmt(v)}</span>
+      </div>
+    ))}
   </div>
 );
 
-const DragHud = ({ t, snap }: { t: TransformMsg; snap: boolean }) => {
-  // Show the active value of the axis being dragged. For translate that's
-  // the position component along the axis; rotate → rotation degrees;
-  // scale → scale factor on that axis.
+const DragHud = ({ t }: { t: TransformMsg }) => {
   if (t.axis < 0 || t.axis > 2) return null;
-  const axisName = AXIS_LABEL[t.axis];
-  const axisColor = AXIS_COLOR[t.axis];
-
-  let primaryLabel = "";
-  let primaryValue = "";
-  if (t.tool === "translate") {
-    primaryLabel = `${axisName} position`;
-    primaryValue = `${t.position[t.axis].toFixed(3)} m`;
-  } else if (t.tool === "rotate") {
-    primaryLabel = `${axisName} rotation`;
-    primaryValue = `${t.rotationDeg[t.axis].toFixed(1)}°`;
+  const axisCol = AXIS_COLOR[t.axis];
+  let primary = "";
+  let secondary = "";
+  if (t.kind === "translate") {
+    primary = `${t.position[t.axis].toFixed(3)} m`;
+    secondary = `${"XYZ"[t.axis]} position`;
+  } else if (t.kind === "rotate") {
+    primary = `${t.rotationDeg[t.axis].toFixed(1)}°`;
+    secondary = `${"XYZ"[t.axis]} rotation`;
   } else {
-    primaryLabel = `${axisName} scale`;
-    primaryValue = `${t.scale[t.axis].toFixed(3)} ×`;
+    primary = `${t.scale[t.axis].toFixed(3)}×`;
+    secondary = `${"XYZ"[t.axis]} scale`;
   }
-
   return (
-    <div className="absolute top-12 left-3 z-20 pointer-events-none">
-      <div className="rounded-md border border-border bg-background/85 backdrop-blur px-3 py-2 shadow-lg min-w-[180px]">
-        <div className="flex items-baseline gap-2">
-          <span className={cn("text-[10px] font-bold", axisColor)}>{axisName}</span>
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            {t.tool}
+    <div className="absolute top-3 left-3 z-20 pointer-events-none">
+      <div className="rounded-md border border-border bg-background/85 backdrop-blur px-2.5 py-1.5 shadow-md">
+        <div className="flex items-baseline gap-1.5">
+          <span className={cn("text-[9px] font-bold", axisCol)}>{"XYZ"[t.axis]}</span>
+          <span className="text-[9px] uppercase tracking-wider text-muted-foreground">
+            {t.kind}
           </span>
-          {snap && (
-            <span className="ml-auto text-[9px] text-primary uppercase">snap</span>
-          )}
         </div>
-        <div className="mt-1 text-base font-mono font-semibold tabular-nums">
-          {primaryValue}
+        <div className="text-sm font-mono font-semibold tabular-nums leading-tight">
+          {primary}
         </div>
-        <div className="text-[10px] text-muted-foreground mt-0.5">
-          {primaryLabel}
-        </div>
+        <div className="text-[9px] text-muted-foreground mt-0.5">{secondary}</div>
       </div>
     </div>
   );

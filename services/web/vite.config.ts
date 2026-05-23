@@ -69,6 +69,32 @@ export default defineConfig(({ mode }) => {
   },
   plugins: [
     {
+      name: "dev-log-sink",
+      configureServer(server) {
+        // POST /__dev_log → append to services/external/renderer/dev.log
+        // and echo to the Vite terminal. The renderer iframe (Module.print
+        // hook in patch_sandbox_html.py) and the React side both fire-and-
+        // forget here so the agent has a single tailable timeline of what
+        // happened. No request is ever rejected; this is dev-only.
+        const devLogPath = path.resolve(__dirname, "../external/renderer/dev.log");
+        server.middlewares.use("/__dev_log", (req, res) => {
+          if (req.method !== "POST") {
+            res.writeHead(405); res.end(); return;
+          }
+          const chunks: Buffer[] = [];
+          req.on("data", (c: Buffer) => chunks.push(c));
+          req.on("end", () => {
+            const body = Buffer.concat(chunks).toString("utf-8").trim();
+            const ts = new Date().toISOString();
+            const line = `[${ts}] ${body}\n`;
+            try { fs.appendFileSync(devLogPath, line); } catch {}
+            process.stdout.write(`[dev-log] ${body}\n`);
+            res.writeHead(204); res.end();
+          });
+        });
+      },
+    },
+    {
       name: "renderer-local-or-proxy",
       configureServer(server) {
         if (rendererLocal) {
