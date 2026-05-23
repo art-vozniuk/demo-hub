@@ -26,6 +26,16 @@ class EditorSceneRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DefaultSceneRead(BaseModel):
+    # Public, anonymous-visitor view of the curated default scene. Exposes
+    # only what the renderer needs to display it — deliberately omits id and
+    # user_id so the shared template's identity never leaks to clients.
+    name: str
+    manifest: dict[str, Any]
+
+    model_config = {"from_attributes": True}
+
+
 class EditorSceneListItem(BaseModel):
     # Manifest omitted from the list view — it's potentially large.
     id: UUID

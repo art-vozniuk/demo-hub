@@ -10,6 +10,14 @@ export interface EditorSceneRead {
   updated_at: string;
 }
 
+// Public, anonymous-visitor view of the default scene. The backend
+// deliberately omits id/user_id so the shared template can't be loaded or
+// overwritten by id — clients only ever get its manifest to render.
+export interface DefaultSceneRead {
+  name: string;
+  manifest: SceneManifest;
+}
+
 export interface EditorSceneListItem {
   id: string;
   name: string;
@@ -39,9 +47,10 @@ export const editorScenesApi = {
     return apiClient.get<EditorSceneRead>(`/editor/scenes/${id}`);
   },
 
-  // Public read-only — returns the curated default scene shown to anon visitors.
-  getDefault: async (): Promise<EditorSceneRead> => {
-    return apiClient.get<EditorSceneRead>(`/editor/scenes/default`);
+  // Public read-only — returns the curated default scene shown to anon
+  // visitors. Manifest-only: no id is exposed, so it can't be loaded by id.
+  getDefault: async (): Promise<DefaultSceneRead> => {
+    return apiClient.get<DefaultSceneRead>(`/editor/scenes/default`);
   },
 
   update: async (

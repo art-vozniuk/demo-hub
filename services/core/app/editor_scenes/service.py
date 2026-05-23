@@ -16,6 +16,14 @@ from .storage import (
 
 log = logging.getLogger(__name__)
 
+# The curated demo scene shown to anonymous visitors on /editor. It is a
+# shared, read-only template that is only ever served (manifest-only) via the
+# public /scenes/default route. It must never surface through the per-user
+# endpoints — not in a user's scene list, and not loadable/savable/deletable
+# by id — even if the requesting user happens to be its owner. Excluding it
+# here keeps the template from leaking its id or being overwritten.
+DEFAULT_SCENE_ID = UUID("9a84f51e-54bf-4201-a094-56dd9fb41af3")
+
 
 async def create_scene(
     db: AsyncSession,
@@ -43,6 +51,7 @@ async def list_scenes_for_user(
     result = await db.execute(
         select(EditorScene)
         .where(EditorScene.user_id == user_id)
+        .where(EditorScene.id != DEFAULT_SCENE_ID)
         .order_by(EditorScene.updated_at.desc())
     )
     return list(result.scalars().all())
@@ -62,7 +71,11 @@ async def get_scene_for_user(
 ) -> EditorScene | None:
     # user_id is part of the WHERE so a 404 is returned for both
     # "doesn't exist" and "not yours" — keeps the API from leaking
-    # scene-id existence to non-owners.
+    # scene-id existence to non-owners. The default scene is excluded too,
+    # so it can never be loaded/updated/deleted through the per-user
+    # endpoints (update/delete both gate on this lookup).
+    if scene_id == DEFAULT_SCENE_ID:
+        return None
     result = await db.execute(
         select(EditorScene)
         .where(EditorScene.id == scene_id)
