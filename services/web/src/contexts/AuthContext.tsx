@@ -44,6 +44,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       provider: 'google',
       options: {
         redirectTo: redirectUrl,
+        // Force the account chooser so users with multiple Google accounts
+        // (or an active session) always pick which one to sign in with.
+        queryParams: {
+          prompt: 'select_account',
+        },
       },
     });
 
