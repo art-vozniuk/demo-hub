@@ -39,3 +39,23 @@ class GenerativeEditingCustomPipelineInput(PipelineInput):
     image_key: str
     prompt: str
     num_inference_steps: int | None = None
+
+
+class GenerativeT2IPipelineInput(PipelineInput):
+    """Free-form prompt → image via FLUX.1 [schnell] (text-to-image).
+
+    `init_image_*` + `strength` enables img2img mode for iterating on
+    a previous result. `output_bucket` lets the caller pin where Modal
+    writes the result — without an init image we have no bucket hint
+    otherwise.
+    """
+
+    prompt: str
+    output_bucket: str
+    seed: int | None = None
+    num_inference_steps: int | None = None
+    width: int | None = None
+    height: int | None = None
+    init_image_bucket: str | None = None
+    init_image_key: str | None = None
+    strength: float | None = None

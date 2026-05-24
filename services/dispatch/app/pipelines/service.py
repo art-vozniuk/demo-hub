@@ -17,9 +17,11 @@ from services.common.s3.client import S3Client
 from .base import AsyncPipeline
 from .generative_editing import GenerativeEditingPipeline
 from .generative_editing_custom import GenerativeEditingCustomPipeline
+from .generative_t2i import GenerativeT2IPipeline
 from .schemas import (
     GenerativeEditingCustomPipelineInput,
     GenerativeEditingPipelineInput,
+    GenerativeT2IPipelineInput,
     PipelineInput,
     SharpPipelineInput,
 )
@@ -87,6 +89,16 @@ class GenerativeEditingCustomService(Service):
         )
 
 
+class GenerativeT2IService(Service):
+    async def prepare_pipeline(self) -> AsyncPipeline:
+        if not isinstance(self.pipeline_input, GenerativeT2IPipelineInput):
+            raise ValueError("Invalid pipeline input for GenerativeT2IService")
+        return GenerativeT2IPipeline(
+            s3=self.s3,
+            pipeline_input=self.pipeline_input,
+        )
+
+
 class PipelineType:
     def __init__(
         self,
@@ -117,6 +129,14 @@ pipeline_templates: dict[str, PipelineType] = {
         service_type=SharpService,
         input_type=SharpPipelineInput,
         estimated_time_ms=8_000,
+    ),
+    "generative_t2i": PipelineType(
+        service_type=GenerativeT2IService,
+        input_type=GenerativeT2IPipelineInput,
+        # FLUX.1 schnell runs 4 steps in roughly 1-2s warm; cold start
+        # adds 30-60s. Mirror generative_editing's initial ETA — heartbeat
+        # tightens it after the first observed run.
+        estimated_time_ms=30_000,
     ),
 }
 
