@@ -2,7 +2,7 @@
 // GenerationSessionContext; close ≠ cancel (the badge re-opens it).
 
 import { useEffect, useMemo, useState } from "react";
-import { Sparkles, RefreshCcw, Check, X } from "lucide-react";
+import { Sparkles, RefreshCcw, Check } from "lucide-react";
 
 import {
   Dialog,
@@ -71,13 +71,6 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
     onOpenChange(false);
   };
 
-  const onCancelClick = () => {
-    session.cancel();
-    setPrompt("");
-    setIterate(false);
-    onOpenChange(false);
-  };
-
   const phaseLabel = (() => {
     switch (session.phase) {
       case "flux-pending":
@@ -101,7 +94,10 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md max-h-[85vh] overflow-y-auto">
+      <DialogContent
+        className="sm:max-w-md max-h-[85vh] overflow-y-auto"
+        hideClose
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <Sparkles className="h-4 w-4 text-primary" />
@@ -198,34 +194,7 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
                 : "Generate"}
             </Button>
           )}
-          {(session.phase === "flux-pending" ||
-            session.phase === "sharp-pending" ||
-            session.phase === "flux-ready") && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onCancelClick}
-              className="gap-1"
-            >
-              <X className="h-4 w-4" />
-              Cancel
-            </Button>
-          )}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => onOpenChange(false)}
-          >
-            Close
-          </Button>
         </div>
-        {(session.phase === "flux-pending" ||
-          session.phase === "sharp-pending") && (
-          <p className="text-[10px] text-muted-foreground">
-            Close keeps the generation running in the background.
-            Cancel stops polling — charged tokens are not refunded.
-          </p>
-        )}
       </DialogContent>
     </Dialog>
   );
