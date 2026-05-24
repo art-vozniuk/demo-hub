@@ -129,6 +129,10 @@ export const GenerationSessionProvider = ({
   const fluxTimeoutRef = useRef<number | null>(null);
   const sharpPollRef = useRef<number | null>(null);
   const sharpTimeoutRef = useRef<number | null>(null);
+  // setInterval keeps spawning polls without awaiting the previous one,
+  // so multiple in-flight pollSharp/pollFlux can all see COMPLETED at
+  // once. Track which pipeline_ids we've already handled to drop dupes.
+  const processedPipelinesRef = useRef<Set<string>>(new Set());
   // Refed so the poll callbacks don't need to re-subscribe when Editor re-renders.
   const onSplatReadyRef = useRef(onSplatReady);
   useEffect(() => {
@@ -208,10 +212,15 @@ export const GenerationSessionProvider = ({
 
   const pollSharp = useCallback(
     async (pipelineId: string, name: string) => {
+      if (processedPipelinesRef.current.has(pipelineId)) return;
       try {
         const resp = await pipelinesApi.getStatus([pipelineId]);
         const item = resp.pipelines.find((p) => p.id === pipelineId);
         if (!item) return;
+        if (item.status === "COMPLETED" || item.status === "FAILED") {
+          if (processedPipelinesRef.current.has(pipelineId)) return;
+          processedPipelinesRef.current.add(pipelineId);
+        }
         if (item.status === "COMPLETED") {
           clearSharpPolling();
           onSharpComplete(item, name);
@@ -322,10 +331,15 @@ export const GenerationSessionProvider = ({
 
   const pollFlux = useCallback(
     async (pipelineId: string) => {
+      if (processedPipelinesRef.current.has(pipelineId)) return;
       try {
         const resp = await pipelinesApi.getStatus([pipelineId]);
         const item = resp.pipelines.find((p) => p.id === pipelineId);
         if (!item) return;
+        if (item.status === "COMPLETED" || item.status === "FAILED") {
+          if (processedPipelinesRef.current.has(pipelineId)) return;
+          processedPipelinesRef.current.add(pipelineId);
+        }
         if (item.status === "COMPLETED") {
           clearFluxPolling();
           const result = item.result as
