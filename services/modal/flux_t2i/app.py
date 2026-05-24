@@ -123,7 +123,10 @@ def preload_weights() -> str:
 
 @app.cls(
     image=flux_image,
-    gpu="A10G",
+    # L40S (48GB) — FLUX.1 schnell in bfloat16 weights are ~24GB; A10G's
+    # 22GB OOMs on .to("cuda"). L40S leaves room for activations and the
+    # second pipeline's hooks without quantization or CPU offload.
+    gpu="L40S",
     volumes={MODEL_DIR: volume},
     scaledown_window=10,
     timeout=600,
