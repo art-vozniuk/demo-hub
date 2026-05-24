@@ -153,10 +153,6 @@ async def invoke_sharp(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 async def invoke_generative_t2i(payload: dict[str, Any]) -> dict[str, Any]:
-    """FLUX.1 [schnell] text-to-image — different Modal app from
-    generative_editing / generative_editing_custom because the weights
-    don't fit alongside klein 4B on a single A10G container.
-    """
     return await _submit_and_poll(
         label="generative_t2i",
         submit_url=config.MODAL_GENERATIVE_T2I_SUBMIT_URL,

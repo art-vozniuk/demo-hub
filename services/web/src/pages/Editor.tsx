@@ -172,8 +172,6 @@ const Editor = () => {
   const [loadingPlaceholders, setLoadingPlaceholders] = useState<
     { name: string; kind: ObjectKind }[]
   >([]);
-  // Controls the Generate Splat overlay. Closing while a generation is
-  // in flight keeps the session running — the badge re-opens it.
   const [generateOverlayOpen, setGenerateOverlayOpen] = useState(false);
 
   // Camera state — synced with the C++ side via editor-camera-pose. Treated
@@ -441,10 +439,8 @@ const Editor = () => {
     fileInputRef.current?.click();
   }, []);
 
-  // Used by GenerationSessionProvider once a Sharp splat URL is ready.
-  // Mirrors sendAssetFile but starts from a URL instead of a File so the
-  // generated splat lands as a normal scene object with bytes + sha
-  // available for the next Save.
+  // Sharp callback: fetch the splat URL and post editor-load-splat exactly
+  // like a manual upload, so it lands with bytes+sha ready for next Save.
   const addSplatFromUrl = useCallback(
     async (url: string, name: string) => {
       try {
@@ -1284,7 +1280,6 @@ const Editor = () => {
                 </div>
               );
             })}
-            {/* Add object row — dropdown picks between upload and generate. */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <div

@@ -42,14 +42,7 @@ class GenerativeEditingCustomPipelineInput(PipelineInput):
 
 
 class GenerativeT2IPipelineInput(PipelineInput):
-    """Free-form prompt → image via FLUX.1 [schnell] (text-to-image).
-
-    `init_image_*` + `strength` enables img2img mode for iterating on
-    a previous result. `output_bucket` lets the caller pin where Modal
-    writes the result — without an init image we have no bucket hint
-    otherwise.
-    """
-
+    # init_image_* + strength switch on img2img iteration mode.
     prompt: str
     output_bucket: str
     seed: int | None = None

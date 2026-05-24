@@ -1,15 +1,6 @@
-/**
- * One-at-a-time generation session for the 3D editor.
- *
- * Two-phase state machine: Flux T2I/I2I generates an image, user
- * confirms or iterates, then Sharp turns the chosen image into a splat.
- * Both phases survive the overlay being closed — a viewport badge keeps
- * the session reachable in the background.
- *
- * The session owns pipeline orchestration only; the Editor wires the
- * `onSplatReady` callback to actually insert the resulting splat into
- * the scene.
- */
+// One-at-a-time generation session for the 3D editor: prompt → flux-t2i
+// → user confirm → sharp → splat. Pipelines run via pipelinesApi; Editor
+// wires onSplatReady to actually insert the resulting splat into the scene.
 
 import {
   createContext,
@@ -38,8 +29,7 @@ const SHARP_PIPELINE = "sharp";
 const POLL_INTERVAL_MS = 1000;
 const POLL_TIMEOUT_MS = 240_000;
 
-// Result of a flux-t2i generation. Augmented over the bare FluxResult
-// type because we need bucket+key to chain into Sharp.
+// Flux-t2i result, augmented with bucket+key so Sharp can chain off it.
 export interface T2IImage {
   result_url: string;
   image_bucket: string;
@@ -58,19 +48,11 @@ export type GenerationPhase =
 
 export interface GenerationSessionState {
   phase: GenerationPhase;
-  // Last prompt used (so the overlay can show it during pending and
-  // pre-fill it for the next iteration).
   prompt: string;
-  // Last generated image; set during flux-ready and kept around through
-  // sharp-pending so the overlay can keep showing it.
   image: T2IImage | null;
-  // Whether the latest flux call was an iteration on a previous image.
-  // Used by analytics + UI.
   iterating: boolean;
-  // Active flux or sharp pipeline ids, for badge text + cancellation.
   fluxPipelineId: string | null;
   sharpPipelineId: string | null;
-  // Slugified prompt used as the placeholder + final object name.
   splatName: string | null;
   errorMessage: string | null;
   errorPhase: "flux" | "sharp" | null;
@@ -78,14 +60,11 @@ export interface GenerationSessionState {
 
 interface StartArgs {
   prompt: string;
-  // When true, use the current image as init for img2img iteration.
-  // Caller is expected to only set this when an image is already loaded.
   iterate?: boolean;
   strength?: number;
 }
 
 export interface GenerationSessionApi extends GenerationSessionState {
-  // Public costs (token amounts), derived from /me/balance.
   fluxCost: number | undefined;
   sharpCost: number | undefined;
   totalCost: number | undefined;
@@ -97,13 +76,7 @@ export interface GenerationSessionApi extends GenerationSessionState {
 
 interface ProviderProps {
   children: ReactNode;
-  // Where flux-t2i should upload the generated image. Sharp will read
-  // from the same bucket, so this also doubles as the sharp input
-  // bucket. Defaults to "media" to match the editor's existing assets.
   outputBucket?: string;
-  // Called once the Sharp pipeline produces a .splat file. The Editor
-  // wires this to fetch the bytes and post `editor-load-splat` to the
-  // renderer iframe.
   onSplatReady: (args: { url: string; name: string }) => void;
 }
 
@@ -124,8 +97,6 @@ const INITIAL_STATE: GenerationSessionState = {
 };
 
 function slugifyPrompt(prompt: string): string {
-  // Take up to first 5 words, alpha-numeric only, kebab-case. Fallback
-  // to "generated-splat" so we never end up with an empty name.
   const words = prompt
     .toLowerCase()
     .replace(/[^a-z0-9\s]+/g, " ")
@@ -145,15 +116,11 @@ export const GenerationSessionProvider = ({
 
   const [state, setState] = useState<GenerationSessionState>(INITIAL_STATE);
 
-  // Polling timers per phase. We keep them in refs (not state) so the
-  // poll callbacks see live values without re-subscribing.
   const fluxPollRef = useRef<number | null>(null);
   const fluxTimeoutRef = useRef<number | null>(null);
   const sharpPollRef = useRef<number | null>(null);
   const sharpTimeoutRef = useRef<number | null>(null);
-  // Always-fresh reference to onSplatReady; the prop changes identity
-  // each render in the Editor and we don't want to tear down polling
-  // every time.
+  // Refed so the poll callbacks don't need to re-subscribe when Editor re-renders.
   const onSplatReadyRef = useRef(onSplatReady);
   useEffect(() => {
     onSplatReadyRef.current = onSplatReady;
@@ -179,7 +146,6 @@ export const GenerationSessionProvider = ({
       sharpTimeoutRef.current = null;
     }
   }, []);
-  // Tear down all polling on unmount so navigating away doesn't leak.
   useEffect(
     () => () => {
       clearFluxPolling();
@@ -195,9 +161,7 @@ export const GenerationSessionProvider = ({
   }, [clearFluxPolling, clearSharpPolling]);
 
   const cancel = useCallback(() => {
-    // Cancel from any active phase. We don't try to abort the Modal job —
-    // tokens for flux are already debited; this just stops us from
-    // polling the result. The user has been warned by the overlay.
+    // No Modal-side abort — we just stop polling. Already-debited tokens stay debited.
     clearFluxPolling();
     clearSharpPolling();
     setState((prev) => {
@@ -311,8 +275,6 @@ export const GenerationSessionProvider = ({
         errorMessage: null,
         errorPhase: null,
       }));
-      // Kick first poll immediately so a fast-warm Sharp doesn't wait
-      // the full interval.
       pollSharp(pipelineId, name);
       sharpPollRef.current = window.setInterval(() => {
         pollSharp(pipelineId, name);
@@ -408,8 +370,6 @@ export const GenerationSessionProvider = ({
         toast.error("Please enter a prompt.");
         return;
       }
-      // Refuse to start a second concurrent session. Editor disables
-      // the button too, but this is the defensive check.
       if (
         state.phase === "flux-pending" ||
         state.phase === "sharp-pending"
@@ -417,8 +377,6 @@ export const GenerationSessionProvider = ({
         toast.error("A generation is already in progress.");
         return;
       }
-      // Iteration needs a prior image. If the caller asked to iterate
-      // without one (shouldn't happen via UI), fall back to T2I.
       const useInit = iterate && state.image !== null;
       const initImage = useInit ? state.image : null;
 
@@ -434,8 +392,6 @@ export const GenerationSessionProvider = ({
         input.strength = strength;
       }
 
-      // Optimistically flip to flux-pending so the UI shows the spinner
-      // immediately — we revert on submit failure.
       setState((prev) => ({
         ...prev,
         phase: "flux-pending",
@@ -446,9 +402,7 @@ export const GenerationSessionProvider = ({
         splatName: null,
         errorMessage: null,
         errorPhase: null,
-        // Keep the previous image visible behind the spinner while
-        // iterating; clear it for a fresh T2I run so we don't show
-        // stale content.
+        // Keep the previous image visible behind the spinner when iterating.
         image: initImage ? prev.image : null,
       }));
 

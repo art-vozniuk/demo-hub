@@ -15,8 +15,6 @@ branch_labels = None
 depends_on = None
 
 
-# FLUX.1 [schnell] in 4 steps is roughly as cheap to run as klein 4B's
-# 4-step setup; same base cost as generative_editing_custom for parity.
 GENERATIVE_T2I_BASE_COST = 10
 
 

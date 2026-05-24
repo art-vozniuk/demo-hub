@@ -1,15 +1,5 @@
-/**
- * Overlay UI for the editor's "Generate splat" flow.
- *
- * Modes: text-to-image first run, then once an image is shown the user
- * can iterate on it with img2img + a strength slider, regenerate from
- * scratch, confirm (kick off Sharp), or cancel.
- *
- * Generation state lives in GenerationSessionContext — this component
- * is presentation + dispatching to the session API. Close ≠ cancel:
- * closing while pending hides the dialog but keeps the session running,
- * and the badge re-opens it.
- */
+// Overlay UI for the editor's "Generate splat" flow. State lives in
+// GenerationSessionContext; close ≠ cancel (the badge re-opens it).
 
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, Sparkles, RefreshCcw, Check, X } from "lucide-react";
@@ -41,15 +31,13 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
   const [iterate, setIterate] = useState(false);
   const [strength, setStrength] = useState(0.7);
 
-  // Pre-fill the prompt with whatever the running session is using —
-  // helps when the user re-opens the overlay from the badge.
+  // Pre-fill from the running session when re-opening from the badge.
   useEffect(() => {
     if (open && session.prompt && !prompt) {
       setPrompt(session.prompt);
     }
   }, [open, session.prompt, prompt]);
 
-  // Reset the iteration toggle when a new session starts from idle.
   useEffect(() => {
     if (session.phase === "idle") {
       setIterate(false);
@@ -62,8 +50,6 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
       return false;
     }
     if (session.totalCost !== undefined && balance !== null) {
-      // Both phases must be affordable up-front. Server is still
-      // authoritative — this just avoids futile clicks.
       const required = iterate ? session.fluxCost ?? 0 : session.totalCost;
       if (balance < required) return false;
     }
@@ -76,8 +62,7 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
 
   const onConfirm = async () => {
     await session.confirm();
-    // Sharp runs in the background; close the overlay so the user can
-    // keep working. The badge will surface progress.
+    // Sharp runs in the background — the badge surfaces progress.
     onOpenChange(false);
   };
 
@@ -114,7 +99,6 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
           <DialogDescription>{phaseLabel}</DialogDescription>
         </DialogHeader>
 
-        {/* Cost preview */}
         <div className="text-xs text-muted-foreground flex items-center gap-3 tabular-nums">
           {session.fluxCost !== undefined && (
             <span>Image: {session.fluxCost}</span>
@@ -130,7 +114,6 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
           {balance !== null && <span>· Balance: {balance}</span>}
         </div>
 
-        {/* Image preview */}
         {(session.phase === "flux-pending" ||
           session.phase === "flux-ready" ||
           session.phase === "sharp-pending") && (
@@ -156,8 +139,6 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
           </div>
         )}
 
-        {/* Prompt + iteration controls (hidden while sharp runs — there's
-            nothing to do until the splat finishes). */}
         {session.phase !== "sharp-pending" && (
           <div className="space-y-2">
             <Label htmlFor="generate-prompt">Prompt</Label>

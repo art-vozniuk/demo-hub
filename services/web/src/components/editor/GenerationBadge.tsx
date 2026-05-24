@@ -1,18 +1,10 @@
-/**
- * Compact viewport badge for a backgrounded generation session.
- *
- * Hidden when there is nothing to surface (idle or the overlay is
- * already open). Clicking re-opens the overlay so the user can review
- * the result, iterate, or cancel.
- */
+// Viewport badge for a backgrounded generation session; click re-opens the overlay.
 
 import { Loader2, Sparkles, AlertCircle, ImageIcon } from "lucide-react";
 
 import { useGenerationSession } from "@/contexts/GenerationSessionContext";
 
 interface Props {
-  // True when the overlay is open — we hide the badge so we don't
-  // double up.
   hidden: boolean;
   onClick: () => void;
 }
@@ -69,8 +61,7 @@ export const GenerationBadge = ({ hidden, onClick }: Props) => {
       type="button"
       onClick={onClick}
       className={
-        // Top-left so we don't collide with the existing scene-load
-        // pill on top-right.
+        // Top-left avoids the scene-load pill on top-right.
         "absolute top-3 left-3 z-20 rounded-full border bg-background/85 backdrop-blur px-3 py-1 shadow-md " +
         "flex items-center gap-1.5 text-[11px] cursor-pointer hover:bg-background transition " +
         (tone === "destructive"

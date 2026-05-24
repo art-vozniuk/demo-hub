@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Populate the flux-t2i-models volume with FLUX.1 [schnell] weights.
-
-Runs on a Modal CPU container. Idempotent — re-run anytime.
-"""
+"""Populate the flux-t2i-models volume with FLUX.1 [schnell] weights."""
 
 import os
 import sys

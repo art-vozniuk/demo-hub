@@ -133,9 +133,6 @@ pipeline_templates: dict[str, PipelineType] = {
     "generative_t2i": PipelineType(
         service_type=GenerativeT2IService,
         input_type=GenerativeT2IPipelineInput,
-        # FLUX.1 schnell runs 4 steps in roughly 1-2s warm; cold start
-        # adds 30-60s. Mirror generative_editing's initial ETA — heartbeat
-        # tightens it after the first observed run.
         estimated_time_ms=30_000,
     ),
 }

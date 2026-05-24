@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Deploy the FLUX.1 [schnell] text-to-image app and persist both web URLs.
-
-Same submit/poll shape as flux/ and sharp/.
-"""
+"""Deploy flux_t2i and persist its submit/poll endpoint URLs."""
 
 import os
 import sys

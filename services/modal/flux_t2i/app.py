@@ -1,11 +1,4 @@
-"""Modal app: FLUX.1 [schnell] text-to-image (+ optional img2img) on A10G.
-
-Parallel to flux/app.py (FLUX.2 klein, edit-only) but built around
-text-to-image so the 3D editor can spawn a splat from a prompt alone.
-Same submit/poll shape so dispatch routes are uniform.
-
-Deploy / preload via services/modal/flux_t2i/{deploy,preload}.py.
-"""
+"""FLUX.1 [schnell] text-to-image (+ optional img2img) on L40S."""
 
 from __future__ import annotations
 
@@ -35,14 +28,12 @@ log = configure_logging("flux_t2i")
 app, volume = make_app("demo-hub-flux-t2i", "flux-t2i-models")
 
 
-# Heavy image: torch + diffusers FluxPipeline.
 flux_image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0")
     .pip_install(
         "torch==2.5.1",
         "torchvision==0.20.1",
-        # diffusers 0.32+ ships FluxPipeline / FluxImg2ImgPipeline.
         "diffusers==0.32.2",
         "transformers==4.46.3",
         "accelerate==1.2.1",
@@ -65,7 +56,6 @@ flux_image = (
 )
 
 
-# Thin image for submit/poll fastapi endpoints — no torch needed.
 flux_thin_image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install(
@@ -89,8 +79,6 @@ with flux_image.imports():
     secrets=[modal.Secret.from_name("huggingface", required_keys=[])],
 )
 def preload_weights() -> str:
-    """Download FLUX.1 [schnell] into the persistent volume. Idempotent."""
-
     from huggingface_hub import snapshot_download
 
     log.info(f"preload: starting; repo={MODEL_REPO} -> {MODEL_LOCAL_DIR}")
@@ -123,46 +111,35 @@ def preload_weights() -> str:
 
 @app.cls(
     image=flux_image,
-    # L40S (48GB) — FLUX.1 schnell in bfloat16 weights are ~24GB; A10G's
-    # 22GB OOMs on .to("cuda"). L40S leaves room for activations and the
-    # second pipeline's hooks without quantization or CPU offload.
+    # schnell bfloat16 weights are ~24GB — A10G's 22GB OOMs on .to("cuda").
     gpu="L40S",
     volumes={MODEL_DIR: volume},
     scaledown_window=10,
     timeout=600,
     enable_memory_snapshot=True,
     secrets=[modal.Secret.from_name("supabase-s3")],
-    # min_containers=1,
 )
 @modal.concurrent(max_inputs=1)
 class FluxT2IInference:
     @modal.enter(snap=True)
     def load_to_cpu(self) -> None:
-        """Snapshot hook: load schnell weights to RAM once before snapshot."""
-
         log.info("snapshot-load: load_to_cpu() begin")
         t0 = time.perf_counter()
         self.pipe = FluxPipeline.from_pretrained(
             MODEL_LOCAL_DIR,
             torch_dtype=torch.bfloat16,
         )
-        # img2img shares the same components — from_pipe avoids a second
-        # disk read and a second copy of the 12GB weights in RAM.
+        # from_pipe shares components — no second copy of the 12GB weights.
         self.img2img_pipe = FluxImg2ImgPipeline.from_pipe(self.pipe)
         load_ms = (time.perf_counter() - t0) * 1000
-        log.info(
-            f"snapshot-load: from_pretrained + from_pipe in {load_ms:.0f}ms"
-        )
+        log.info(f"snapshot-load: from_pretrained + from_pipe in {load_ms:.0f}ms")
 
     @modal.enter(snap=False)
     def move_to_gpu(self) -> None:
-        log.info("post-restore: move_to_gpu() begin")
         t0 = time.perf_counter()
         self.pipe.to("cuda")
-        # img2img shares components with pipe, so moving pipe also moves
-        # the underlying tensors. No second .to() needed.
         ms = (time.perf_counter() - t0) * 1000
-        log.info(f"post-restore: pipe.to(cuda) finished in {ms:.0f}ms")
+        log.info(f"post-restore: pipe.to(cuda) in {ms:.0f}ms")
 
     @modal.method()
     def generate(
@@ -190,15 +167,12 @@ class FluxT2IInference:
         if seed is not None:
             generator = torch.Generator(device="cuda").manual_seed(int(seed))
 
-        # Iteration mode: img2img on a previous result.
         init_image = None
         if init_image_bucket and init_image_key:
             t_dl = time.perf_counter()
             raw = download_from_s3(init_image_bucket, init_image_key)
             raw = bake_exif_orientation(raw)
             init_image = Image.open(io.BytesIO(raw)).convert("RGB")
-            # Match schnell's preferred resolution; cap at the user-supplied
-            # WxH so the resulting image stays in the requested aspect.
             init_image = init_image.resize((width, height), Image.LANCZOS)
             log.info(
                 f"[{request_id}] init image downloaded + resized in "
@@ -239,18 +213,12 @@ class FluxT2IInference:
         result_image.save(buf, format="PNG")
         png_bytes = buf.getvalue()
 
-        # Upload to the same bucket as init (caller can also override via
-        # output_bucket — e.g. so dispatch can route results elsewhere if
-        # the init lives outside the user-results bucket).
         bucket = output_bucket or init_image_bucket
         if not bucket:
-            raise RuntimeError(
-                "No output bucket available — provide init_image_bucket or output_bucket."
-            )
+            raise RuntimeError("No output bucket: provide init_image_bucket or output_bucket")
 
-        # Inlined upload (vs common.lib.upload_to_s3) because Sharp needs
-        # the bucket+key separately as its input — easier to construct
-        # the key locally than to parse it back out of a public URL.
+        # Inlined upload — Sharp consumes bucket+key, so we build the key locally
+        # instead of parsing it back out of common.lib.upload_to_s3's URL.
         import boto3
         from botocore.config import Config as BotoConfig
 
@@ -289,8 +257,6 @@ class FluxT2IInference:
 @app.function(image=flux_thin_image, timeout=120)
 @modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
 def submit(payload: dict[str, Any]) -> dict[str, Any]:
-    """Kick off T2I (or I2I if init image fields are set) asynchronously."""
-
     request_id = uuid.uuid4().hex[:8]
     prompt = payload.get("prompt")
     log.info(

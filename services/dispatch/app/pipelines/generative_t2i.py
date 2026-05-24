@@ -1,10 +1,4 @@
-"""Free-form prompt → image via FLUX.1 [schnell] on a dedicated Modal app.
-
-Distinct from generative_editing_custom (which is image-conditioned edits
-on FLUX.2 klein). Carries the rendered image's S3 location back so a
-caller can pipe it straight into another pipeline (e.g. sharp) without
-re-uploading.
-"""
+"""Free-form prompt → image via FLUX.1 [schnell] on Modal."""
 
 from __future__ import annotations
 
@@ -27,7 +21,6 @@ class GenerativeT2IPipeline(AsyncPipeline):
         s3: S3Client,
         pipeline_input: GenerativeT2IPipelineInput,
     ) -> None:
-        # Modal owns upload + download; s3 plumbed in for parity only.
         self.s3 = s3
         self.pipeline_input = pipeline_input
 
@@ -36,8 +29,6 @@ class GenerativeT2IPipeline(AsyncPipeline):
             "prompt": self.pipeline_input.prompt,
             "output_bucket": self.pipeline_input.output_bucket,
         }
-        # Pass through every optional knob the user touched; Modal applies
-        # its own defaults for anything we leave unset.
         for key in (
             "seed",
             "num_inference_steps",
