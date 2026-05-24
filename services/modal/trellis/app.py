@@ -38,6 +38,17 @@ from common.lib import (
 
 MODEL_REPO = "microsoft/TRELLIS.2-4B"
 MODEL_LOCAL_DIR = f"{MODEL_DIR}/trellis2-4b"
+# HF cache lives on the persistent volume so Trellis2ImageTo3DPipeline's
+# transitive HF downloads (TRELLIS-image-large, dinov3, ...) survive
+# scaledowns and don't re-download on every cold start.
+HF_CACHE_DIR = f"{MODEL_DIR}/hf_cache"
+# Models that TRELLIS.2 lazily pulls from HF Hub inside from_pretrained().
+# Predownload them into HF_CACHE_DIR so cold starts never hit the network.
+# dinov3 is a Meta gated repo — HF_TOKEN must have access approval.
+HF_AUX_REPOS = [
+    "microsoft/TRELLIS-image-large",
+    "facebook/dinov3-vitl16-pretrain-lvd1689m",
+]
 
 # Full-quality render resolution. 512 fits an A10G (24GB); see GPU note
 # on the @app.cls below if this ever OOMs.
@@ -115,7 +126,7 @@ trellis_image = (
     .env(
         {
             "HF_HUB_ENABLE_HF_TRANSFER": "1",
-            "HF_HOME": "/root/.cache/huggingface",
+            "HF_HOME": HF_CACHE_DIR,
             "TRANSFORMERS_OFFLINE": "0",
             # TRELLIS runtime knobs — native spconv algo is the most
             # portable; attention backend is left to the lib default.
@@ -190,29 +201,55 @@ trellis_thin_image = (
     secrets=[modal.Secret.from_name("huggingface", required_keys=[])],
 )
 def preload_weights() -> str:
-    """Download TRELLIS.2-4B into the persistent volume.
+    """Download TRELLIS.2-4B + transitive HF deps into the persistent volume.
 
     Run once: `python services/modal/trellis/preload.py`. Re-running is a
-    no-op when files are already up to date.
+    no-op when files are already up to date. dinov3 is gated — HF_TOKEN
+    in the `huggingface` Modal secret must have access approval.
     """
 
     from huggingface_hub import snapshot_download
 
-    log.info(f"preload: starting; repo={MODEL_REPO} -> {MODEL_LOCAL_DIR}")
+    log.info(f"preload: starting; main_repo={MODEL_REPO} -> {MODEL_LOCAL_DIR}")
     t0 = time.perf_counter()
     os.makedirs(MODEL_LOCAL_DIR, exist_ok=True)
+    os.makedirs(HF_CACHE_DIR, exist_ok=True)
 
-    has_token = bool(os.environ.get("HF_TOKEN"))
-    log.info(f"preload: hf_token_present={has_token}")
+    hf_token = os.environ.get("HF_TOKEN")
+    log.info(f"preload: hf_token_present={bool(hf_token)}")
 
     snapshot_download(
         repo_id=MODEL_REPO,
         local_dir=MODEL_LOCAL_DIR,
-        token=os.environ.get("HF_TOKEN"),
+        token=hf_token,
         max_workers=8,
     )
-    download_ms = (time.perf_counter() - t0) * 1000
-    log.info(f"preload: snapshot_download finished in {download_ms:.0f}ms")
+    log.info(
+        f"preload: main repo done in {(time.perf_counter() - t0) * 1000:.0f}ms"
+    )
+
+    # Transitive deps pulled by Trellis2ImageTo3DPipeline.from_pretrained
+    # at runtime. Cache them into HF_CACHE_DIR (== HF_HOME on inference
+    # containers) so cold starts skip the network entirely.
+    for repo in HF_AUX_REPOS:
+        t_aux = time.perf_counter()
+        log.info(f"preload: aux repo {repo} -> {HF_CACHE_DIR}")
+        try:
+            snapshot_download(
+                repo_id=repo,
+                cache_dir=HF_CACHE_DIR,
+                token=hf_token,
+                max_workers=8,
+            )
+            log.info(
+                f"preload: aux repo {repo} done in "
+                f"{(time.perf_counter() - t_aux) * 1000:.0f}ms"
+            )
+        except Exception as e:
+            # Don't kill the whole preload if one aux repo fails (e.g. user
+            # hasn't approved a gated repo yet). Log loudly and continue —
+            # the inference cold start will surface the same error.
+            log.error(f"preload: aux repo {repo} FAILED: {e!r}")
 
     t1 = time.perf_counter()
     volume.commit()
@@ -220,7 +257,8 @@ def preload_weights() -> str:
     total_ms = (time.perf_counter() - t0) * 1000
     log.info(
         f"preload: volume.commit took {commit_ms:.0f}ms "
-        f"(total {total_ms:.0f}ms); weights at {MODEL_LOCAL_DIR}"
+        f"(total {total_ms:.0f}ms); main weights at {MODEL_LOCAL_DIR}, "
+        f"hf cache at {HF_CACHE_DIR}"
     )
 
     return MODEL_LOCAL_DIR
@@ -234,7 +272,13 @@ def preload_weights() -> str:
     volumes={MODEL_DIR: volume},
     scaledown_window=10,
     timeout=600,
-    secrets=[modal.Secret.from_name("supabase-s3")],
+    secrets=[
+        modal.Secret.from_name("supabase-s3"),
+        # HF_TOKEN is needed if any transitive download wasn't pre-cached
+        # (or for the gated dinov3 repo). Pre-caching in preload_weights
+        # makes this mostly belt-and-suspenders.
+        modal.Secret.from_name("huggingface", required_keys=[]),
+    ],
     # min_containers=1,
 )
 @modal.concurrent(max_inputs=1)

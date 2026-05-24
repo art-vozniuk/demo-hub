@@ -15,8 +15,6 @@ import {
   Save,
   FolderOpen,
   Check,
-  Sparkles,
-  Upload,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -1284,56 +1282,42 @@ const Editor = () => {
                 </div>
               );
             })}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <div
-                  className={cn(
-                    "flex items-center gap-1.5 px-3 py-1.5 cursor-pointer text-[11px] leading-tight",
-                    "text-muted-foreground hover:bg-muted/40 hover:text-foreground border-t border-border/40",
-                    uploadingCount > 0 && "opacity-60 pointer-events-none",
-                  )}
-                >
-                  {uploadingCount > 0 ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <Plus className="h-3 w-3" />
-                  )}
-                  <span className="flex-1">
-                    {uploadingCount > 0
-                      ? `Loading ${uploadingCount}…`
-                      : "Add object"}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground/70">
-                    .splat, .glb
-                  </span>
-                </div>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuItem
-                  onSelect={(e) => {
-                    e.preventDefault();
-                    onPickFiles();
-                  }}
-                >
-                  <Upload className="h-3.5 w-3.5 mr-2" />
-                  Upload file (.splat / .glb)
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onSelect={(e) => {
-                    e.preventDefault();
-                    setGenerateOverlayOpen(true);
-                  }}
-                  className="flex items-center"
-                >
-                  <Sparkles className="h-3.5 w-3.5 mr-2" />
-                  <span className="flex-1">Generate object</span>
-                  <span className="text-[10px] text-muted-foreground/70">
-                    .glb .splat
-                  </span>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <button
+              type="button"
+              onClick={onPickFiles}
+              disabled={uploadingCount > 0}
+              className={cn(
+                "w-full flex items-center gap-1.5 px-3 py-1.5 text-[11px] leading-tight text-left",
+                "text-muted-foreground hover:bg-muted/40 hover:text-foreground border-t border-border/40",
+                uploadingCount > 0 && "opacity-60 pointer-events-none",
+              )}
+            >
+              {uploadingCount > 0 ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Plus className="h-3 w-3" />
+              )}
+              <span className="flex-1">
+                {uploadingCount > 0 ? `Loading ${uploadingCount}…` : "Add object"}
+              </span>
+              <span className="text-[10px] text-muted-foreground/70">
+                .glb, .splat
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setGenerateOverlayOpen(true)}
+              className={cn(
+                "w-full flex items-center gap-1.5 px-3 py-1.5 text-[11px] leading-tight text-left",
+                "text-muted-foreground hover:bg-muted/40 hover:text-foreground border-t border-border/40",
+              )}
+            >
+              <Plus className="h-3 w-3" />
+              <span className="flex-1">Generate object</span>
+              <span className="text-[10px] text-muted-foreground/70">
+                .glb, .splat
+              </span>
+            </button>
           </div>
         </div>
 
