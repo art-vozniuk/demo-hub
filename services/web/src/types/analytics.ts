@@ -40,7 +40,16 @@ export type AnalyticsEvent =
   | { name: 'pipeline_share_copy'; params: { pipeline_id: string } }
   | { name: 'pipeline_share_native'; params: { pipeline_id: string } }
   | { name: 'pipeline_share_viewed'; params: { pipeline_id: string; pipeline_name: string } }
-  | { name: 'pipeline_share_try_clicked'; params: { pipeline_id: string; pipeline_name: string } };
+  | { name: 'pipeline_share_try_clicked'; params: { pipeline_id: string; pipeline_name: string } }
+  | { name: 'editor_generate_splat_opened'; params: Record<string, never> }
+  | { name: 'editor_generate_splat_flux_submitted'; params: { pipeline_id: string; has_init_image: boolean } }
+  | { name: 'editor_generate_splat_flux_completed'; params: { pipeline_id: string } }
+  | { name: 'editor_generate_splat_flux_failed'; params: { pipeline_id: string; error: string } }
+  | { name: 'editor_generate_splat_confirmed'; params: { name: string } }
+  | { name: 'editor_generate_splat_sharp_started'; params: { pipeline_id: string } }
+  | { name: 'editor_generate_splat_sharp_completed'; params: { pipeline_id: string } }
+  | { name: 'editor_generate_splat_sharp_failed'; params: { pipeline_id: string; error: string } }
+  | { name: 'editor_generate_splat_cancelled'; params: { phase: string } };
 
 export interface GtagConfig {
   page_path?: string;

@@ -15,6 +15,8 @@ import {
   Save,
   FolderOpen,
   Check,
+  Sparkles,
+  Upload,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -43,6 +45,9 @@ import {
   type Vec3Tuple,
 } from "@/lib/scene-manifest";
 import { uploadToS3 } from "@/lib/s3";
+import { GenerationSessionProvider } from "@/contexts/GenerationSessionContext";
+import { GenerateAssetOverlay } from "@/components/editor/GenerateAssetOverlay";
+import { GenerationBadge } from "@/components/editor/GenerationBadge";
 
 const RENDERER_URL = import.meta.env.VITE_RENDERER_URL as string | undefined;
 const MAX_SPLAT_BYTES = 256 * 1024 * 1024;
@@ -167,6 +172,9 @@ const Editor = () => {
   const [loadingPlaceholders, setLoadingPlaceholders] = useState<
     { name: string; kind: ObjectKind }[]
   >([]);
+  // Controls the Generate Splat overlay. Closing while a generation is
+  // in flight keeps the session running — the badge re-opens it.
+  const [generateOverlayOpen, setGenerateOverlayOpen] = useState(false);
 
   // Camera state — synced with the C++ side via editor-camera-pose. Treated
   // as a singleton "object" in the scene panel (kind=camera, id sentinel = -1).
@@ -432,6 +440,39 @@ const Editor = () => {
     devLog("react.pick", `input=${fileInputRef.current ? "ok" : "null"}`);
     fileInputRef.current?.click();
   }, []);
+
+  // Used by GenerationSessionProvider once a Sharp splat URL is ready.
+  // Mirrors sendAssetFile but starts from a URL instead of a File so the
+  // generated splat lands as a normal scene object with bytes + sha
+  // available for the next Save.
+  const addSplatFromUrl = useCallback(
+    async (url: string, name: string) => {
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`Failed to fetch splat: ${resp.status}`);
+        const bytes = await resp.arrayBuffer();
+        const ours = bytes.slice(0);
+        const sha = await sha256Hex(ours);
+        const filename = name.endsWith(".splat") ? name : `${name}.splat`;
+        pendingAssetsRef.current.push({
+          name,
+          originalName: filename,
+          bytes: ours,
+          sha256: sha,
+          size: bytes.byteLength,
+        });
+        postToIframe(
+          { type: "editor-load-splat", bytes, name: filename },
+          [bytes],
+        );
+        toast.success(`Added "${name}" to scene`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to add splat";
+        toast.error(message);
+      }
+    },
+    [postToIframe],
+  );
 
   const onFileInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -994,6 +1035,12 @@ const Editor = () => {
   const selected = objects.find((o) => o.id === selectedId) ?? null;
 
   return (
+    <GenerationSessionProvider
+      outputBucket={ASSET_BUCKET}
+      onSplatReady={({ url, name }) => {
+        void addSplatFromUrl(url, name);
+      }}
+    >
     <div className="flex h-[calc(100vh-4rem)] w-full bg-background">
       <input
         ref={fileInputRef}
@@ -1003,9 +1050,17 @@ const Editor = () => {
         className="hidden"
         onChange={onFileInputChange}
       />
+      <GenerateAssetOverlay
+        open={generateOverlayOpen}
+        onOpenChange={setGenerateOverlayOpen}
+      />
 
       {/* Renderer canvas + global drop indicator. */}
       <div className="relative flex-1 min-w-0 bg-black">
+        <GenerationBadge
+          hidden={generateOverlayOpen}
+          onClick={() => setGenerateOverlayOpen(true)}
+        />
         <iframe
           ref={iframeRef}
           src={iframeSrc}
@@ -1229,25 +1284,53 @@ const Editor = () => {
                 </div>
               );
             })}
-            {/* Add object row. */}
-            <div
-              onClick={onPickFiles}
-              className={cn(
-                "flex items-center gap-1.5 px-3 py-1.5 cursor-pointer text-[11px] leading-tight",
-                "text-muted-foreground hover:bg-muted/40 hover:text-foreground border-t border-border/40",
-                uploadingCount > 0 && "opacity-60 pointer-events-none",
-              )}
-            >
-              {uploadingCount > 0 ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <Plus className="h-3 w-3" />
-              )}
-              <span className="flex-1">
-                {uploadingCount > 0 ? `Loading ${uploadingCount}…` : "Add object"}
-              </span>
-              <span className="text-[10px] text-muted-foreground/70">.splat, .glb</span>
-            </div>
+            {/* Add object row — dropdown picks between upload and generate. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <div
+                  className={cn(
+                    "flex items-center gap-1.5 px-3 py-1.5 cursor-pointer text-[11px] leading-tight",
+                    "text-muted-foreground hover:bg-muted/40 hover:text-foreground border-t border-border/40",
+                    uploadingCount > 0 && "opacity-60 pointer-events-none",
+                  )}
+                >
+                  {uploadingCount > 0 ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Plus className="h-3 w-3" />
+                  )}
+                  <span className="flex-1">
+                    {uploadingCount > 0
+                      ? `Loading ${uploadingCount}…`
+                      : "Add object"}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground/70">
+                    .splat, .glb
+                  </span>
+                </div>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuItem
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    onPickFiles();
+                  }}
+                >
+                  <Upload className="h-3.5 w-3.5 mr-2" />
+                  Upload file (.splat / .glb)
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    setGenerateOverlayOpen(true);
+                  }}
+                >
+                  <Sparkles className="h-3.5 w-3.5 mr-2" />
+                  Generate splat (AI)
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
 
@@ -1345,6 +1428,7 @@ const Editor = () => {
         })()}
       </aside>
     </div>
+    </GenerationSessionProvider>
   );
 };
 
