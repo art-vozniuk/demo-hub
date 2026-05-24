@@ -5,11 +5,13 @@ from services.dispatch.app.pipelines.service import (
     GenerativeEditingCustomService,
     GenerativeEditingService,
     SharpService,
+    TrellisService,
 )
 from services.dispatch.app.pipelines.schemas import (
     GenerativeEditingCustomPipelineInput,
     GenerativeEditingPipelineInput,
     SharpPipelineInput,
+    TrellisPipelineInput,
 )
 
 
@@ -76,6 +78,34 @@ def test_create_service_sharp_invalid_input(mock_s3_client):
         create_service(
             pipeline_id="xyz",
             pipeline_name="sharp",
+            pipeline_input={"image_bucket": "media"},  # missing image_key
+            s3_client=mock_s3_client,
+        )
+
+
+def test_create_service_trellis(mock_s3_client):
+    svc = create_service(
+        pipeline_id="trl",
+        pipeline_name="trellis",
+        pipeline_input={
+            "image_bucket": "media",
+            "image_key": "user/photo.jpg",
+        },
+        s3_client=mock_s3_client,
+    )
+
+    assert isinstance(svc, TrellisService)
+    assert svc.id == "trl"
+    assert isinstance(svc.pipeline_input, TrellisPipelineInput)
+    assert svc.pipeline_input.image_bucket == "media"
+    assert svc.pipeline_input.image_key == "user/photo.jpg"
+
+
+def test_create_service_trellis_invalid_input(mock_s3_client):
+    with pytest.raises(ValueError, match="Invalid input for trellis"):
+        create_service(
+            pipeline_id="trl",
+            pipeline_name="trellis",
             pipeline_input={"image_bucket": "media"},  # missing image_key
             s3_client=mock_s3_client,
         )

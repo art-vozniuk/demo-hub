@@ -44,11 +44,16 @@ export interface SharpResult {
   gaussian_count?: number;
 }
 
+export interface TrellisResult {
+  result_url: string;
+}
+
 export type PipelineResult =
   | FaceRecognitionResult
   | FaceSwapResult
   | FluxResult
   | SharpResult
+  | TrellisResult
   | Record<string, any>;
 
 export interface PipelineStatusItem {

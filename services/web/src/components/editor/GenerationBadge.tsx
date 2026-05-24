@@ -30,10 +30,10 @@ export const GenerationBadge = ({ hidden, onClick }: Props) => {
           spinning: false,
           tone: "primary" as const,
         };
-      case "sharp-pending":
+      case "object-pending":
         return {
           Icon: Loader2,
-          label: "Rendering splat…",
+          label: session.outputKind === "glb" ? "Building mesh…" : "Rendering splat…",
           spinning: true,
           tone: "primary" as const,
         };

@@ -24,6 +24,7 @@ _ROUTES: dict[str, str] = {
     "generative_editing_custom": rabbitmq_config.routing_dispatch,
     "generative_t2i": rabbitmq_config.routing_dispatch,
     "sharp": rabbitmq_config.routing_dispatch,
+    "trellis": rabbitmq_config.routing_dispatch,
 }
 
 

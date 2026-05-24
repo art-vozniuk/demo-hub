@@ -439,17 +439,20 @@ const Editor = () => {
     fileInputRef.current?.click();
   }, []);
 
-  // Sharp callback: fetch the splat URL and post editor-load-splat exactly
-  // like a manual upload, so it lands with bytes+sha ready for next Save.
-  const addSplatFromUrl = useCallback(
-    async (url: string, name: string) => {
+  // Generation callback: fetch the result URL and post the matching
+  // editor-load-* message exactly like a manual upload, so it lands with
+  // bytes+sha ready for next Save. Splat → editor-load-splat (.splat),
+  // mesh (trellis GLB) → editor-load-mesh (.glb).
+  const addAssetFromUrl = useCallback(
+    async (url: string, name: string, kind: "splat" | "mesh") => {
+      const ext = kind === "mesh" ? "glb" : "splat";
       try {
         const resp = await fetch(url);
-        if (!resp.ok) throw new Error(`Failed to fetch splat: ${resp.status}`);
+        if (!resp.ok) throw new Error(`Failed to fetch ${ext}: ${resp.status}`);
         const bytes = await resp.arrayBuffer();
         const ours = bytes.slice(0);
         const sha = await sha256Hex(ours);
-        const filename = name.endsWith(".splat") ? name : `${name}.splat`;
+        const filename = name.endsWith(`.${ext}`) ? name : `${name}.${ext}`;
         pendingAssetsRef.current.push({
           name,
           originalName: filename,
@@ -457,13 +460,14 @@ const Editor = () => {
           sha256: sha,
           size: bytes.byteLength,
         });
+        const msgType = kind === "mesh" ? "editor-load-mesh" : "editor-load-splat";
         postToIframe(
-          { type: "editor-load-splat", bytes, name: filename },
+          { type: msgType, bytes, name: filename },
           [bytes],
         );
         toast.success(`Added "${name}" to scene`);
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Failed to add splat";
+        const message = err instanceof Error ? err.message : "Failed to add asset";
         toast.error(message);
       }
     },
@@ -1033,8 +1037,8 @@ const Editor = () => {
   return (
     <GenerationSessionProvider
       outputBucket={ASSET_BUCKET}
-      onSplatReady={({ url, name }) => {
-        void addSplatFromUrl(url, name);
+      onAssetReady={({ url, name, kind }) => {
+        void addAssetFromUrl(url, name, kind);
       }}
     >
     <div className="flex h-[calc(100vh-4rem)] w-full bg-background">
@@ -1320,9 +1324,13 @@ const Editor = () => {
                     e.preventDefault();
                     setGenerateOverlayOpen(true);
                   }}
+                  className="flex items-center"
                 >
                   <Sparkles className="h-3.5 w-3.5 mr-2" />
-                  Generate splat (AI)
+                  <span className="flex-1">Generate object</span>
+                  <span className="text-[10px] text-muted-foreground/70">
+                    .glb .splat
+                  </span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

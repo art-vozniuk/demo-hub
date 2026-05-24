@@ -1,5 +1,6 @@
-// Overlay UI for the editor's "Generate splat" flow. State lives in
-// GenerationSessionContext; close ≠ cancel (the badge re-opens it).
+// Overlay UI for the editor's "Generate object" flow. State lives in
+// GenerationSessionContext; close ≠ cancel (the badge re-opens it). An
+// output toggle picks the second stage: GLB mesh (default) or splat.
 
 import { useEffect, useMemo, useState } from "react";
 import { Sparkles, RefreshCcw, Check } from "lucide-react";
@@ -14,8 +15,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import GenerationCard from "@/components/GenerationCard";
-import { useGenerationSession } from "@/contexts/GenerationSessionContext";
+import {
+  useGenerationSession,
+  type OutputKind,
+} from "@/contexts/GenerationSessionContext";
 import { useWallet } from "@/contexts/WalletContext";
 
 interface Props {
@@ -35,6 +40,8 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
   const [prompt, setPrompt] = useState("");
   const [iterate, setIterate] = useState(false);
 
+  const isMesh = session.outputKind === "glb";
+
   // Pre-fill from the running session when re-opening from the badge.
   useEffect(() => {
     if (open && session.prompt && !prompt) {
@@ -50,7 +57,7 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
 
   const canStart = useMemo(() => {
     if (prompt.trim().length === 0) return false;
-    if (session.phase === "flux-pending" || session.phase === "sharp-pending") {
+    if (session.phase === "flux-pending" || session.phase === "object-pending") {
       return false;
     }
     if (balance !== null) {
@@ -75,10 +82,14 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
     switch (session.phase) {
       case "flux-pending":
         return session.iterating ? "Editing image…" : "Generating image…";
-      case "sharp-pending":
-        return "Rendering splat (background)…";
+      case "object-pending":
+        return isMesh
+          ? "Building mesh (background)…"
+          : "Rendering splat (background)…";
       case "flux-ready":
-        return "Image ready — confirm to render as splat";
+        return isMesh
+          ? "Image ready — confirm to build a GLB mesh"
+          : "Image ready — confirm to render a splat";
       case "failed":
         return session.errorMessage ?? "Generation failed";
       default:
@@ -101,7 +112,7 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <Sparkles className="h-4 w-4 text-primary" />
-            Generate splat
+            Generate object
           </DialogTitle>
           <DialogDescription className="text-xs">
             {phaseLabel}
@@ -115,8 +126,8 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
               <span>{iterate ? "Edit" : "Image"}: {imageCost}</span>
             );
           })()}
-          {session.sharpCost !== undefined && (
-            <span>Splat: {session.sharpCost}</span>
+          {session.objectCost !== undefined && (
+            <span>{isMesh ? "Mesh" : "Splat"}: {session.objectCost}</span>
           )}
           {balance !== null && <span>· Balance: {balance}</span>}
         </div>
@@ -134,8 +145,28 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
           </div>
         )}
 
-        {session.phase !== "sharp-pending" && (
+        {session.phase !== "object-pending" && (
           <div className="space-y-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Output</Label>
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                size="sm"
+                value={session.outputKind}
+                onValueChange={(v) => {
+                  if (v) session.setOutputKind(v as OutputKind);
+                }}
+                className="justify-start"
+              >
+                <ToggleGroupItem value="glb" className="text-[11px] px-3">
+                  GLB mesh
+                </ToggleGroupItem>
+                <ToggleGroupItem value="splat" className="text-[11px] px-3">
+                  Gaussian splat
+                </ToggleGroupItem>
+              </ToggleGroup>
+            </div>
             <Label htmlFor="generate-prompt" className="text-xs">
               Prompt
             </Label>
@@ -169,7 +200,7 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
               className="gap-1"
             >
               <Check className="h-4 w-4" />
-              Confirm & render splat
+              {isMesh ? "Confirm & build mesh" : "Confirm & render splat"}
             </Button>
           )}
           {(session.phase === "idle" ||

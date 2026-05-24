@@ -152,6 +152,17 @@ async def invoke_sharp(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+async def invoke_trellis(payload: dict[str, Any]) -> dict[str, Any]:
+    return await _submit_and_poll(
+        label="trellis",
+        submit_url=config.MODAL_TRELLIS_SUBMIT_URL,
+        poll_url=config.MODAL_TRELLIS_POLL_URL,
+        submit_url_label="MODAL_TRELLIS_SUBMIT_URL",
+        poll_url_label="MODAL_TRELLIS_POLL_URL",
+        payload=payload,
+    )
+
+
 async def invoke_generative_t2i(payload: dict[str, Any]) -> dict[str, Any]:
     return await _submit_and_poll(
         label="generative_t2i",

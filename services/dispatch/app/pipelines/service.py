@@ -24,8 +24,10 @@ from .schemas import (
     GenerativeT2IPipelineInput,
     PipelineInput,
     SharpPipelineInput,
+    TrellisPipelineInput,
 )
 from .sharp import SharpPipeline
+from .trellis import TrellisPipeline
 
 log = logging.getLogger(__name__)
 
@@ -72,6 +74,16 @@ class SharpService(Service):
         if not isinstance(self.pipeline_input, SharpPipelineInput):
             raise ValueError("Invalid pipeline input for SharpService")
         return SharpPipeline(
+            s3=self.s3,
+            pipeline_input=self.pipeline_input,
+        )
+
+
+class TrellisService(Service):
+    async def prepare_pipeline(self) -> AsyncPipeline:
+        if not isinstance(self.pipeline_input, TrellisPipelineInput):
+            raise ValueError("Invalid pipeline input for TrellisService")
+        return TrellisPipeline(
             s3=self.s3,
             pipeline_input=self.pipeline_input,
         )
@@ -129,6 +141,11 @@ pipeline_templates: dict[str, PipelineType] = {
         service_type=SharpService,
         input_type=SharpPipelineInput,
         estimated_time_ms=8_000,
+    ),
+    "trellis": PipelineType(
+        service_type=TrellisService,
+        input_type=TrellisPipelineInput,
+        estimated_time_ms=25_000,
     ),
     "generative_t2i": PipelineType(
         service_type=GenerativeT2IService,

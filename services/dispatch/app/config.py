@@ -16,6 +16,8 @@ class Config(BaseSettings):
     MODAL_GENERATIVE_T2I_POLL_URL: str | None = None
     MODAL_SHARP_SUBMIT_URL: str | None = None
     MODAL_SHARP_POLL_URL: str | None = None
+    MODAL_TRELLIS_SUBMIT_URL: str | None = None
+    MODAL_TRELLIS_POLL_URL: str | None = None
     MODAL_PROXY_AUTH_TOKEN_ID: str | None = None
     MODAL_PROXY_AUTH_TOKEN_SECRET: str | None = None
 

@@ -8,6 +8,7 @@ endpoints, and proxy-auth tokens.
 |---|---|---|---|---|
 | `demo-hub-flux` | Flux | `flux/app.py` | `flux-models` | `MODAL_GENERATIVE_SUBMIT_URL`, `MODAL_GENERATIVE_POLL_URL` |
 | `demo-hub-sharp` | SHARP (single-image → 3DGS) | `sharp/app.py` | `sharp-models` | `MODAL_SHARP_SUBMIT_URL`, `MODAL_SHARP_POLL_URL` |
+| `demo-hub-trellis` | TRELLIS.2 (single-image → GLB mesh) | `trellis/app.py` | `trellis-models` | `MODAL_TRELLIS_SUBMIT_URL`, `MODAL_TRELLIS_POLL_URL` |
 
 Every app exposes the same shape: a `submit` endpoint that spawns the
 GPU job and returns a `call_id`, and a `poll` endpoint dispatch hits
@@ -30,7 +31,12 @@ services/modal/
 │   ├── deploy.py         # python flux/deploy.py
 │   ├── preload.py        # python flux/preload.py
 │   └── destroy.py
-└── sharp/
+├── sharp/
+│   ├── app.py
+│   ├── deploy.py
+│   ├── preload.py
+│   └── destroy.py
+└── trellis/
     ├── app.py
     ├── deploy.py
     ├── preload.py
@@ -70,14 +76,17 @@ cd services/modal
 # 2) populate the per-app volume with weights (CPU container, idempotent)
 python flux/preload.py
 python sharp/preload.py
+python trellis/preload.py
 
 # 3) deploy each app and print its endpoint URLs
 python flux/deploy.py
 python sharp/deploy.py
+python trellis/deploy.py
 
 # tear down (volume + secrets kept)
 python flux/destroy.py
 python sharp/destroy.py
+python trellis/destroy.py
 ```
 
 Each deploy writes both endpoint URLs (submit then poll) to a sibling
@@ -89,6 +98,8 @@ MODAL_GENERATIVE_SUBMIT_URL=https://<workspace>--demo-hub-flux-submit.modal.run
 MODAL_GENERATIVE_POLL_URL=https://<workspace>--demo-hub-flux-poll.modal.run
 MODAL_SHARP_SUBMIT_URL=https://<workspace>--demo-hub-sharp-submit.modal.run
 MODAL_SHARP_POLL_URL=https://<workspace>--demo-hub-sharp-poll.modal.run
+MODAL_TRELLIS_SUBMIT_URL=https://<workspace>--demo-hub-trellis-submit.modal.run
+MODAL_TRELLIS_POLL_URL=https://<workspace>--demo-hub-trellis-poll.modal.run
 ```
 
 ## Secrets and proxy-auth
@@ -209,3 +220,49 @@ weights under a separate
 Review both before shipping anything beyond a personal demo. The
 checkpoint URL is hard-coded in `sharp/app.py:CHECKPOINT_URL` — pin
 to a specific commit/release of ml-sharp once Apple cuts one.
+
+## TRELLIS.2 — single-image → GLB mesh
+
+Serverless GPU backend for the **GLB mesh** output of the editor's
+generate flow. Takes one image, returns a PBR-textured `.glb` URL.
+Wraps Microsoft's [TRELLIS.2](https://github.com/microsoft/TRELLIS.2)
+image-to-3D pipeline (`microsoft/TRELLIS.2-4B`). Same shape as sharp —
+`POST /submit` + `POST /poll`, result lands in S3.
+
+Setup uses the same `python trellis/{preload,deploy,destroy}.py`
+commands documented above. Weights download Modal-side during
+`python trellis/preload.py`.
+
+### Endpoint contract
+
+Submit takes the source image's S3 location:
+
+```json
+{ "image_bucket": "media", "image_key": "generative_results/<uuid>.png" }
+```
+
+`POST /poll` returns one of:
+
+```json
+{ "status": "running" }
+{ "status": "done", "result": {
+    "result_url": "https://.../trellis_results/<uuid>.glb",
+    "glb_size_bytes": 12345678
+} }
+{ "status": "failed",  "error": "..." }
+{ "status": "expired" }
+```
+
+### Image build caveat
+
+Unlike flux/sharp (pure pip installs), TRELLIS.2 compiles custom CUDA
+extensions (O-Voxel, FlexGEMM, CuMesh, nvdiffrast, nvdiffrec) from a
+`--recursive` clone, so the image starts from a CUDA *devel* base for
+`nvcc`. The build recipe in `trellis/app.py:trellis_image` is a
+best-effort first pass per the TRELLIS.2 README — expect to iterate on
+the `run_commands` steps (versions, submodule paths) until it goes
+green. Nothing else in the stack depends on the exact recipe.
+
+GPU: 512-res inference targets an A10G (24GB). If a real input OOMs,
+bump the `@app.cls(gpu=...)` tier to `L40S` (48GB) — do not drop the
+render resolution.

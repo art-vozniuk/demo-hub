@@ -1,6 +1,8 @@
 // One-at-a-time generation session for the 3D editor: prompt → flux-t2i
-// → user confirm → sharp → splat. Pipelines run via pipelinesApi; Editor
-// wires onSplatReady to actually insert the resulting splat into the scene.
+// → user confirm → 3D pipeline → asset in scene. The 3D stage is one of
+// two pipelines selected by `outputKind`: GLB mesh (trellis, default) or
+// gaussian splat (sharp). Stage 1 (FLUX text→image) is identical for both.
+// Editor wires onAssetReady to insert the resulting asset into the scene.
 
 import {
   createContext,
@@ -19,7 +21,6 @@ import {
   ApiError,
   type PipelineStatusItem,
   type FluxResult,
-  type SharpResult,
 } from "@/api";
 import { parseS3Url } from "@/lib/s3";
 import { useWallet } from "@/contexts/WalletContext";
@@ -29,12 +30,28 @@ const T2I_PIPELINE = "generative_t2i";
 // Iteration runs through klein (the existing edit-focused pipeline) —
 // schnell's img2img is lower quality and exposes a confusing strength knob.
 const ITERATE_PIPELINE = "generative_editing_custom";
-const SHARP_PIPELINE = "sharp";
+// Stage 2 — the image→3D pipelines the output toggle picks between.
+const MESH_PIPELINE = "trellis";
+const SPLAT_PIPELINE = "sharp";
 const POLL_INTERVAL_MS = 1000;
 const POLL_TIMEOUT_MS = 240_000;
 const ITERATE_STEPS = 4;
 
-// Flux-t2i result, augmented with bucket+key so Sharp can chain off it.
+// What the second stage produces. "glb" → trellis mesh, "splat" → sharp.
+export type OutputKind = "glb" | "splat";
+
+// The asset kind the editor renderer expects, derived from OutputKind.
+export type AssetKind = "mesh" | "splat";
+
+function stage2Pipeline(kind: OutputKind): string {
+  return kind === "glb" ? MESH_PIPELINE : SPLAT_PIPELINE;
+}
+
+function assetKindFor(kind: OutputKind): AssetKind {
+  return kind === "glb" ? "mesh" : "splat";
+}
+
+// Flux-t2i result, augmented with bucket+key so stage 2 can chain off it.
 export interface T2IImage {
   result_url: string;
   image_bucket: string;
@@ -48,19 +65,20 @@ export type GenerationPhase =
   | "idle"
   | "flux-pending"
   | "flux-ready"
-  | "sharp-pending"
+  | "object-pending"
   | "failed";
 
 export interface GenerationSessionState {
   phase: GenerationPhase;
+  outputKind: OutputKind;
   prompt: string;
   image: T2IImage | null;
   iterating: boolean;
   fluxPipelineId: string | null;
-  sharpPipelineId: string | null;
-  splatName: string | null;
+  objectPipelineId: string | null;
+  objectName: string | null;
   errorMessage: string | null;
-  errorPhase: "flux" | "sharp" | null;
+  errorPhase: "flux" | "object" | null;
   estimatedFinishAt: string | null;
   workersMissing: boolean;
 }
@@ -73,8 +91,9 @@ interface StartArgs {
 export interface GenerationSessionApi extends GenerationSessionState {
   fluxCost: number | undefined;
   iterateCost: number | undefined;
-  sharpCost: number | undefined;
+  objectCost: number | undefined;
   totalCost: number | undefined;
+  setOutputKind: (kind: OutputKind) => void;
   start: (args: StartArgs) => Promise<void>;
   confirm: () => Promise<void>;
   cancel: () => void;
@@ -84,7 +103,7 @@ export interface GenerationSessionApi extends GenerationSessionState {
 interface ProviderProps {
   children: ReactNode;
   outputBucket?: string;
-  onSplatReady: (args: { url: string; name: string }) => void;
+  onAssetReady: (args: { url: string; name: string; kind: AssetKind }) => void;
 }
 
 const GenerationSessionContext = createContext<GenerationSessionApi | undefined>(
@@ -93,12 +112,13 @@ const GenerationSessionContext = createContext<GenerationSessionApi | undefined>
 
 const INITIAL_STATE: GenerationSessionState = {
   phase: "idle",
+  outputKind: "glb",
   prompt: "",
   image: null,
   iterating: false,
   fluxPipelineId: null,
-  sharpPipelineId: null,
-  splatName: null,
+  objectPipelineId: null,
+  objectName: null,
   errorMessage: null,
   errorPhase: null,
   estimatedFinishAt: null,
@@ -112,13 +132,13 @@ function slugifyPrompt(prompt: string): string {
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 5);
-  return words.length > 0 ? words.join("-") : "generated-splat";
+  return words.length > 0 ? words.join("-") : "generated-object";
 }
 
 export const GenerationSessionProvider = ({
   children,
   outputBucket = "media",
-  onSplatReady,
+  onAssetReady,
 }: ProviderProps) => {
   const { balance, getCost, refresh: refreshBalance } = useWallet();
   const { track } = useAnalytics();
@@ -127,17 +147,17 @@ export const GenerationSessionProvider = ({
 
   const fluxPollRef = useRef<number | null>(null);
   const fluxTimeoutRef = useRef<number | null>(null);
-  const sharpPollRef = useRef<number | null>(null);
-  const sharpTimeoutRef = useRef<number | null>(null);
+  const objectPollRef = useRef<number | null>(null);
+  const objectTimeoutRef = useRef<number | null>(null);
   // setInterval keeps spawning polls without awaiting the previous one,
-  // so multiple in-flight pollSharp/pollFlux can all see COMPLETED at
+  // so multiple in-flight pollObject/pollFlux can all see COMPLETED at
   // once. Track which pipeline_ids we've already handled to drop dupes.
   const processedPipelinesRef = useRef<Set<string>>(new Set());
   // Refed so the poll callbacks don't need to re-subscribe when Editor re-renders.
-  const onSplatReadyRef = useRef(onSplatReady);
+  const onAssetReadyRef = useRef(onAssetReady);
   useEffect(() => {
-    onSplatReadyRef.current = onSplatReady;
-  }, [onSplatReady]);
+    onAssetReadyRef.current = onAssetReady;
+  }, [onAssetReady]);
 
   const clearFluxPolling = useCallback(() => {
     if (fluxPollRef.current !== null) {
@@ -149,69 +169,79 @@ export const GenerationSessionProvider = ({
       fluxTimeoutRef.current = null;
     }
   }, []);
-  const clearSharpPolling = useCallback(() => {
-    if (sharpPollRef.current !== null) {
-      window.clearInterval(sharpPollRef.current);
-      sharpPollRef.current = null;
+  const clearObjectPolling = useCallback(() => {
+    if (objectPollRef.current !== null) {
+      window.clearInterval(objectPollRef.current);
+      objectPollRef.current = null;
     }
-    if (sharpTimeoutRef.current !== null) {
-      window.clearTimeout(sharpTimeoutRef.current);
-      sharpTimeoutRef.current = null;
+    if (objectTimeoutRef.current !== null) {
+      window.clearTimeout(objectTimeoutRef.current);
+      objectTimeoutRef.current = null;
     }
   }, []);
   useEffect(
     () => () => {
       clearFluxPolling();
-      clearSharpPolling();
+      clearObjectPolling();
     },
-    [clearFluxPolling, clearSharpPolling],
+    [clearFluxPolling, clearObjectPolling],
   );
 
   const reset = useCallback(() => {
     clearFluxPolling();
-    clearSharpPolling();
+    clearObjectPolling();
     setState(INITIAL_STATE);
-  }, [clearFluxPolling, clearSharpPolling]);
+  }, [clearFluxPolling, clearObjectPolling]);
+
+  const setOutputKind = useCallback((kind: OutputKind) => {
+    setState((prev) => (prev.outputKind === kind ? prev : { ...prev, outputKind: kind }));
+  }, []);
 
   const cancel = useCallback(() => {
     // No Modal-side abort — we just stop polling. Already-debited tokens stay debited.
     clearFluxPolling();
-    clearSharpPolling();
+    clearObjectPolling();
     setState((prev) => {
       if (prev.phase === "idle") return prev;
       track({
         name: "editor_generate_splat_cancelled",
         params: { phase: prev.phase },
       });
-      return INITIAL_STATE;
+      // Preserve the chosen output kind across a cancel so the toggle
+      // doesn't snap back to the default mid-session.
+      return { ...INITIAL_STATE, outputKind: prev.outputKind };
     });
-  }, [clearFluxPolling, clearSharpPolling, track]);
+  }, [clearFluxPolling, clearObjectPolling, track]);
 
-  const onSharpComplete = useCallback(
-    (item: PipelineStatusItem, name: string) => {
-      const result = item.result as SharpResult | undefined;
+  const onObjectComplete = useCallback(
+    (item: PipelineStatusItem, name: string, kind: OutputKind) => {
+      const result = item.result as { result_url?: string } | undefined;
       if (!result?.result_url) {
-        toast.error("Sharp returned no splat URL.");
+        toast.error("3D generation returned no result URL.");
         setState((prev) => ({
           ...prev,
           phase: "failed",
-          errorPhase: "sharp",
-          errorMessage: "Sharp returned no splat URL.",
+          errorPhase: "object",
+          errorMessage: "3D generation returned no result URL.",
         }));
         return;
       }
       track({
         name: "editor_generate_splat_sharp_completed",
-        params: { pipeline_id: item.id },
+        params: { pipeline_id: item.id, output_kind: kind },
       });
-      onSplatReadyRef.current({ url: result.result_url, name });
+      onAssetReadyRef.current({
+        url: result.result_url,
+        name,
+        kind: assetKindFor(kind),
+      });
       reset();
     },
     [reset, track],
   );
 
-  const pollSharp = useCallback(
-    async (pipelineId: string, name: string) => {
+  const pollObject = useCallback(
+    async (pipelineId: string, name: string, kind: OutputKind) => {
       if (processedPipelinesRef.current.has(pipelineId)) return;
       try {
         const resp = await pipelinesApi.getStatus([pipelineId]);
@@ -222,33 +252,33 @@ export const GenerationSessionProvider = ({
           processedPipelinesRef.current.add(pipelineId);
         }
         if (item.status === "COMPLETED") {
-          clearSharpPolling();
-          onSharpComplete(item, name);
+          clearObjectPolling();
+          onObjectComplete(item, name, kind);
         } else if (item.status === "FAILED") {
-          clearSharpPolling();
+          clearObjectPolling();
           refreshBalance();
-          const msg = item.message || "Splat generation failed.";
+          const msg = item.message || "3D generation failed.";
           toast.error(msg);
           track({
             name: "editor_generate_splat_sharp_failed",
-            params: { pipeline_id: pipelineId, error: msg },
+            params: { pipeline_id: pipelineId, error: msg, output_kind: kind },
           });
           setState((prev) => ({
             ...prev,
             phase: "failed",
-            errorPhase: "sharp",
+            errorPhase: "object",
             errorMessage: msg,
           }));
         }
       } catch (err) {
-        console.error("sharp poll failed:", err);
+        console.error("object poll failed:", err);
       }
     },
-    [clearSharpPolling, onSharpComplete, refreshBalance, track],
+    [clearObjectPolling, onObjectComplete, refreshBalance, track],
   );
 
-  const startSharp = useCallback(
-    async (image: T2IImage, name: string) => {
+  const startObject = useCallback(
+    async (image: T2IImage, name: string, kind: OutputKind) => {
       const pipelineId = uuidv4();
       const traceId = uuidv4();
       try {
@@ -257,7 +287,7 @@ export const GenerationSessionProvider = ({
           jobs: [
             {
               pipeline_id: pipelineId,
-              pipeline_name: SHARP_PIPELINE,
+              pipeline_name: stage2Pipeline(kind),
               input: {
                 image_bucket: image.image_bucket,
                 image_key: image.image_key,
@@ -268,14 +298,14 @@ export const GenerationSessionProvider = ({
       } catch (err) {
         if (err instanceof ApiError && err.status === 402) {
           await refreshBalance();
-          toast.error("Out of tokens for splat generation.");
+          toast.error("Out of tokens for 3D generation.");
         } else {
-          toast.error(`Failed to queue splat: ${err}`);
+          toast.error(`Failed to queue 3D generation: ${err}`);
         }
         setState((prev) => ({
           ...prev,
           phase: "failed",
-          errorPhase: "sharp",
+          errorPhase: "object",
           errorMessage: String(err),
         }));
         return;
@@ -283,13 +313,13 @@ export const GenerationSessionProvider = ({
       refreshBalance();
       track({
         name: "editor_generate_splat_sharp_started",
-        params: { pipeline_id: pipelineId },
+        params: { pipeline_id: pipelineId, output_kind: kind },
       });
       setState((prev) => ({
         ...prev,
-        phase: "sharp-pending",
-        sharpPipelineId: pipelineId,
-        splatName: name,
+        phase: "object-pending",
+        objectPipelineId: pipelineId,
+        objectName: name,
         errorMessage: null,
         errorPhase: null,
         estimatedFinishAt: null,
@@ -299,7 +329,7 @@ export const GenerationSessionProvider = ({
         .getEstimate(pipelineId)
         .then((res) => {
           setState((prev) =>
-            prev.sharpPipelineId === pipelineId
+            prev.objectPipelineId === pipelineId
               ? {
                   ...prev,
                   estimatedFinishAt: new Date(
@@ -310,23 +340,23 @@ export const GenerationSessionProvider = ({
               : prev,
           );
         })
-        .catch((e) => console.warn("sharp estimate fetch failed:", e));
-      pollSharp(pipelineId, name);
-      sharpPollRef.current = window.setInterval(() => {
-        pollSharp(pipelineId, name);
+        .catch((e) => console.warn("object estimate fetch failed:", e));
+      pollObject(pipelineId, name, kind);
+      objectPollRef.current = window.setInterval(() => {
+        pollObject(pipelineId, name, kind);
       }, POLL_INTERVAL_MS);
-      sharpTimeoutRef.current = window.setTimeout(() => {
-        clearSharpPolling();
-        toast.error("Splat generation timed out.");
+      objectTimeoutRef.current = window.setTimeout(() => {
+        clearObjectPolling();
+        toast.error("3D generation timed out.");
         setState((prev) => ({
           ...prev,
           phase: "failed",
-          errorPhase: "sharp",
-          errorMessage: "Sharp generation timed out.",
+          errorPhase: "object",
+          errorMessage: "3D generation timed out.",
         }));
       }, POLL_TIMEOUT_MS);
     },
-    [clearSharpPolling, pollSharp, refreshBalance, track],
+    [clearObjectPolling, pollObject, refreshBalance, track],
   );
 
   const pollFlux = useCallback(
@@ -362,7 +392,7 @@ export const GenerationSessionProvider = ({
             return;
           }
           // Klein returns only {result_url}; schnell adds bucket+key. Parse
-          // the URL when missing so Sharp always has somewhere to read from.
+          // the URL when missing so stage 2 always has somewhere to read from.
           let imageBucket = result.image_bucket;
           let imageKey = result.image_key;
           if (!imageBucket || !imageKey) {
@@ -429,7 +459,7 @@ export const GenerationSessionProvider = ({
       }
       if (
         state.phase === "flux-pending" ||
-        state.phase === "sharp-pending"
+        state.phase === "object-pending"
       ) {
         toast.error("A generation is already in progress.");
         return;
@@ -458,8 +488,8 @@ export const GenerationSessionProvider = ({
         prompt: trimmed,
         iterating: !!initImage,
         fluxPipelineId: pipelineId,
-        sharpPipelineId: null,
-        splatName: null,
+        objectPipelineId: null,
+        objectName: null,
         errorMessage: null,
         errorPhase: null,
         estimatedFinishAt: null,
@@ -545,33 +575,34 @@ export const GenerationSessionProvider = ({
       toast.error("No image to confirm.");
       return;
     }
-    const sharpCost = getCost(SHARP_PIPELINE);
-    if (balance !== null && sharpCost !== undefined && balance < sharpCost) {
-      toast.error("Not enough tokens for splat generation.");
+    const cost = getCost(stage2Pipeline(state.outputKind));
+    if (balance !== null && cost !== undefined && balance < cost) {
+      toast.error("Not enough tokens for 3D generation.");
       return;
     }
     const name = slugifyPrompt(state.prompt);
     track({
       name: "editor_generate_splat_confirmed",
-      params: { name },
+      params: { name, output_kind: state.outputKind },
     });
-    await startSharp(state.image, name);
+    await startObject(state.image, name, state.outputKind);
   }, [
     state.phase,
     state.image,
     state.prompt,
+    state.outputKind,
     balance,
     getCost,
-    startSharp,
+    startObject,
     track,
   ]);
 
   const fluxCost = getCost(T2I_PIPELINE);
   const iterateCost = getCost(ITERATE_PIPELINE);
-  const sharpCost = getCost(SHARP_PIPELINE);
+  const objectCost = getCost(stage2Pipeline(state.outputKind));
   const totalCost =
-    fluxCost !== undefined && sharpCost !== undefined
-      ? fluxCost + sharpCost
+    fluxCost !== undefined && objectCost !== undefined
+      ? fluxCost + objectCost
       : undefined;
 
   return (
@@ -580,8 +611,9 @@ export const GenerationSessionProvider = ({
         ...state,
         fluxCost,
         iterateCost,
-        sharpCost,
+        objectCost,
         totalCost,
+        setOutputKind,
         start,
         confirm,
         cancel,
