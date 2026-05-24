@@ -73,8 +73,8 @@ async def test_update_scene(db_session):
 
 
 async def _seed_default_scene(db_session, user_id):
-    # The default scene is a normal row; create it with the reserved id so we
-    # can assert the per-user endpoints refuse to touch it.
+    # Insert a row with the reserved default-scene id to assert the per-user
+    # endpoints refuse to touch it.
     scene = EditorScene(
         id=DEFAULT_SCENE_ID,
         user_id=user_id,
@@ -93,8 +93,7 @@ async def test_default_scene_excluded_from_user_list(db_session):
     await _seed_default_scene(db_session, owner)
     await service.create_scene(db_session, user_id=owner, name="Mine", manifest={})
     items = await service.list_scenes_for_user(db_session, owner)
-    # Even though `owner` is the row's user_id, the curated default must not
-    # appear in their editable scene list.
+    # Default excluded even though `owner` is its user_id.
     assert {s.name for s in items} == {"Mine"}
 
 
@@ -102,8 +101,7 @@ async def test_default_scene_excluded_from_user_list(db_session):
 async def test_default_scene_not_fetchable_by_owner(db_session):
     owner = uuid.uuid4()
     await _seed_default_scene(db_session, owner)
-    # The owner cannot load it by id through the per-user lookup — this also
-    # gates update/delete, so the shared template can't be overwritten.
+    # Owner can't load it by id; this lookup also gates update/delete.
     assert await service.get_scene_for_user(db_session, owner, DEFAULT_SCENE_ID) is None
 
 

@@ -27,9 +27,8 @@ class EditorSceneRead(BaseModel):
 
 
 class DefaultSceneRead(BaseModel):
-    # Public, anonymous-visitor view of the curated default scene. Exposes
-    # only what the renderer needs to display it — deliberately omits id and
-    # user_id so the shared template's identity never leaks to clients.
+    # Public anon view of the default scene. Omits id/user_id so the shared
+    # template's identity never leaks to clients.
     name: str
     manifest: dict[str, Any]
 

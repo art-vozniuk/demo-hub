@@ -58,8 +58,7 @@ async def list_scenes(
 
 @router.get("/scenes/default", response_model=DefaultSceneRead)
 async def get_default_scene(db: DbSession) -> DefaultSceneRead:
-    # Public; no auth dependency. Reads exactly DEFAULT_SCENE_ID and returns
-    # a manifest-only view — the scene id and owner are never exposed.
+    # Public; no auth. Manifest-only view — scene id and owner aren't exposed.
     scene = await service.get_scene_by_id(db, DEFAULT_SCENE_ID)
     if scene is None:
         raise HTTPException(
