@@ -74,9 +74,11 @@ trellis_image = (
     )
     .pip_install(
         # torch/torchvision pinned together — CUDA ABI mismatch hurts the
-        # extension builds below. cu124 wheels match the devel base.
-        "torch==2.5.1",
-        "torchvision==0.20.1",
+        # extension builds below. cu124 wheels match the devel base. Pinned
+        # to upstream setup.sh's versions: 2.6.0 ships triton>=3.2 which
+        # FlexGEMM requires; 2.5.x ships triton 3.1 and fails dep solve.
+        "torch==2.6.0",
+        "torchvision==0.21.0",
         "numpy",
         "Pillow==11.0.0",
         "transformers",
@@ -86,6 +88,25 @@ trellis_image = (
         "trimesh",
         "xatlas",
         "pymeshlab",
+        # Build-time tooling: pip uses the global env when --no-build-isolation
+        # is set, so wheel must already be installed for bdist_wheel to exist.
+        "wheel",
+        "setuptools>=64",
+        # o-voxel runtime dep not covered elsewhere.
+        "plyfile",
+        # TRELLIS.2's --basic deps (from upstream setup.sh): runtime imports
+        # in trellis2/* assume these are present. Skipping gradio/tensorboard
+        # since we never serve the UI or train.
+        "easydict",
+        "ninja",
+        "tqdm",
+        "imageio",
+        "imageio-ffmpeg",
+        "opencv-python-headless",
+        "kornia",
+        "timm",
+        "lpips",
+        "zstandard",
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
         "boto3==1.35.92",
@@ -101,18 +122,41 @@ trellis_image = (
             "SPCONV_ALGO": "native",
             # nvdiffrast needs an EGL device to render off-screen.
             "PYOPENGL_PLATFORM": "egl",
+            # The `trellis2` package has no setup.py at the repo root;
+            # upstream just expects you to import it from a checkout.
+            "PYTHONPATH": TRELLIS_SRC,
+            # cv2 reads .exr env maps in the example pipeline.
+            "OPENCV_IO_ENABLE_OPENEXR": "1",
+            # Modal's add_python ships a clang-built Python; sysconfig
+            # then forwards clang++ to setuptools, but we only installed
+            # g++ via build-essential, and PyTorch is built with g++ —
+            # mixing toolchains breaks the C++ ABI even when it links.
+            "CC": "gcc",
+            "CXX": "g++",
+            "LDSHARED": "g++ -shared",
         }
     )
-    # Clone with submodules, then build each custom extension. Order
-    # matters: o_voxel and the GEMM/mesh kernels first, rasterizers last.
+    # Clone with submodules, then build each custom extension. Order:
+    # FlexGEMM and CuMesh first because o-voxel's pyproject lists them as
+    # runtime deps via git+ URLs — pre-installing locally lets us pass
+    # --no-deps on o-voxel and skip the re-download. extensions/* dirs do
+    # not exist in TRELLIS.2; those kernels live in separate repos
+    # referenced by upstream's setup.sh.
     .run_commands(
         f"git clone --recursive https://github.com/microsoft/TRELLIS.2.git {TRELLIS_SRC}",
-        f"pip install {TRELLIS_SRC}/o_voxel --no-build-isolation",
-        f"pip install {TRELLIS_SRC}/extensions/flexgemm --no-build-isolation",
-        f"pip install {TRELLIS_SRC}/extensions/cumesh --no-build-isolation",
-        "pip install git+https://github.com/NVlabs/nvdiffrast.git --no-build-isolation",
-        "pip install git+https://github.com/NVlabs/nvdiffrec.git --no-build-isolation",
-        f"pip install {TRELLIS_SRC} --no-build-isolation",
+        "git clone --recursive https://github.com/JeffreyXiang/FlexGEMM.git /tmp/extensions/FlexGEMM",
+        "pip install /tmp/extensions/FlexGEMM --no-build-isolation",
+        "git clone --recursive https://github.com/JeffreyXiang/CuMesh.git /tmp/extensions/CuMesh",
+        "pip install /tmp/extensions/CuMesh --no-build-isolation",
+        # Folder on disk is `o-voxel` (hyphen); Python import is `o_voxel`.
+        # --no-deps because cumesh + flex_gemm are already installed above.
+        f"pip install {TRELLIS_SRC}/o-voxel --no-build-isolation --no-deps",
+        "git clone -b v0.4.0 https://github.com/NVlabs/nvdiffrast.git /tmp/extensions/nvdiffrast",
+        "pip install /tmp/extensions/nvdiffrast --no-build-isolation",
+        "git clone -b renderutils https://github.com/JeffreyXiang/nvdiffrec.git /tmp/extensions/nvdiffrec",
+        "pip install /tmp/extensions/nvdiffrec --no-build-isolation",
+        "pip install flash-attn==2.7.3 --no-build-isolation",
+        "pip install git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8",
         gpu="A10G",
     )
     # Modal no longer auto-mounts sibling files; ship common.lib explicitly.
@@ -132,10 +176,11 @@ trellis_thin_image = (
 )
 
 
-with trellis_image.imports():
-    import o_voxel
-    from PIL import Image
-    from trellis.pipelines import Trellis2ImageTo3DPipeline
+# NOTE: o_voxel + trellis2 cannot be imported on a CPU container — they
+# pull flex_gemm, which triggers triton autotune init at module load and
+# needs an NVIDIA driver. preload_weights and any CPU-snapshot hook would
+# crash. So we import lazily inside the GPU-only generate() method below
+# and skip Modal's CPU memory snapshot entirely.
 
 
 @app.function(
@@ -189,58 +234,52 @@ def preload_weights() -> str:
     volumes={MODEL_DIR: volume},
     scaledown_window=10,
     timeout=600,
-    enable_memory_snapshot=True,
     secrets=[modal.Secret.from_name("supabase-s3")],
     # min_containers=1,
 )
 @modal.concurrent(max_inputs=1)
 class TrellisInference:
-    @modal.enter(snap=True)
-    def load_to_cpu(self) -> None:
-        """Snapshot hook: runs ONCE on a CPU-only container before Modal
-        captures the memory snapshot. Loads pipeline weights from the
-        volume into RAM so future cold starts skip the disk read."""
+    @modal.enter()
+    def load(self) -> None:
+        """Cold-start hook on a GPU container.
 
-        log.info(
-            "snapshot-load: load_to_cpu() begin; runs once during snapshot "
-            "creation on a CPU container (no GPU attached here yet)"
-        )
+        We can't use Modal's CPU memory snapshot here: o_voxel/trellis2
+        pull flex_gemm, which inits triton's CUDA driver at import time,
+        so the snapshot pass on a CPU container blows up. Loading + GPU
+        shuttling + warmup happens on the same GPU container instead.
+        """
+
+        log.info("enter: load() begin on GPU container")
         t0 = time.perf_counter()
+
+        # Lazy: top-level import would also fail on the CPU containers
+        # serving preload_weights / submit / poll.
+        from trellis2.pipelines import Trellis2ImageTo3DPipeline
 
         self.pipe = Trellis2ImageTo3DPipeline.from_pretrained(MODEL_LOCAL_DIR)
         from_pretrained_ms = (time.perf_counter() - t0) * 1000
         log.info(
-            f"snapshot-load: from_pretrained({MODEL_LOCAL_DIR}) "
-            f"finished in {from_pretrained_ms:.0f}ms; "
-            "Modal will snapshot RAM after this returns"
+            f"enter: from_pretrained({MODEL_LOCAL_DIR}) "
+            f"finished in {from_pretrained_ms:.0f}ms"
         )
 
-    @modal.enter(snap=False)
-    def move_to_gpu(self) -> None:
-        """Post-restore hook: runs on every cold start AFTER snapshot
-        restore (or fresh start), with the GPU now attached. Shuttles
-        weights to CUDA, then runs a tiny warmup inference so the custom
-        CUDA kernels JIT-compile now instead of on the first real request."""
-
-        log.info(
-            "post-restore: move_to_gpu() begin; runs after each container "
-            "start, with the GPU now attached"
-        )
-        t0 = time.perf_counter()
+        t_gpu = time.perf_counter()
         self.pipe.cuda()
-        to_cuda_ms = (time.perf_counter() - t0) * 1000
-        log.info(f"post-restore: pipe.cuda() finished in {to_cuda_ms:.0f}ms")
+        to_cuda_ms = (time.perf_counter() - t_gpu) * 1000
+        log.info(f"enter: pipe.cuda() finished in {to_cuda_ms:.0f}ms")
 
         # Warmup: a throwaway run on a tiny image forces the extension
-        # kernels to compile up front. Best-effort — never fail the start.
+        # kernels to JIT now instead of on the first real request.
         try:
+            from PIL import Image
+
             t_warm = time.perf_counter()
             dummy = Image.new("RGB", (64, 64), (127, 127, 127))
             self.pipe.run(dummy)
             warm_ms = (time.perf_counter() - t_warm) * 1000
-            log.info(f"post-restore: warmup inference done in {warm_ms:.0f}ms")
+            log.info(f"enter: warmup inference done in {warm_ms:.0f}ms")
         except Exception as e:
-            log.warning(f"post-restore: warmup inference failed (non-fatal): {e!r}")
+            log.warning(f"enter: warmup inference failed (non-fatal): {e!r}")
 
     @modal.method()
     def generate(
@@ -249,6 +288,11 @@ class TrellisInference:
         image_key: str,
         request_id: str,
     ) -> dict[str, Any]:
+        # Same lazy-import rationale as in load(): these modules need
+        # a GPU at import time and would crash on any CPU container.
+        import o_voxel
+        from PIL import Image
+
         log.info(f"[{request_id}] inference: start; key={image_key}")
         t0 = time.perf_counter()
 
@@ -268,17 +312,33 @@ class TrellisInference:
 
         t_inf = time.perf_counter()
         mesh = self.pipe.run(image)[0]
+        # Upstream example.py: cap face count before to_glb (nvdiffrast limit).
+        mesh.simplify(16777216)
         inference_ms = (time.perf_counter() - t_inf) * 1000
         log.info(
             f"[{request_id}] inference: pipe.run(...) returned in {inference_ms:.0f}ms"
         )
 
-        # Export a PBR-textured GLB at full render resolution.
+        # Export a PBR-textured GLB. Signature mirrors upstream example.py.
         t_exp = time.perf_counter()
-        glb = o_voxel.postprocess.to_glb(mesh, texture_size=RENDER_RESOLUTION)
+        glb = o_voxel.postprocess.to_glb(
+            vertices=mesh.vertices,
+            faces=mesh.faces,
+            attr_volume=mesh.attrs,
+            coords=mesh.coords,
+            attr_layout=mesh.layout,
+            voxel_size=mesh.voxel_size,
+            aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+            decimation_target=1000000,
+            texture_size=RENDER_RESOLUTION,
+            remesh=True,
+            remesh_band=1,
+            remesh_project=0,
+            verbose=False,
+        )
         with tempfile.TemporaryDirectory() as tmp:
             out_path = os.path.join(tmp, "out.glb")
-            glb.export(out_path)
+            glb.export(out_path, extension_webp=True)
             with open(out_path, "rb") as f:
                 glb_bytes = f.read()
         export_ms = (time.perf_counter() - t_exp) * 1000
