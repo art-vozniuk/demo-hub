@@ -16,6 +16,11 @@ from .storage import (
 
 log = logging.getLogger(__name__)
 
+# Curated demo scene shown to anon visitors. Served manifest-only via
+# /scenes/default and excluded from all per-user endpoints, so it can't be
+# listed, loaded, saved, or deleted by id — even by its owner.
+DEFAULT_SCENE_ID = UUID("9a84f51e-54bf-4201-a094-56dd9fb41af3")
+
 
 async def create_scene(
     db: AsyncSession,
@@ -43,6 +48,7 @@ async def list_scenes_for_user(
     result = await db.execute(
         select(EditorScene)
         .where(EditorScene.user_id == user_id)
+        .where(EditorScene.id != DEFAULT_SCENE_ID)
         .order_by(EditorScene.updated_at.desc())
     )
     return list(result.scalars().all())
@@ -60,9 +66,11 @@ async def get_scene_for_user(
     user_id: UUID,
     scene_id: UUID,
 ) -> EditorScene | None:
-    # user_id is part of the WHERE so a 404 is returned for both
-    # "doesn't exist" and "not yours" — keeps the API from leaking
-    # scene-id existence to non-owners.
+    # user_id in the WHERE returns 404 for both "doesn't exist" and "not
+    # yours", so ownership never leaks. The default scene is refused outright
+    # — this lookup also gates update/delete.
+    if scene_id == DEFAULT_SCENE_ID:
+        return None
     result = await db.execute(
         select(EditorScene)
         .where(EditorScene.id == scene_id)

@@ -7,6 +7,7 @@ export { walletApi, type BalanceResponse } from "./core/wallet";
 export {
   editorScenesApi,
   type EditorSceneRead,
+  type DefaultSceneRead,
   type EditorSceneListItem,
   type EditorSceneListResponse,
   type EditorScenePayload,

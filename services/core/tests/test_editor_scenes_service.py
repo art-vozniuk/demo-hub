@@ -3,6 +3,8 @@ import uuid
 import pytest
 
 from services.core.app.editor_scenes import service
+from services.core.app.editor_scenes.models import EditorScene
+from services.core.app.editor_scenes.service import DEFAULT_SCENE_ID
 
 
 @pytest.mark.asyncio
@@ -68,6 +70,39 @@ async def test_update_scene(db_session):
     )
     assert updated.name == "Renamed"
     assert updated.manifest["objects"] == [{"id": "1"}]
+
+
+async def _seed_default_scene(db_session, user_id):
+    # Insert a row with the reserved default-scene id to assert the per-user
+    # endpoints refuse to touch it.
+    scene = EditorScene(
+        id=DEFAULT_SCENE_ID,
+        user_id=user_id,
+        name="Default",
+        manifest={"schema": 1, "name": "Default", "objects": []},
+    )
+    db_session.add(scene)
+    await db_session.flush()
+    await db_session.commit()
+    return scene
+
+
+@pytest.mark.asyncio
+async def test_default_scene_excluded_from_user_list(db_session):
+    owner = uuid.uuid4()
+    await _seed_default_scene(db_session, owner)
+    await service.create_scene(db_session, user_id=owner, name="Mine", manifest={})
+    items = await service.list_scenes_for_user(db_session, owner)
+    # Default excluded even though `owner` is its user_id.
+    assert {s.name for s in items} == {"Mine"}
+
+
+@pytest.mark.asyncio
+async def test_default_scene_not_fetchable_by_owner(db_session):
+    owner = uuid.uuid4()
+    await _seed_default_scene(db_session, owner)
+    # Owner can't load it by id; this lookup also gates update/delete.
+    assert await service.get_scene_for_user(db_session, owner, DEFAULT_SCENE_ID) is None
 
 
 @pytest.mark.asyncio
