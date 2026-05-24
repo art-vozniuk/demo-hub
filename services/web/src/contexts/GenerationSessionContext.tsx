@@ -56,6 +56,8 @@ export interface GenerationSessionState {
   splatName: string | null;
   errorMessage: string | null;
   errorPhase: "flux" | "sharp" | null;
+  estimatedFinishAt: string | null;
+  workersMissing: boolean;
 }
 
 interface StartArgs {
@@ -94,6 +96,8 @@ const INITIAL_STATE: GenerationSessionState = {
   splatName: null,
   errorMessage: null,
   errorPhase: null,
+  estimatedFinishAt: null,
+  workersMissing: false,
 };
 
 function slugifyPrompt(prompt: string): string {
@@ -274,7 +278,25 @@ export const GenerationSessionProvider = ({
         splatName: name,
         errorMessage: null,
         errorPhase: null,
+        estimatedFinishAt: null,
+        workersMissing: false,
       }));
+      pipelinesApi
+        .getEstimate(pipelineId)
+        .then((res) => {
+          setState((prev) =>
+            prev.sharpPipelineId === pipelineId
+              ? {
+                  ...prev,
+                  estimatedFinishAt: new Date(
+                    Date.now() + res.estimated_seconds * 1000,
+                  ).toISOString(),
+                  workersMissing: res.workers_missing,
+                }
+              : prev,
+          );
+        })
+        .catch((e) => console.warn("sharp estimate fetch failed:", e));
       pollSharp(pipelineId, name);
       sharpPollRef.current = window.setInterval(() => {
         pollSharp(pipelineId, name);
@@ -402,6 +424,8 @@ export const GenerationSessionProvider = ({
         splatName: null,
         errorMessage: null,
         errorPhase: null,
+        estimatedFinishAt: null,
+        workersMissing: false,
         // Keep the previous image visible behind the spinner when iterating.
         image: initImage ? prev.image : null,
       }));
@@ -435,6 +459,22 @@ export const GenerationSessionProvider = ({
           has_init_image: !!initImage,
         },
       });
+      pipelinesApi
+        .getEstimate(pipelineId)
+        .then((res) => {
+          setState((prev) =>
+            prev.fluxPipelineId === pipelineId
+              ? {
+                  ...prev,
+                  estimatedFinishAt: new Date(
+                    Date.now() + res.estimated_seconds * 1000,
+                  ).toISOString(),
+                  workersMissing: res.workers_missing,
+                }
+              : prev,
+          );
+        })
+        .catch((e) => console.warn("flux estimate fetch failed:", e));
       pollFlux(pipelineId);
       fluxPollRef.current = window.setInterval(
         () => pollFlux(pipelineId),
