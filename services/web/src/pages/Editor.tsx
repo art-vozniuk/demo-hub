@@ -137,6 +137,10 @@ const Editor = () => {
   const [objects, setObjects] = useState<SceneObject[]>([]);
   const [selectedId, setSelectedId] = useState<number>(0);
   const [transform, setTransform] = useState<TransformMsg | null>(null);
+  // Per-id transform cache mirrored to state so the Inspector can show the
+  // selected object's values without waiting for a fresh editor-transform
+  // message. Populated by hydrate (manifest) and every editor-transform.
+  const [transformsById, setTransformsById] = useState<TransformCache>({});
   const [dragOver, setDragOver] = useState(false);
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
@@ -271,12 +275,21 @@ const Editor = () => {
           }
         }
         // Drop assets/transforms for removed ids.
+        const removed: number[] = [];
         for (const id of known) {
           if (!seen.has(id)) {
             assetsRef.current.delete(id);
             delete transformsRef.current[id];
+            removed.push(id);
             mutated = true;
           }
+        }
+        if (removed.length > 0) {
+          setTransformsById((prev) => {
+            const next = { ...prev };
+            for (const id of removed) delete next[id];
+            return next;
+          });
         }
         knownIdsRef.current = seen;
         objectsRef.current = next;
@@ -291,11 +304,13 @@ const Editor = () => {
         setTransform(m);
         // Cache the latest transform on every message so Save sees a
         // value even if the user never finalised a drag.
-        transformsRef.current[m.id] = {
+        const tc = {
           position: m.position,
           rotationDeg: m.rotationDeg,
           scale: m.scale,
         };
+        transformsRef.current[m.id] = tc;
+        setTransformsById((prev) => ({ ...prev, [m.id]: tc }));
         if (m.final) markDirty();
       } else if (t === "editor-camera-pose") {
         const pos = e.data.position as Vec3Tuple;
@@ -684,6 +699,7 @@ const Editor = () => {
             Math.abs(t.rotation[3] - 1) < 1e-3;
           return pZero && sOne && rIdentity;
         };
+        const hydratedTransforms: TransformCache = {};
         for (const o of manifest.objects) {
           const ids = nameToIds[o.name];
           if (!ids || ids.length === 0) continue;
@@ -701,10 +717,23 @@ const Editor = () => {
               rotationDeg: eulerDeg,
               scale: o.transform.scale,
             });
+            // Seed the per-id cache so the Inspector shows the manifest
+            // values immediately, without waiting for the renderer's
+            // editor-transform reply.
+            const tc = {
+              position: o.transform.position,
+              rotationDeg: eulerDeg,
+              scale: o.transform.scale,
+            };
+            transformsRef.current[id] = tc;
+            hydratedTransforms[id] = tc;
           }
           if (!o.visible) {
             postToIframe({ type: "editor-set-visibility", id, visible: false });
           }
+        }
+        if (Object.keys(hydratedTransforms).length > 0) {
+          setTransformsById((prev) => ({ ...prev, ...hydratedTransforms }));
         }
       } finally {
         // Allow any trailing message bursts to settle before re-enabling
@@ -1076,6 +1105,7 @@ const Editor = () => {
               setObjects([]);
               setSelectedId(0);
               setTransform(null);
+              setTransformsById({});
               setLoadingPlaceholders([]);
               setCameraSelected(false);
               lastSavedCameraRef.current = null;
@@ -1258,58 +1288,61 @@ const Editor = () => {
             </div>
           </div>
         )}
-        {!cameraSelected && selected && (
+        {!cameraSelected && selected && (() => {
+          const sel = transformsById[selected.id];
+          return (
           <div className="flex flex-col min-h-0">
             <SectionHeader title="Transform" />
             <div className="px-3 py-1.5 space-y-1">
               <TransformRow
                 label="Position"
-                values={transform?.position ?? [0, 0, 0]}
+                values={sel?.position ?? [0, 0, 0]}
                 digits={2}
                 onCommit={(next) => {
-                  if (!transform) return;
+                  if (!sel) return;
                   postToIframe({
                     type: "editor-set-transform",
                     id: selected.id,
                     position: next,
-                    rotationDeg: transform.rotationDeg,
-                    scale: transform.scale,
+                    rotationDeg: sel.rotationDeg,
+                    scale: sel.scale,
                   });
                 }}
               />
               <TransformRow
                 label="Rotation"
-                values={transform?.rotationDeg ?? [0, 0, 0]}
+                values={sel?.rotationDeg ?? [0, 0, 0]}
                 digits={1}
                 onCommit={(next) => {
-                  if (!transform) return;
+                  if (!sel) return;
                   postToIframe({
                     type: "editor-set-transform",
                     id: selected.id,
-                    position: transform.position,
+                    position: sel.position,
                     rotationDeg: next,
-                    scale: transform.scale,
+                    scale: sel.scale,
                   });
                 }}
               />
               <TransformRow
                 label="Scale"
-                values={transform?.scale ?? [1, 1, 1]}
+                values={sel?.scale ?? [1, 1, 1]}
                 digits={2}
                 onCommit={(next) => {
-                  if (!transform) return;
+                  if (!sel) return;
                   postToIframe({
                     type: "editor-set-transform",
                     id: selected.id,
-                    position: transform.position,
-                    rotationDeg: transform.rotationDeg,
+                    position: sel.position,
+                    rotationDeg: sel.rotationDeg,
                     scale: next,
                   });
                 }}
               />
             </div>
           </div>
-        )}
+          );
+        })()}
       </aside>
     </div>
   );
