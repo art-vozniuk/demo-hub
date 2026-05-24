@@ -42,13 +42,9 @@ class GenerativeEditingCustomPipelineInput(PipelineInput):
 
 
 class GenerativeT2IPipelineInput(PipelineInput):
-    # init_image_* + strength switch on img2img iteration mode.
     prompt: str
     output_bucket: str
     seed: int | None = None
     num_inference_steps: int | None = None
     width: int | None = None
     height: int | None = None
-    init_image_bucket: str | None = None
-    init_image_key: str | None = None
-    strength: float | None = None

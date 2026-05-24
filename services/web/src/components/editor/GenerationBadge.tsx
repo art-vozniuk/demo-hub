@@ -19,9 +19,7 @@ export const GenerationBadge = ({ hidden, onClick }: Props) => {
       case "flux-pending":
         return {
           Icon: Loader2,
-          label: session.iterating
-            ? "Iterating on image…"
-            : "Generating image…",
+          label: session.iterating ? "Editing image…" : "Generating image…",
           spinning: true,
           tone: "primary" as const,
         };

@@ -21,13 +21,18 @@ import {
   type FluxResult,
   type SharpResult,
 } from "@/api";
+import { parseS3Url } from "@/lib/s3";
 import { useWallet } from "@/contexts/WalletContext";
 import { useAnalytics } from "@/hooks/useAnalytics";
 
-const FLUX_PIPELINE = "generative_t2i";
+const T2I_PIPELINE = "generative_t2i";
+// Iteration runs through klein (the existing edit-focused pipeline) —
+// schnell's img2img is lower quality and exposes a confusing strength knob.
+const ITERATE_PIPELINE = "generative_editing_custom";
 const SHARP_PIPELINE = "sharp";
 const POLL_INTERVAL_MS = 1000;
 const POLL_TIMEOUT_MS = 240_000;
+const ITERATE_STEPS = 4;
 
 // Flux-t2i result, augmented with bucket+key so Sharp can chain off it.
 export interface T2IImage {
@@ -63,11 +68,11 @@ export interface GenerationSessionState {
 interface StartArgs {
   prompt: string;
   iterate?: boolean;
-  strength?: number;
 }
 
 export interface GenerationSessionApi extends GenerationSessionState {
   fluxCost: number | undefined;
+  iterateCost: number | undefined;
   sharpCost: number | undefined;
   totalCost: number | undefined;
   start: (args: StartArgs) => Promise<void>;
@@ -332,11 +337,7 @@ export const GenerationSessionProvider = ({
                 seed?: number | null;
               })
             | undefined;
-          if (
-            !result?.result_url ||
-            !result?.image_bucket ||
-            !result?.image_key
-          ) {
+          if (!result?.result_url) {
             toast.error("Image generation returned an incomplete result.");
             setState((prev) => ({
               ...prev,
@@ -345,6 +346,26 @@ export const GenerationSessionProvider = ({
               errorMessage: "Image generation returned an incomplete result.",
             }));
             return;
+          }
+          // Klein returns only {result_url}; schnell adds bucket+key. Parse
+          // the URL when missing so Sharp always has somewhere to read from.
+          let imageBucket = result.image_bucket;
+          let imageKey = result.image_key;
+          if (!imageBucket || !imageKey) {
+            try {
+              const parsed = parseS3Url(result.result_url);
+              imageBucket = parsed.bucket;
+              imageKey = parsed.key;
+            } catch (err) {
+              toast.error(`Could not parse image URL: ${err}`);
+              setState((prev) => ({
+                ...prev,
+                phase: "failed",
+                errorPhase: "flux",
+                errorMessage: String(err),
+              }));
+              return;
+            }
           }
           track({
             name: "editor_generate_splat_flux_completed",
@@ -355,8 +376,8 @@ export const GenerationSessionProvider = ({
             phase: "flux-ready",
             image: {
               result_url: result.result_url,
-              image_bucket: result.image_bucket!,
-              image_key: result.image_key!,
+              image_bucket: imageBucket!,
+              image_key: imageKey!,
               width: result.width,
               height: result.height,
               seed: result.seed ?? null,
@@ -386,7 +407,7 @@ export const GenerationSessionProvider = ({
   );
 
   const start = useCallback(
-    async ({ prompt, iterate = false, strength = 0.8 }: StartArgs) => {
+    async ({ prompt, iterate = false }: StartArgs) => {
       const trimmed = prompt.trim();
       if (!trimmed) {
         toast.error("Please enter a prompt.");
@@ -404,15 +425,18 @@ export const GenerationSessionProvider = ({
 
       const pipelineId = uuidv4();
       const traceId = uuidv4();
-      const input: Record<string, unknown> = {
-        prompt: trimmed,
-        output_bucket: outputBucket,
-      };
-      if (initImage) {
-        input.init_image_bucket = initImage.image_bucket;
-        input.init_image_key = initImage.image_key;
-        input.strength = strength;
-      }
+      const pipelineName = initImage ? ITERATE_PIPELINE : T2I_PIPELINE;
+      const input: Record<string, unknown> = initImage
+        ? {
+            image_bucket: initImage.image_bucket,
+            image_key: initImage.image_key,
+            prompt: trimmed,
+            num_inference_steps: ITERATE_STEPS,
+          }
+        : {
+            prompt: trimmed,
+            output_bucket: outputBucket,
+          };
 
       setState((prev) => ({
         ...prev,
@@ -436,7 +460,7 @@ export const GenerationSessionProvider = ({
           jobs: [
             {
               pipeline_id: pipelineId,
-              pipeline_name: FLUX_PIPELINE,
+              pipeline_name: pipelineName,
               input,
             },
           ],
@@ -528,7 +552,8 @@ export const GenerationSessionProvider = ({
     track,
   ]);
 
-  const fluxCost = getCost(FLUX_PIPELINE);
+  const fluxCost = getCost(T2I_PIPELINE);
+  const iterateCost = getCost(ITERATE_PIPELINE);
   const sharpCost = getCost(SHARP_PIPELINE);
   const totalCost =
     fluxCost !== undefined && sharpCost !== undefined
@@ -540,6 +565,7 @@ export const GenerationSessionProvider = ({
       value={{
         ...state,
         fluxCost,
+        iterateCost,
         sharpCost,
         totalCost,
         start,

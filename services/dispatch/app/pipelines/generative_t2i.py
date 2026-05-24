@@ -29,15 +29,7 @@ class GenerativeT2IPipeline(AsyncPipeline):
             "prompt": self.pipeline_input.prompt,
             "output_bucket": self.pipeline_input.output_bucket,
         }
-        for key in (
-            "seed",
-            "num_inference_steps",
-            "width",
-            "height",
-            "init_image_bucket",
-            "init_image_key",
-            "strength",
-        ):
+        for key in ("seed", "num_inference_steps", "width", "height"):
             value = getattr(self.pipeline_input, key)
             if value is not None:
                 payload[key] = value

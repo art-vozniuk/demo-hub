@@ -14,7 +14,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Slider } from "@/components/ui/slider";
 import GenerationCard from "@/components/GenerationCard";
 import { useGenerationSession } from "@/contexts/GenerationSessionContext";
 import { useWallet } from "@/contexts/WalletContext";
@@ -35,7 +34,6 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
 
   const [prompt, setPrompt] = useState("");
   const [iterate, setIterate] = useState(false);
-  const [strength, setStrength] = useState(0.7);
 
   // Pre-fill from the running session when re-opening from the badge.
   useEffect(() => {
@@ -55,15 +53,17 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
     if (session.phase === "flux-pending" || session.phase === "sharp-pending") {
       return false;
     }
-    if (session.totalCost !== undefined && balance !== null) {
-      const required = iterate ? session.fluxCost ?? 0 : session.totalCost;
+    if (balance !== null) {
+      const required = iterate
+        ? session.iterateCost ?? 0
+        : session.fluxCost ?? 0;
       if (balance < required) return false;
     }
     return true;
-  }, [prompt, session.phase, session.totalCost, session.fluxCost, balance, iterate]);
+  }, [prompt, session.phase, session.fluxCost, session.iterateCost, balance, iterate]);
 
   const onGenerate = async () => {
-    await session.start({ prompt, iterate, strength });
+    await session.start({ prompt, iterate });
   };
 
   const onConfirm = async () => {
@@ -81,7 +81,7 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
   const phaseLabel = (() => {
     switch (session.phase) {
       case "flux-pending":
-        return session.iterating ? "Iterating on image…" : "Generating image…";
+        return session.iterating ? "Editing image…" : "Generating image…";
       case "sharp-pending":
         return "Rendering splat (background)…";
       case "flux-ready":
@@ -113,16 +113,14 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
         </DialogHeader>
 
         <div className="text-[11px] text-muted-foreground flex items-center gap-2 tabular-nums flex-wrap">
-          {session.fluxCost !== undefined && (
-            <span>Image: {session.fluxCost}</span>
-          )}
+          {(() => {
+            const imageCost = iterate ? session.iterateCost : session.fluxCost;
+            return imageCost !== undefined && (
+              <span>{iterate ? "Edit" : "Image"}: {imageCost}</span>
+            );
+          })()}
           {session.sharpCost !== undefined && (
             <span>Splat: {session.sharpCost}</span>
-          )}
-          {session.totalCost !== undefined && (
-            <span className="text-foreground/90">
-              Total: {session.totalCost}
-            </span>
           )}
           {balance !== null && <span>· Balance: {balance}</span>}
         </div>
@@ -154,31 +152,14 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
               disabled={session.phase === "flux-pending"}
             />
             {session.phase === "flux-ready" && session.image && (
-              <div className="space-y-2 pt-1">
-                <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={iterate}
-                    onChange={(e) => setIterate(e.target.checked)}
-                  />
-                  Iterate on this image (img2img)
-                </label>
-                {iterate && (
-                  <div className="space-y-1">
-                    <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                      <span>Strength</span>
-                      <span className="tabular-nums">{strength.toFixed(2)}</span>
-                    </div>
-                    <Slider
-                      value={[strength]}
-                      onValueChange={(v) => setStrength(v[0])}
-                      min={0.3}
-                      max={0.95}
-                      step={0.05}
-                    />
-                  </div>
-                )}
-              </div>
+              <label className="flex items-center gap-2 text-[11px] text-muted-foreground pt-1">
+                <input
+                  type="checkbox"
+                  checked={iterate}
+                  onChange={(e) => setIterate(e.target.checked)}
+                />
+                Edit this image (use the prompt to refine it)
+              </label>
             )}
           </div>
         )}
@@ -212,7 +193,7 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
               )}
               {session.phase === "flux-ready"
                 ? iterate
-                  ? "Iterate"
+                  ? "Edit"
                   : "Generate new"
                 : "Generate"}
             </Button>

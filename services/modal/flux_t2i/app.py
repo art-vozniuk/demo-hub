@@ -1,4 +1,4 @@
-"""FLUX.1 [schnell] text-to-image (+ optional img2img) on L40S."""
+"""FLUX.1 [schnell] text-to-image on L40S."""
 
 from __future__ import annotations
 
@@ -12,9 +12,7 @@ import modal
 
 from common.lib import (
     MODEL_DIR,
-    bake_exif_orientation,
     configure_logging,
-    download_from_s3,
     make_app,
     poll_function_call,
 )
@@ -68,8 +66,7 @@ flux_thin_image = (
 
 with flux_image.imports():
     import torch
-    from diffusers import FluxImg2ImgPipeline, FluxPipeline
-    from PIL import Image
+    from diffusers import FluxPipeline
 
 
 @app.function(
@@ -129,10 +126,8 @@ class FluxT2IInference:
             MODEL_LOCAL_DIR,
             torch_dtype=torch.bfloat16,
         )
-        # from_pipe shares components — no second copy of the 12GB weights.
-        self.img2img_pipe = FluxImg2ImgPipeline.from_pipe(self.pipe)
         load_ms = (time.perf_counter() - t0) * 1000
-        log.info(f"snapshot-load: from_pretrained + from_pipe in {load_ms:.0f}ms")
+        log.info(f"snapshot-load: from_pretrained in {load_ms:.0f}ms")
 
     @modal.enter(snap=False)
     def move_to_gpu(self) -> None:
@@ -146,20 +141,16 @@ class FluxT2IInference:
         self,
         prompt: str,
         request_id: str,
+        output_bucket: str,
         seed: int | None = None,
         num_inference_steps: int = 4,
         guidance_scale: float = 0.0,
         width: int = 1024,
         height: int = 1024,
-        init_image_bucket: str | None = None,
-        init_image_key: str | None = None,
-        strength: float = 0.8,
-        output_bucket: str | None = None,
     ) -> dict[str, Any]:
         log.info(
             f"[{request_id}] inference: start; prompt_len={len(prompt)} "
-            f"steps={num_inference_steps} guidance={guidance_scale} "
-            f"seed={seed} init={'yes' if init_image_key else 'no'}"
+            f"steps={num_inference_steps} guidance={guidance_scale} seed={seed}"
         )
         t0 = time.perf_counter()
 
@@ -167,55 +158,28 @@ class FluxT2IInference:
         if seed is not None:
             generator = torch.Generator(device="cuda").manual_seed(int(seed))
 
-        init_image = None
-        if init_image_bucket and init_image_key:
-            t_dl = time.perf_counter()
-            raw = download_from_s3(init_image_bucket, init_image_key)
-            raw = bake_exif_orientation(raw)
-            init_image = Image.open(io.BytesIO(raw)).convert("RGB")
-            init_image = init_image.resize((width, height), Image.LANCZOS)
-            log.info(
-                f"[{request_id}] init image downloaded + resized in "
-                f"{(time.perf_counter() - t_dl) * 1000:.0f}ms "
-                f"({init_image.width}x{init_image.height})"
-            )
-
         t_inf = time.perf_counter()
         log.info(
             f"[{request_id}] inference: pipe(...) call begin; "
             f"prompt={prompt[:80]!r}{'...' if len(prompt) > 80 else ''}"
         )
-        if init_image is not None:
-            out = self.img2img_pipe(
-                image=init_image,
-                prompt=prompt,
-                strength=strength,
-                guidance_scale=guidance_scale,
-                num_inference_steps=num_inference_steps,
-                generator=generator,
-            )
-        else:
-            out = self.pipe(
-                prompt=prompt,
-                guidance_scale=guidance_scale,
-                num_inference_steps=num_inference_steps,
-                width=width,
-                height=height,
-                generator=generator,
-            )
+        out = self.pipe(
+            prompt=prompt,
+            guidance_scale=guidance_scale,
+            num_inference_steps=num_inference_steps,
+            width=width,
+            height=height,
+            generator=generator,
+        )
         inference_ms = (time.perf_counter() - t_inf) * 1000
         log.info(
             f"[{request_id}] inference: pipe(...) returned in {inference_ms:.0f}ms"
         )
 
-        result_image: "Image.Image" = out.images[0]
+        result_image = out.images[0]
         buf = io.BytesIO()
         result_image.save(buf, format="PNG")
         png_bytes = buf.getvalue()
-
-        bucket = output_bucket or init_image_bucket
-        if not bucket:
-            raise RuntimeError("No output bucket: provide init_image_bucket or output_bucket")
 
         # Inlined upload — Sharp consumes bucket+key, so we build the key locally
         # instead of parsing it back out of common.lib.upload_to_s3's URL.
@@ -231,8 +195,8 @@ class FluxT2IInference:
             endpoint_url=os.environ["S3_ENDPOINT"],
             region_name=os.environ["S3_REGION"],
             config=BotoConfig(retries={"max_attempts": 5, "mode": "adaptive"}),
-        ).put_object(Bucket=bucket, Key=image_key, Body=png_bytes)
-        result_url = f"{os.environ['S3_PUBLIC_BUCKETS_ENDPOINT']}/{bucket}/{image_key}"
+        ).put_object(Bucket=output_bucket, Key=image_key, Body=png_bytes)
+        result_url = f"{os.environ['S3_PUBLIC_BUCKETS_ENDPOINT']}/{output_bucket}/{image_key}"
         upload_ms = (time.perf_counter() - t_up) * 1000
 
         total_ms = (time.perf_counter() - t0) * 1000
@@ -246,7 +210,7 @@ class FluxT2IInference:
 
         return {
             "result_url": result_url,
-            "image_bucket": bucket,
+            "image_bucket": output_bucket,
             "image_key": image_key,
             "width": result_image.width,
             "height": result_image.height,
@@ -260,13 +224,16 @@ def submit(payload: dict[str, Any]) -> dict[str, Any]:
     request_id = uuid.uuid4().hex[:8]
     prompt = payload.get("prompt")
     log.info(
-        f"[{request_id}] submit: received; prompt_len="
-        f"{len(prompt) if prompt else 0} "
-        f"init={'yes' if payload.get('init_image_key') else 'no'}"
+        f"[{request_id}] submit: received; prompt_len={len(prompt) if prompt else 0}"
     )
     if not prompt:
         log.warning(f"[{request_id}] submit: missing prompt")
         return {"error": "prompt is required"}
+
+    output_bucket = payload.get("output_bucket")
+    if not output_bucket:
+        log.warning(f"[{request_id}] submit: missing output_bucket")
+        return {"error": "output_bucket is required"}
 
     seed_raw = payload.get("seed")
     seed = int(seed_raw) if seed_raw is not None else None
@@ -274,28 +241,16 @@ def submit(payload: dict[str, Any]) -> dict[str, Any]:
     guidance_scale = float(payload.get("guidance_scale", 0.0))
     width = int(payload.get("width", 1024))
     height = int(payload.get("height", 1024))
-    strength = float(payload.get("strength", 0.8))
-    init_image_bucket = payload.get("init_image_bucket")
-    init_image_key = payload.get("init_image_key")
-    output_bucket = payload.get("output_bucket")
-
-    if (init_image_bucket and not init_image_key) or (
-        init_image_key and not init_image_bucket
-    ):
-        return {"error": "init_image_bucket and init_image_key must be set together"}
 
     call = FluxT2IInference().generate.spawn(
         request_id=request_id,
         prompt=prompt,
+        output_bucket=output_bucket,
         seed=seed,
         num_inference_steps=num_inference_steps,
         guidance_scale=guidance_scale,
         width=width,
         height=height,
-        init_image_bucket=init_image_bucket,
-        init_image_key=init_image_key,
-        strength=strength,
-        output_bucket=output_bucket,
     )
     log.info(f"[{request_id}] submit: spawned call_id={call.object_id}")
     return {"call_id": call.object_id, "request_id": request_id}
