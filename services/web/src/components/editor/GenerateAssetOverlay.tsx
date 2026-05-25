@@ -602,8 +602,8 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="glb">GLB mesh · faster</SelectItem>
-                  <SelectItem value="splat">Gaussian splat · photoreal</SelectItem>
+                  <SelectItem value="glb">GLB mesh · polygons</SelectItem>
+                  <SelectItem value="splat">Gaussian splat · gaussians</SelectItem>
                 </SelectContent>
               </Select>
             </div>
