@@ -32,7 +32,6 @@ log = configure_logging("flux")
 app, volume = make_app("demo-hub-flux", "flux-models")
 
 
-# Image: built once, cached forever, reused across deploys.
 flux_image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0")
