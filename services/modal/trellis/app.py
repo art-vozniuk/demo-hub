@@ -169,19 +169,27 @@ trellis_thin_image = (
 # autotune). Import them lazily inside generate(), not at module level.
 
 
-def _drop_pivot_to_feet(glb: Any, request_id: str) -> None:
-    """Shift vertices so combined scene min(Y) == 0; keep nodes identity."""
+def _drop_pivot_to_feet(glb_bytes: bytes, request_id: str) -> bytes:
+    """Round-trip through trimesh to shift vertices so min(Y) == 0.
 
+    `o_voxel.postprocess.to_glb` returns a custom object whose `.geometry`
+    attribute is not the standard trimesh.Scene mapping, so we re-parse
+    the exported bytes via trimesh.load — that always yields a Scene
+    with a `.geometry` dict and a `.graph` we can walk.
+    """
+
+    import io as _io
     import numpy as np
+    import trimesh
 
-    geoms = getattr(glb, "geometry", None)
+    scene = trimesh.load(_io.BytesIO(glb_bytes), file_type="glb", process=False)
+    geoms = getattr(scene, "geometry", None)
     if not geoms:
-        log.warning(f"[{request_id}] pivot: no geometries to recenter")
-        return
+        log.warning(f"[{request_id}] pivot: parsed scene has no geometries")
+        return glb_bytes
 
-    # World-frame min(Y) across all geometry, honouring scene-graph transforms.
     min_y = float("inf")
-    graph = getattr(glb, "graph", None)
+    graph = getattr(scene, "graph", None)
     node_iter = list(graph.nodes_geometry) if graph is not None else []
     for node_name in node_iter:
         T, geom_name = graph[node_name]
@@ -197,18 +205,19 @@ def _drop_pivot_to_feet(glb: Any, request_id: str) -> None:
 
     if not (min_y < float("inf")):
         log.warning(f"[{request_id}] pivot: no vertices found")
-        return
+        return glb_bytes
     dy = -min_y
     if abs(dy) < 1e-6:
-        log.info(f"[{request_id}] pivot: already at Y=0 (dy={dy:.6f})")
-        return
+        log.info(f"[{request_id}] pivot: already at Y=0")
+        return glb_bytes
 
-    # Bake the shift into vertex coords so glb.export can't compensate via
-    # a node-level translation. Node transforms stay identity.
     for g in geoms.values():
         if getattr(g, "vertices", None) is not None and len(g.vertices) > 0:
             g.vertices[:, 1] += dy
+    out = _io.BytesIO()
+    scene.export(out, file_type="glb")
     log.info(f"[{request_id}] pivot: shifted Y by {dy:+.4f} so min(Y)=0")
+    return out.getvalue()
 
 
 @app.function(
@@ -434,10 +443,6 @@ class TrellisInference:
             verbose=False,
         )
 
-        # Drop pivot to feet so the editor gizmo lands at the base, not the
-        # bbox centre. Vertices baked in; no compensating node transform.
-        _drop_pivot_to_feet(glb, request_id)
-
         with tempfile.TemporaryDirectory() as tmp:
             out_path = os.path.join(tmp, "out.glb")
             # PNG textures — EXT_texture_webp falls back to grey on viewers
@@ -445,6 +450,10 @@ class TrellisInference:
             glb.export(out_path)
             with open(out_path, "rb") as f:
                 glb_bytes = f.read()
+
+        # Drop pivot to feet so the editor gizmo lands at the base, not the
+        # bbox centre. Runs on serialized bytes via trimesh round-trip.
+        glb_bytes = _drop_pivot_to_feet(glb_bytes, request_id)
         export_ms = (time.perf_counter() - t_exp) * 1000
         log.info(
             f"[{request_id}] export: to_glb done in {export_ms:.0f}ms; "
