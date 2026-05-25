@@ -1,12 +1,7 @@
-"""Generic worker heartbeat publisher.
+"""Worker heartbeat publisher.
 
-Each worker process periodically writes one Redis key per
-(pipeline_name, worker_id) carrying its current best-known wall-time
-estimate for that pipeline. Core's estimation reads these keys to
-compute ETAs irrespective of which pool a pipeline belongs to.
-
-Compute and dispatch each have a thin wrapper module that binds this
-helper to their own `pipeline_templates` dict.
+Writes one Redis key per (pipeline_name, worker_id) carrying the worker's
+current wall-time estimate. Core reads these keys to compute ETAs.
 """
 
 from __future__ import annotations
@@ -26,10 +21,8 @@ HEARTBEAT_TTL_SECONDS = 30
 log = logging.getLogger(__name__)
 
 
-# Each tick the wrapper module returns the current
-# {pipeline_name: estimated_time_ms} snapshot. Returning a callable (not
-# a static dict) lets workers mutate their estimates in-place after each
-# successful run and have the next tick pick the new value up.
+# Callable (not a static dict) so workers can mutate their estimates
+# in place and the next tick picks the new value up.
 SnapshotProvider = Callable[[], Mapping[str, int]]
 
 
