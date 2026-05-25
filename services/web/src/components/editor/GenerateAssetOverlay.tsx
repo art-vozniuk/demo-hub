@@ -65,6 +65,19 @@ const MB = 1024 * 1024;
 const TRANSPARENT_PX =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
+// Suffix appended to user prompt for text→image so FLUX schnell yields
+// a TRELLIS-friendly photo: clean background eases RMBG, 3/4 view gives
+// the reconstructor enough visible surface, even lighting avoids harsh
+// shadows that confuse normal estimation. Kept short — schnell is a 4-step
+// distilled model and chokes on long negative-laden prompts.
+// Belongs server-side per-pipeline eventually.
+const MESH_SOURCE_PROMPT_SUFFIX =
+  ", isolated on plain white background, three-quarter view, full subject visible, sharp focus, even studio lighting";
+
+function wrapMeshSourcePrompt(userPrompt: string): string {
+  return `${userPrompt.trim()}${MESH_SOURCE_PROMPT_SUFFIX}`;
+}
+
 // Mesh quality presets shown in the pick-output stage. `multiplier` is for
 // display only — the server re-resolves the final price at charge time
 // using the trellis cost-multiplier table.
@@ -227,7 +240,10 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
     setSubmitting("source");
     try {
       if (sourceMode === "text") {
-        await session.start({ prompt, iterate: false });
+        await session.start({
+          prompt: wrapMeshSourcePrompt(prompt),
+          iterate: false,
+        });
       } else if (imageFile) {
         await session.startFromImage({ file: imageFile });
       }
