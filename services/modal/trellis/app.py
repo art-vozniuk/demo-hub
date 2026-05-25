@@ -44,10 +44,18 @@ MODEL_LOCAL_DIR = f"{MODEL_DIR}/trellis2-4b"
 HF_CACHE_DIR = f"{MODEL_DIR}/hf_cache"
 # Models that TRELLIS.2 lazily pulls from HF Hub inside from_pretrained().
 # Predownload them into HF_CACHE_DIR so cold starts never hit the network.
-# dinov3 is a Meta gated repo — HF_TOKEN must have access approval.
+# Upstream TRELLIS.2 configs reference two gated repos by name:
+#   facebook/dinov3-vitl16-pretrain-lvd1689m  — Meta, new requests rejected
+#   briaai/RMBG-2.0                            — Bria, gated by terms
+# camenduru maintains bit-identical mirrors of both with gated=False.
+# We download from the mirrors and rewrite the pipeline configs to match.
+HF_REPO_REWRITES = {
+    "facebook/dinov3-vitl16-pretrain-lvd1689m": "camenduru/dinov3-vitl16-pretrain-lvd1689m",
+    "briaai/RMBG-2.0": "camenduru/RMBG-2.0",
+}
 HF_AUX_REPOS = [
     "microsoft/TRELLIS-image-large",
-    "facebook/dinov3-vitl16-pretrain-lvd1689m",
+    *HF_REPO_REWRITES.values(),
 ]
 
 # Full-quality render resolution. 512 fits an A10G (24GB); see GPU note
@@ -92,7 +100,10 @@ trellis_image = (
         "torchvision==0.21.0",
         "numpy",
         "Pillow==11.0.0",
-        "transformers",
+        # Need the 4.x line for BiRefNet (5.x added all_tied_weights_keys
+        # which the camenduru BiRefNet custom code doesn't define), but
+        # DINOv3ViTModel only landed in 4.56. 4.57.6 is the last 4.x patch.
+        "transformers==4.57.6",
         "accelerate",
         "safetensors",
         "huggingface-hub[hf-transfer]>=0.34.0",
@@ -228,6 +239,25 @@ def preload_weights() -> str:
         f"preload: main repo done in {(time.perf_counter() - t0) * 1000:.0f}ms"
     )
 
+    # Rewrite in-place so the feature extractors load from open mirrors
+    # instead of the gated facebook/ and briaai/ repos. Touches both
+    # pipeline.json and texturing_pipeline.json.
+    import glob
+
+    rewrites = 0
+    for cfg in glob.glob(f"{MODEL_LOCAL_DIR}/*pipeline.json"):
+        with open(cfg, "r") as f:
+            src = f.read()
+        new = src
+        for orig, mirror in HF_REPO_REWRITES.items():
+            new = new.replace(orig, mirror)
+        if new != src:
+            with open(cfg, "w") as f:
+                f.write(new)
+            rewrites += 1
+            log.info(f"preload: rewrote gated repo paths in {cfg}")
+    log.info(f"preload: patched {rewrites} pipeline config(s) to mirrors")
+
     # Transitive deps pulled by Trellis2ImageTo3DPipeline.from_pretrained
     # at runtime. Cache them into HF_CACHE_DIR (== HF_HOME on inference
     # containers) so cold starts skip the network entirely.
@@ -272,6 +302,14 @@ def preload_weights() -> str:
     volumes={MODEL_DIR: volume},
     scaledown_window=10,
     timeout=600,
+    # Once the function actually runs, never retry — if generation fails
+    # on a real input we want one clear error, not 3x the GPU bill.
+    retries=modal.Retries(max_retries=0),
+    # GPU memory snapshot: snap=True runs on a GPU container (unlike the
+    # default CPU snapshot), so flex_gemm/triton driver init at import
+    # works. Cold restores skip the ~5 min model load + warmup.
+    enable_memory_snapshot=True,
+    experimental_options={"enable_gpu_snapshot": True},
     secrets=[
         modal.Secret.from_name("supabase-s3"),
         # HF_TOKEN is needed if any transitive download wasn't pre-cached
@@ -283,34 +321,45 @@ def preload_weights() -> str:
 )
 @modal.concurrent(max_inputs=1)
 class TrellisInference:
-    @modal.enter()
+    @modal.enter(snap=True)
     def load(self) -> None:
-        """Cold-start hook on a GPU container.
+        """Snapshot hook. Modal's GPU memory snapshot keeps the GPU
+        attached during snap=True (alpha feature), so flex_gemm/triton
+        driver init at import works. Snapshot captures the loaded
+        pipeline + warmed JIT state; subsequent cold starts restore
+        in seconds instead of ~5 minutes.
 
-        We can't use Modal's CPU memory snapshot here: o_voxel/trellis2
-        pull flex_gemm, which inits triton's CUDA driver at import time,
-        so the snapshot pass on a CPU container blows up. Loading + GPU
-        shuttling + warmup happens on the same GPU container instead.
+        Errors are caught and stashed; generate() raises on first call.
+        Otherwise Modal treats an enter failure as "container couldn't
+        start" and spins up a fresh container for the same FunctionCall,
+        burning GPU time in a crash loop instead of failing the request.
         """
 
+        self.pipe = None
+        self.init_error: BaseException | None = None
         log.info("enter: load() begin on GPU container")
         t0 = time.perf_counter()
 
-        # Lazy: top-level import would also fail on the CPU containers
-        # serving preload_weights / submit / poll.
-        from trellis2.pipelines import Trellis2ImageTo3DPipeline
+        try:
+            # Lazy: top-level import would also fail on the CPU containers
+            # serving preload_weights / submit / poll.
+            from trellis2.pipelines import Trellis2ImageTo3DPipeline
 
-        self.pipe = Trellis2ImageTo3DPipeline.from_pretrained(MODEL_LOCAL_DIR)
-        from_pretrained_ms = (time.perf_counter() - t0) * 1000
-        log.info(
-            f"enter: from_pretrained({MODEL_LOCAL_DIR}) "
-            f"finished in {from_pretrained_ms:.0f}ms"
-        )
+            self.pipe = Trellis2ImageTo3DPipeline.from_pretrained(MODEL_LOCAL_DIR)
+            from_pretrained_ms = (time.perf_counter() - t0) * 1000
+            log.info(
+                f"enter: from_pretrained({MODEL_LOCAL_DIR}) "
+                f"finished in {from_pretrained_ms:.0f}ms"
+            )
 
-        t_gpu = time.perf_counter()
-        self.pipe.cuda()
-        to_cuda_ms = (time.perf_counter() - t_gpu) * 1000
-        log.info(f"enter: pipe.cuda() finished in {to_cuda_ms:.0f}ms")
+            t_gpu = time.perf_counter()
+            self.pipe.cuda()
+            to_cuda_ms = (time.perf_counter() - t_gpu) * 1000
+            log.info(f"enter: pipe.cuda() finished in {to_cuda_ms:.0f}ms")
+        except Exception as e:
+            log.exception("enter: pipeline init failed; will fail fast on first call")
+            self.init_error = e
+            return
 
         # Warmup: a throwaway run on a tiny image forces the extension
         # kernels to JIT now instead of on the first real request.
@@ -332,6 +381,14 @@ class TrellisInference:
         image_key: str,
         request_id: str,
     ) -> dict[str, Any]:
+        # Bail out as a normal function error if load() couldn't bring
+        # the pipeline up — Modal then completes the FunctionCall as
+        # failed instead of restarting the container indefinitely.
+        if self.init_error is not None or self.pipe is None:
+            raise RuntimeError(
+                f"TrellisInference init failed: {self.init_error!r}"
+            )
+
         # Same lazy-import rationale as in load(): these modules need
         # a GPU at import time and would crash on any CPU container.
         import o_voxel
@@ -382,7 +439,10 @@ class TrellisInference:
         )
         with tempfile.TemporaryDirectory() as tmp:
             out_path = os.path.join(tmp, "out.glb")
-            glb.export(out_path, extension_webp=True)
+            # Plain PNG/JPEG textures — EXT_texture_webp is unsupported by
+            # most viewers (including our WebGPU renderer) and gets dropped
+            # to a grey default material per glTF spec.
+            glb.export(out_path)
             with open(out_path, "rb") as f:
                 glb_bytes = f.read()
         export_ms = (time.perf_counter() - t_exp) * 1000

@@ -34,7 +34,9 @@ const ITERATE_PIPELINE = "generative_editing_custom";
 const MESH_PIPELINE = "trellis";
 const SPLAT_PIPELINE = "sharp";
 const POLL_INTERVAL_MS = 1000;
-const POLL_TIMEOUT_MS = 240_000;
+// TRELLIS warm inference + GLB export is ~3 min; cold restores from a GPU
+// snapshot add another ~30 s. 240 s tripped before generation finished.
+const POLL_TIMEOUT_MS = 600_000;
 const ITERATE_STEPS = 4;
 
 // What the second stage produces. "glb" → trellis mesh, "splat" → sharp.
