@@ -1,17 +1,7 @@
-"""Modal app: Microsoft TRELLIS.2 single-image → textured GLB mesh on GPU.
+"""Modal app: TRELLIS.2 single-image → textured GLB mesh on GPU.
 
-Same shape as sharp/app.py: download the source image from S3, run the
-TRELLIS.2 image-to-3D pipeline, export a PBR-textured .glb, upload it
-back to S3, and return only the result URL. Two HTTP endpoints to dodge
-Modal's ~60s sync gateway cap:
-  POST /submit {image_bucket, image_key} → {call_id, request_id}
-  POST /poll   {call_id}                 → {status: ..., ...}
+Two HTTP endpoints (submit/poll) to dodge Modal's ~60s sync gateway cap.
 Deploy / preload via services/modal/trellis/{deploy,preload}.py.
-
-NOTE: the image below builds TRELLIS.2's custom CUDA extensions
-(O-Voxel, FlexGEMM, CuMesh, nvdiffrast, nvdiffrec). That build is
-expected to need a few iterations to go green — tune the steps here and
-redeploy; nothing else in the stack depends on the exact build recipe.
 """
 
 from __future__ import annotations
@@ -52,18 +42,16 @@ HF_AUX_REPOS = [
     *HF_REPO_REWRITES.values(),
 ]
 
-# Texture size for to_glb. Below 4096 textures look grainy.
-TEXTURE_RESOLUTION = 4096
+# Texture bake size. 4096 is upstream's default but nvdiffrast rasterization
+# scales O(N²) — on A10G it stalls past 10 min. 2048 keeps detail without that.
+TEXTURE_RESOLUTION = 2048
 
 
 log = configure_logging("trellis")
 app, volume = make_app("demo-hub-trellis", "trellis-models")
 
 
-# TRELLIS.2 ships custom CUDA extensions, so unlike sharp/flux we need a
-# CUDA *devel* base (nvcc + headers) to compile them. torch/CUDA versions
-# follow the microsoft/TRELLIS.2 README; bump here if the build complains
-# about an ABI mismatch.
+# Devel base needed for nvcc + headers to compile TRELLIS.2's CUDA exts.
 CUDA_TAG = "12.4.1"
 TRELLIS_SRC = "/opt/TRELLIS.2"
 
@@ -100,11 +88,9 @@ trellis_image = (
         "trimesh",
         "xatlas",
         "pymeshlab",
-        # Build-time tooling: pip uses the global env when --no-build-isolation
-        # is set, so wheel must already be installed for bdist_wheel to exist.
+        # Build tooling reachable from --no-build-isolation ext installs.
         "wheel",
         "setuptools>=64",
-        # o-voxel runtime dep not covered elsewhere.
         "plyfile",
         # TRELLIS.2 --basic deps from upstream setup.sh, minus train/UI bits.
         "easydict",
@@ -260,8 +246,7 @@ def preload_weights() -> str:
     return MODEL_LOCAL_DIR
 
 
-# GPU note: 512-res TRELLIS.2 fits an A10G (24GB). If a real input OOMs,
-# do NOT drop the resolution/quality — bump the tier to gpu="L40S" (48GB).
+# A10G (24GB) fits TRELLIS.2 at current settings; bump to L40S on OOM.
 @app.cls(
     image=trellis_image,
     gpu="A10G",
@@ -275,9 +260,7 @@ def preload_weights() -> str:
     experimental_options={"enable_gpu_snapshot": True},
     secrets=[
         modal.Secret.from_name("supabase-s3"),
-        # HF_TOKEN is needed if any transitive download wasn't pre-cached
-        # (or for the gated dinov3 repo). Pre-caching in preload_weights
-        # makes this mostly belt-and-suspenders.
+        # Belt-and-suspenders for HF deps the preload missed.
         modal.Secret.from_name("huggingface", required_keys=[]),
     ],
     # min_containers=1,
@@ -368,14 +351,13 @@ class TrellisInference:
 
         t_inf = time.perf_counter()
         mesh = self.pipe.run(image)[0]
-        # Upstream example.py: cap face count before to_glb (nvdiffrast limit).
+        # nvdiffrast hard limit on face count.
         mesh.simplify(16777216)
         inference_ms = (time.perf_counter() - t_inf) * 1000
         log.info(
             f"[{request_id}] inference: pipe.run(...) returned in {inference_ms:.0f}ms"
         )
 
-        # Export a PBR-textured GLB. Signature mirrors upstream example.py.
         t_exp = time.perf_counter()
         glb = o_voxel.postprocess.to_glb(
             vertices=mesh.vertices,
@@ -394,8 +376,8 @@ class TrellisInference:
         )
         with tempfile.TemporaryDirectory() as tmp:
             out_path = os.path.join(tmp, "out.glb")
-            # Default PNG textures — EXT_texture_webp falls back to grey
-            # in viewers that don't support the extension.
+            # PNG textures — EXT_texture_webp falls back to grey on viewers
+            # that don't implement the extension.
             glb.export(out_path)
             with open(out_path, "rb") as f:
                 glb_bytes = f.read()

@@ -21,10 +21,9 @@ class Config(BaseSettings):
     MODAL_PROXY_AUTH_TOKEN_ID: str | None = None
     MODAL_PROXY_AUTH_TOKEN_SECRET: str | None = None
 
-    # End-to-end Modal call ceiling. Klein 4B is fast (~sub-second
-    # inference, 4 steps), but cold start + first GPU upload can take
-    # 30-60s; we leave plenty of headroom.
-    MODAL_REQUEST_TIMEOUT_SECONDS: int = 240
+    # End-to-end Modal call ceiling, sized for the slowest pipeline
+    # (TRELLIS image-to-3D: ~3 min warm, plus cold restore overhead).
+    MODAL_REQUEST_TIMEOUT_SECONDS: int = 600
     MODAL_POLL_INTERVAL_SECONDS: float = 2.0
 
 

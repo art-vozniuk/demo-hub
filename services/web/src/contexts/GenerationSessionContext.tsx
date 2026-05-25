@@ -34,8 +34,7 @@ const ITERATE_PIPELINE = "generative_editing_custom";
 const MESH_PIPELINE = "trellis";
 const SPLAT_PIPELINE = "sharp";
 const POLL_INTERVAL_MS = 1000;
-// TRELLIS warm inference + GLB export is ~3 min; cold restores from a GPU
-// snapshot add another ~30 s. 240 s tripped before generation finished.
+// Covers a cold-restore + warm inference for the slowest 3D pipeline.
 const POLL_TIMEOUT_MS = 600_000;
 const ITERATE_STEPS = 4;
 

@@ -145,7 +145,7 @@ pipeline_templates: dict[str, PipelineType] = {
     "trellis": PipelineType(
         service_type=TrellisService,
         input_type=TrellisPipelineInput,
-        estimated_time_ms=25_000,
+        estimated_time_ms=180_000,
     ),
     "generative_t2i": PipelineType(
         service_type=GenerativeT2IService,
