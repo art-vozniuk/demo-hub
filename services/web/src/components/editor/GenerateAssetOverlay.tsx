@@ -30,8 +30,10 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import GenerationCard from "@/components/GenerationCard";
 import {
   useGenerationSession,
+  type MeshSteps,
   type OutputKind,
 } from "@/contexts/GenerationSessionContext";
+import { pipelinesApi } from "@/api";
 import { useWallet } from "@/contexts/WalletContext";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -56,6 +58,14 @@ const MB = 1024 * 1024;
 const TRANSPARENT_PX =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
+// Mesh quality presets shown in the pick-output stage; values match the
+// trellis cost-multiplier table on the backend.
+const MESH_QUALITY_OPTIONS: { label: string; steps: MeshSteps }[] = [
+  { label: "Low", steps: 4 },
+  { label: "Standard", steps: 8 },
+  { label: "High", steps: 12 },
+];
+
 export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
   const session = useGenerationSession();
   const { balance } = useWallet();
@@ -71,6 +81,29 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isMesh = session.outputKind === "glb";
+
+  // Mesh cost depends on the sampler-steps multiplier — resolved server-side
+  // so the UI doesn't drift from the wallet handler. Stale responses are
+  // ignored via a token ref.
+  const [meshCost, setMeshCost] = useState<number | undefined>(undefined);
+  const meshCostTokenRef = useRef(0);
+  useEffect(() => {
+    if (!isMesh) return;
+    const token = ++meshCostTokenRef.current;
+    pipelinesApi
+      .previewCost({
+        pipeline_name: "trellis",
+        input: { steps: session.meshSteps },
+      })
+      .then((res) => {
+        if (meshCostTokenRef.current !== token) return;
+        setMeshCost(res.cost);
+      })
+      .catch(() => {
+        if (meshCostTokenRef.current !== token) return;
+        setMeshCost(undefined);
+      });
+  }, [isMesh, session.meshSteps]);
 
   // Whenever a new image lands, restart on the review screen.
   useEffect(() => {
@@ -172,7 +205,7 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
   const canBuild3D = (() => {
     if (submitting) return false;
     if (balance !== null) {
-      const cost = session.objectCost ?? 0;
+      const cost = (isMesh ? meshCost : session.objectCost) ?? 0;
       if (balance < cost) return false;
     }
     return true;
@@ -270,8 +303,11 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
     if (stage === "edit" && session.iterateCost !== undefined) {
       parts.push(`Edit: ${session.iterateCost}`);
     }
-    if (stage === "pick-output" && session.objectCost !== undefined) {
-      parts.push(`${isMesh ? "Mesh" : "Splat"}: ${session.objectCost}`);
+    if (stage === "pick-output") {
+      const shown = isMesh ? meshCost ?? session.objectCost : session.objectCost;
+      if (shown !== undefined) {
+        parts.push(`${isMesh ? "Mesh" : "Splat"}: ${shown}`);
+      }
     }
     if (balance !== null) parts.push(`Balance: ${balance}`);
     return parts.join(" · ");
@@ -560,6 +596,33 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
                 Gaussian splat
               </ToggleGroupItem>
             </ToggleGroup>
+
+            {isMesh && (
+              <>
+                <Label className="text-xs">Quality</Label>
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  size="sm"
+                  value={String(session.meshSteps)}
+                  onValueChange={(v) => {
+                    if (v) session.setMeshSteps(Number(v) as MeshSteps);
+                  }}
+                  className="justify-start"
+                >
+                  {MESH_QUALITY_OPTIONS.map((q) => (
+                    <ToggleGroupItem
+                      key={q.steps}
+                      value={String(q.steps)}
+                      className="text-[11px] px-3"
+                    >
+                      {q.label}
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+              </>
+            )}
+
             <div className="flex justify-end pt-1">
               <Button
                 size="sm"

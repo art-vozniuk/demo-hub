@@ -46,6 +46,11 @@ HF_AUX_REPOS = [
 # scales O(N²) — on A10G it stalls past 10 min. 2048 keeps detail without that.
 TEXTURE_RESOLUTION = 2048
 
+# Sampler steps when the request doesn't override it. 12 is upstream default
+# (high quality), 4 is the minimum that still gives a coherent mesh.
+DEFAULT_SAMPLER_STEPS = 8
+ALLOWED_SAMPLER_STEPS = {4, 8, 12}
+
 
 log = configure_logging("trellis")
 app, volume = make_app("demo-hub-trellis", "trellis-models")
@@ -211,7 +216,7 @@ def preload_weights() -> str:
                 f.write(new)
             rewrites += 1
             log.info(f"preload: rewrote gated repo paths in {cfg}")
-    log.info(f"preload: patched {rewrites} pipeline config(s) to mirrors")
+    log.info(f"preload: patched {rewrites} pipeline config(s)")
 
     # Preload transitive HF deps so cold inference skips the network.
     for repo in HF_AUX_REPOS:
@@ -249,7 +254,7 @@ def preload_weights() -> str:
 # A10G (24GB) fits TRELLIS.2 at current settings; bump to L40S on OOM.
 @app.cls(
     image=trellis_image,
-    gpu="A10G",
+    gpu="L40S",
     volumes={MODEL_DIR: volume},
     scaledown_window=10,
     timeout=600,
@@ -303,14 +308,16 @@ class TrellisInference:
             self.init_error = e
             return
 
-        # Warmup: a throwaway run on a tiny image forces the extension
-        # kernels to JIT now instead of on the first real request.
+        # Warmup with an upstream example image so RMBG actually finds a
+        # foreground; a blank dummy returns an empty mask and crashes
+        # downstream max(). Forces cumesh + nvdiffrast kernels to JIT
+        # before the snapshot is captured.
         try:
             from PIL import Image
 
             t_warm = time.perf_counter()
-            dummy = Image.new("RGB", (64, 64), (127, 127, 127))
-            self.pipe.run(dummy)
+            warmup_image_path = f"{TRELLIS_SRC}/assets/example_image/T.png"
+            self.pipe.run(Image.open(warmup_image_path).convert("RGB"))
             warm_ms = (time.perf_counter() - t_warm) * 1000
             log.info(f"enter: warmup inference done in {warm_ms:.0f}ms")
         except Exception as e:
@@ -322,6 +329,7 @@ class TrellisInference:
         image_bucket: str,
         image_key: str,
         request_id: str,
+        steps: int | None = None,
     ) -> dict[str, Any]:
         if self.init_error is not None or self.pipe is None:
             raise RuntimeError(
@@ -332,7 +340,8 @@ class TrellisInference:
         import o_voxel
         from PIL import Image
 
-        log.info(f"[{request_id}] inference: start; key={image_key}")
+        steps = steps if steps in ALLOWED_SAMPLER_STEPS else DEFAULT_SAMPLER_STEPS
+        log.info(f"[{request_id}] inference: start; key={image_key}; steps={steps}")
         t0 = time.perf_counter()
 
         t_dl = time.perf_counter()
@@ -350,7 +359,15 @@ class TrellisInference:
         )
 
         t_inf = time.perf_counter()
-        mesh = self.pipe.run(image)[0]
+        # All three samplers default from pipeline.json (steps=12); kwargs
+        # here override per-request.
+        steps_override = {"steps": steps}
+        mesh = self.pipe.run(
+            image,
+            sparse_structure_sampler_params=steps_override,
+            shape_slat_sampler_params=steps_override,
+            tex_slat_sampler_params=steps_override,
+        )[0]
         # nvdiffrast hard limit on face count.
         mesh.simplify(16777216)
         inference_ms = (time.perf_counter() - t_inf) * 1000
@@ -417,7 +434,11 @@ def submit(payload: dict[str, Any]) -> dict[str, Any]:
     request_id = uuid.uuid4().hex[:8]
     image_bucket = payload.get("image_bucket")
     image_key = payload.get("image_key")
-    log.info(f"[{request_id}] submit: received; bucket={image_bucket} key={image_key}")
+    steps = payload.get("steps")
+    log.info(
+        f"[{request_id}] submit: received; bucket={image_bucket} "
+        f"key={image_key} steps={steps}"
+    )
 
     if not image_bucket or not image_key:
         log.warning(f"[{request_id}] submit: missing image_bucket or image_key")
@@ -427,6 +448,7 @@ def submit(payload: dict[str, Any]) -> dict[str, Any]:
         image_bucket=image_bucket,
         image_key=image_key,
         request_id=request_id,
+        steps=steps,
     )
     log.info(f"[{request_id}] submit: spawned call_id={call.object_id}")
     return {"call_id": call.object_id, "request_id": request_id}

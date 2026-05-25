@@ -33,10 +33,12 @@ class TrellisPipeline(AsyncPipeline):
         self.pipeline_input = pipeline_input
 
     async def run(self) -> dict[str, Any]:
-        payload = {
+        payload: dict[str, Any] = {
             "image_bucket": self.pipeline_input.image_bucket,
             "image_key": self.pipeline_input.image_key,
         }
+        if self.pipeline_input.steps is not None:
+            payload["steps"] = self.pipeline_input.steps
 
         result = await invoke_trellis(payload)
 

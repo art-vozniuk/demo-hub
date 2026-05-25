@@ -29,13 +29,13 @@ class SharpPipelineInput(PipelineInput):
 
 
 class TrellisPipelineInput(PipelineInput):
-    """User-supplied image. TRELLIS.2 needs nothing else — single
-    image→3D pass, no preset, no prompt. We forward only the S3 location
-    of the source image; Modal produces a textured .glb.
+    """User-supplied image plus optional sampler-steps knob driving the
+    quality/speed/cost tradeoff. None falls back to the Modal default (8).
     """
 
     image_bucket: str
     image_key: str
+    steps: int | None = None
 
 
 class GenerativeEditingCustomPipelineInput(PipelineInput):

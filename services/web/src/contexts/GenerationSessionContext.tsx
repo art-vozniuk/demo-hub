@@ -69,9 +69,14 @@ export type GenerationPhase =
   | "object-pending"
   | "failed";
 
+// Mesh sampler steps; lower = faster + cheaper, higher = better detail.
+// Allowed values match the cost-multiplier table for the trellis pipeline.
+export type MeshSteps = 4 | 8 | 12;
+
 export interface GenerationSessionState {
   phase: GenerationPhase;
   outputKind: OutputKind;
+  meshSteps: MeshSteps;
   prompt: string;
   image: T2IImage | null;
   // True when the image originates from a user upload, not flux-t2i. Lets
@@ -102,6 +107,7 @@ export interface GenerationSessionApi extends GenerationSessionState {
   objectCost: number | undefined;
   totalCost: number | undefined;
   setOutputKind: (kind: OutputKind) => void;
+  setMeshSteps: (steps: MeshSteps) => void;
   start: (args: StartArgs) => Promise<void>;
   startFromImage: (args: StartFromImageArgs) => Promise<void>;
   confirm: () => Promise<void>;
@@ -122,6 +128,7 @@ const GenerationSessionContext = createContext<GenerationSessionApi | undefined>
 const INITIAL_STATE: GenerationSessionState = {
   phase: "idle",
   outputKind: "glb",
+  meshSteps: 8,
   prompt: "",
   image: null,
   imageFromUpload: false,
@@ -207,6 +214,10 @@ export const GenerationSessionProvider = ({
     setState((prev) => (prev.outputKind === kind ? prev : { ...prev, outputKind: kind }));
   }, []);
 
+  const setMeshSteps = useCallback((steps: MeshSteps) => {
+    setState((prev) => (prev.meshSteps === steps ? prev : { ...prev, meshSteps: steps }));
+  }, []);
+
   const cancel = useCallback(() => {
     // No Modal-side abort — we just stop polling. Already-debited tokens stay debited.
     clearFluxPolling();
@@ -217,9 +228,13 @@ export const GenerationSessionProvider = ({
         name: "editor_generate_splat_cancelled",
         params: { phase: prev.phase },
       });
-      // Preserve the chosen output kind across a cancel so the toggle
-      // doesn't snap back to the default mid-session.
-      return { ...INITIAL_STATE, outputKind: prev.outputKind };
+      // Preserve the output knobs across a cancel so the toggles don't
+      // snap back to defaults mid-session.
+      return {
+        ...INITIAL_STATE,
+        outputKind: prev.outputKind,
+        meshSteps: prev.meshSteps,
+      };
     });
   }, [clearFluxPolling, clearObjectPolling, track]);
 
@@ -288,9 +303,14 @@ export const GenerationSessionProvider = ({
   );
 
   const startObject = useCallback(
-    async (image: T2IImage, name: string, kind: OutputKind) => {
+    async (image: T2IImage, name: string, kind: OutputKind, steps: MeshSteps) => {
       const pipelineId = uuidv4();
       const traceId = uuidv4();
+      const input: Record<string, unknown> = {
+        image_bucket: image.image_bucket,
+        image_key: image.image_key,
+      };
+      if (kind === "glb") input.steps = steps;
       try {
         await pipelinesApi.queuePipelines({
           trace_id: traceId,
@@ -298,10 +318,7 @@ export const GenerationSessionProvider = ({
             {
               pipeline_id: pipelineId,
               pipeline_name: stage2Pipeline(kind),
-              input: {
-                image_bucket: image.image_bucket,
-                image_key: image.image_key,
-              },
+              input,
             },
           ],
         });
@@ -597,13 +614,14 @@ export const GenerationSessionProvider = ({
       name: "editor_generate_splat_confirmed",
       params: { name, output_kind: state.outputKind },
     });
-    await startObject(state.image, name, state.outputKind);
+    await startObject(state.image, name, state.outputKind, state.meshSteps);
   }, [
     state.phase,
     state.image,
     state.prompt,
     state.objectName,
     state.outputKind,
+    state.meshSteps,
     balance,
     getCost,
     startObject,
@@ -675,6 +693,7 @@ export const GenerationSessionProvider = ({
         objectCost,
         totalCost,
         setOutputKind,
+        setMeshSteps,
         start,
         startFromImage,
         confirm,
