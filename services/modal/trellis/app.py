@@ -169,55 +169,116 @@ trellis_thin_image = (
 # autotune). Import them lazily inside generate(), not at module level.
 
 
-def _drop_pivot_to_feet(glb_bytes: bytes, request_id: str) -> bytes:
-    """Round-trip through trimesh to shift vertices so min(Y) == 0.
-
-    `o_voxel.postprocess.to_glb` returns a custom object whose `.geometry`
-    attribute is not the standard trimesh.Scene mapping, so we re-parse
-    the exported bytes via trimesh.load — that always yields a Scene
-    with a `.geometry` dict and a `.graph` we can walk.
+def _warmup_pipeline(pipe: Any) -> None:
+    """Force every JIT'd CUDA kernel along the full inference path to
+    compile before the snapshot is captured: diffusion (pipe.run) +
+    cumesh remesh + nvdiffrast texture bake (to_glb). Otherwise the
+    first real request hits cold-JIT and export inflates ~3-5x.
     """
 
-    import io as _io
+    import o_voxel
+    from PIL import Image
+
+    image_path = f"{TRELLIS_SRC}/assets/example_image/T.png"
+    mesh = pipe.run(Image.open(image_path).convert("RGB"))[0]
+    mesh.simplify(16777216)
+    o_voxel.postprocess.to_glb(
+        vertices=mesh.vertices,
+        faces=mesh.faces,
+        attr_volume=mesh.attrs,
+        coords=mesh.coords,
+        attr_layout=mesh.layout,
+        voxel_size=mesh.voxel_size,
+        aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+        decimation_target=1000000,
+        texture_size=TEXTURE_RESOLUTION,
+        remesh=True,
+        remesh_band=1,
+        remesh_project=0,
+        verbose=False,
+    )
+
+
+def _drop_pivot_to_feet(glb_bytes: bytes, request_id: str) -> bytes:
+    """Shift POSITION accessors in-place so combined min(Y) == 0.
+
+    Operates directly on the GLB binary: rewrites the POSITION float32
+    sub-ranges in the BIN chunk and updates each accessor's min/max in
+    the JSON chunk. Avoids re-encoding textures (which is what made the
+    earlier trimesh round-trip slow on multi-MB textured meshes).
+    """
+
+    import struct
+    import json
     import numpy as np
-    import trimesh
 
-    scene = trimesh.load(_io.BytesIO(glb_bytes), file_type="glb", process=False)
-    geoms = getattr(scene, "geometry", None)
-    if not geoms:
-        log.warning(f"[{request_id}] pivot: parsed scene has no geometries")
+    if len(glb_bytes) < 28 or glb_bytes[:4] != b"glTF":
+        log.warning(f"[{request_id}] pivot: not a GLB; skip")
         return glb_bytes
 
-    min_y = float("inf")
-    graph = getattr(scene, "graph", None)
-    node_iter = list(graph.nodes_geometry) if graph is not None else []
-    for node_name in node_iter:
-        T, geom_name = graph[node_name]
-        g = geoms.get(geom_name)
-        if g is None or getattr(g, "vertices", None) is None or len(g.vertices) == 0:
-            continue
-        v = np.asarray(g.vertices)
-        if not np.allclose(T, np.eye(4)):
-            v_world = (T[:3, :3] @ v.T).T + T[:3, 3]
-        else:
-            v_world = v
-        min_y = min(min_y, float(v_world[:, 1].min()))
-
-    if not (min_y < float("inf")):
-        log.warning(f"[{request_id}] pivot: no vertices found")
+    json_len, json_type = struct.unpack("<II", glb_bytes[12:20])
+    if json_type != 0x4E4F534A:
+        log.warning(f"[{request_id}] pivot: malformed JSON chunk; skip")
         return glb_bytes
+    gltf = json.loads(glb_bytes[20 : 20 + json_len])
+
+    bin_hdr = 20 + json_len
+    bin_len, bin_type = struct.unpack("<II", glb_bytes[bin_hdr : bin_hdr + 8])
+    if bin_type != 0x004E4942:
+        log.warning(f"[{request_id}] pivot: malformed BIN chunk; skip")
+        return glb_bytes
+    bin_start = bin_hdr + 8
+    bin_data = bytearray(glb_bytes[bin_start : bin_start + bin_len])
+
+    accessors = gltf.get("accessors", [])
+    buffer_views = gltf.get("bufferViews", [])
+    pos_ids = {
+        prim.get("attributes", {}).get("POSITION")
+        for mesh in gltf.get("meshes", [])
+        for prim in mesh.get("primitives", [])
+    }
+    pos_ids.discard(None)
+    if not pos_ids:
+        log.warning(f"[{request_id}] pivot: no POSITION accessors")
+        return glb_bytes
+
+    def view_of(acc_idx: int):
+        acc = accessors[acc_idx]
+        bv = buffer_views[acc["bufferView"]]
+        off = bv.get("byteOffset", 0) + acc.get("byteOffset", 0)
+        return np.frombuffer(
+            bin_data, dtype=np.float32, count=acc["count"] * 3, offset=off
+        ).reshape(-1, 3)
+
+    min_y = min(float(view_of(i)[:, 1].min()) for i in pos_ids)
     dy = -min_y
     if abs(dy) < 1e-6:
         log.info(f"[{request_id}] pivot: already at Y=0")
         return glb_bytes
 
-    for g in geoms.values():
-        if getattr(g, "vertices", None) is not None and len(g.vertices) > 0:
-            g.vertices[:, 1] += dy
-    out = _io.BytesIO()
-    scene.export(out, file_type="glb")
+    for i in pos_ids:
+        view_of(i)[:, 1] += dy
+        acc = accessors[i]
+        if "min" in acc and len(acc["min"]) >= 2:
+            acc["min"][1] += dy
+        if "max" in acc and len(acc["max"]) >= 2:
+            acc["max"][1] += dy
+
+    new_json = json.dumps(gltf, separators=(",", ":")).encode("utf-8")
+    new_json += b" " * ((4 - len(new_json) % 4) % 4)
+    new_bin = bytes(bin_data) + b"\x00" * ((4 - len(bin_data) % 4) % 4)
+    total = 12 + 8 + len(new_json) + 8 + len(new_bin)
+
+    out = bytearray()
+    out += b"glTF"
+    out += struct.pack("<II", 2, total)
+    out += struct.pack("<II", len(new_json), 0x4E4F534A)
+    out += new_json
+    out += struct.pack("<II", len(new_bin), 0x004E4942)
+    out += new_bin
+
     log.info(f"[{request_id}] pivot: shifted Y by {dy:+.4f} so min(Y)=0")
-    return out.getvalue()
+    return bytes(out)
 
 
 @app.function(
@@ -359,20 +420,13 @@ class TrellisInference:
             self.init_error = e
             return
 
-        # Warmup with an upstream example image so RMBG actually finds a
-        # foreground; a blank dummy returns an empty mask and crashes
-        # downstream max(). Forces cumesh + nvdiffrast kernels to JIT
-        # before the snapshot is captured.
         try:
-            from PIL import Image
-
             t_warm = time.perf_counter()
-            warmup_image_path = f"{TRELLIS_SRC}/assets/example_image/T.png"
-            self.pipe.run(Image.open(warmup_image_path).convert("RGB"))
+            _warmup_pipeline(self.pipe)
             warm_ms = (time.perf_counter() - t_warm) * 1000
-            log.info(f"enter: warmup inference done in {warm_ms:.0f}ms")
+            log.info(f"enter: full-pipeline warmup done in {warm_ms:.0f}ms")
         except Exception as e:
-            log.warning(f"enter: warmup inference failed (non-fatal): {e!r}")
+            log.warning(f"enter: warmup failed (non-fatal): {e!r}")
 
     @modal.method()
     def generate(
