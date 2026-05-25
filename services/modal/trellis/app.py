@@ -38,17 +38,11 @@ from common.lib import (
 
 MODEL_REPO = "microsoft/TRELLIS.2-4B"
 MODEL_LOCAL_DIR = f"{MODEL_DIR}/trellis2-4b"
-# HF cache lives on the persistent volume so Trellis2ImageTo3DPipeline's
-# transitive HF downloads (TRELLIS-image-large, dinov3, ...) survive
-# scaledowns and don't re-download on every cold start.
+# HF cache lives on the volume so transitive downloads survive scaledowns.
 HF_CACHE_DIR = f"{MODEL_DIR}/hf_cache"
-# Models that TRELLIS.2 lazily pulls from HF Hub inside from_pretrained().
-# Predownload them into HF_CACHE_DIR so cold starts never hit the network.
-# Upstream TRELLIS.2 configs reference two gated repos by name:
-#   facebook/dinov3-vitl16-pretrain-lvd1689m  — Meta, new requests rejected
-#   briaai/RMBG-2.0                            — Bria, gated by terms
-# camenduru maintains bit-identical mirrors of both with gated=False.
-# We download from the mirrors and rewrite the pipeline configs to match.
+# Upstream configs reference dinov3 (Meta, closed) and RMBG-2.0 (Bria,
+# gated). camenduru mirrors both as open repos; preload patches the
+# config json to swap the names.
 HF_REPO_REWRITES = {
     "facebook/dinov3-vitl16-pretrain-lvd1689m": "camenduru/dinov3-vitl16-pretrain-lvd1689m",
     "briaai/RMBG-2.0": "camenduru/RMBG-2.0",
@@ -58,9 +52,8 @@ HF_AUX_REPOS = [
     *HF_REPO_REWRITES.values(),
 ]
 
-# Full-quality render resolution. 512 fits an A10G (24GB); see GPU note
-# on the @app.cls below if this ever OOMs.
-RENDER_RESOLUTION = 512
+# Texture size for to_glb. Below 4096 textures look grainy.
+TEXTURE_RESOLUTION = 4096
 
 
 log = configure_logging("trellis")
@@ -92,17 +85,14 @@ trellis_image = (
         "pkg-config",
     )
     .pip_install(
-        # torch/torchvision pinned together — CUDA ABI mismatch hurts the
-        # extension builds below. cu124 wheels match the devel base. Pinned
-        # to upstream setup.sh's versions: 2.6.0 ships triton>=3.2 which
-        # FlexGEMM requires; 2.5.x ships triton 3.1 and fails dep solve.
+        # torch 2.6 ships triton ≥ 3.2 required by FlexGEMM; cu124 wheels
+        # match the devel base above.
         "torch==2.6.0",
         "torchvision==0.21.0",
         "numpy",
         "Pillow==11.0.0",
-        # Need the 4.x line for BiRefNet (5.x added all_tied_weights_keys
-        # which the camenduru BiRefNet custom code doesn't define), but
-        # DINOv3ViTModel only landed in 4.56. 4.57.6 is the last 4.x patch.
+        # 4.57.x is the latest 4.x: 5.x removed attrs BiRefNet relies on,
+        # 4.56+ added DINOv3ViTModel.
         "transformers==4.57.6",
         "accelerate",
         "safetensors",
@@ -116,9 +106,7 @@ trellis_image = (
         "setuptools>=64",
         # o-voxel runtime dep not covered elsewhere.
         "plyfile",
-        # TRELLIS.2's --basic deps (from upstream setup.sh): runtime imports
-        # in trellis2/* assume these are present. Skipping gradio/tensorboard
-        # since we never serve the UI or train.
+        # TRELLIS.2 --basic deps from upstream setup.sh, minus train/UI bits.
         "easydict",
         "ninja",
         "tqdm",
@@ -139,39 +127,29 @@ trellis_image = (
             "HF_HUB_ENABLE_HF_TRANSFER": "1",
             "HF_HOME": HF_CACHE_DIR,
             "TRANSFORMERS_OFFLINE": "0",
-            # TRELLIS runtime knobs — native spconv algo is the most
-            # portable; attention backend is left to the lib default.
+            # Portable spconv backend.
             "SPCONV_ALGO": "native",
-            # nvdiffrast needs an EGL device to render off-screen.
+            # Off-screen rendering for nvdiffrast.
             "PYOPENGL_PLATFORM": "egl",
-            # The `trellis2` package has no setup.py at the repo root;
-            # upstream just expects you to import it from a checkout.
+            # trellis2 has no setup.py; import from a checkout.
             "PYTHONPATH": TRELLIS_SRC,
-            # cv2 reads .exr env maps in the example pipeline.
             "OPENCV_IO_ENABLE_OPENEXR": "1",
-            # Modal's add_python ships a clang-built Python; sysconfig
-            # then forwards clang++ to setuptools, but we only installed
-            # g++ via build-essential, and PyTorch is built with g++ —
-            # mixing toolchains breaks the C++ ABI even when it links.
+            # Force g++ for ext builds — Modal's add_python uses clang,
+            # which trips PyTorch's g++-built ABI.
             "CC": "gcc",
             "CXX": "g++",
             "LDSHARED": "g++ -shared",
         }
     )
-    # Clone with submodules, then build each custom extension. Order:
-    # FlexGEMM and CuMesh first because o-voxel's pyproject lists them as
-    # runtime deps via git+ URLs — pre-installing locally lets us pass
-    # --no-deps on o-voxel and skip the re-download. extensions/* dirs do
-    # not exist in TRELLIS.2; those kernels live in separate repos
-    # referenced by upstream's setup.sh.
+    # FlexGEMM and CuMesh first: o-voxel pyproject lists them as git+
+    # runtime deps, pre-installing lets o-voxel pass --no-deps.
     .run_commands(
         f"git clone --recursive https://github.com/microsoft/TRELLIS.2.git {TRELLIS_SRC}",
         "git clone --recursive https://github.com/JeffreyXiang/FlexGEMM.git /tmp/extensions/FlexGEMM",
         "pip install /tmp/extensions/FlexGEMM --no-build-isolation",
         "git clone --recursive https://github.com/JeffreyXiang/CuMesh.git /tmp/extensions/CuMesh",
         "pip install /tmp/extensions/CuMesh --no-build-isolation",
-        # Folder on disk is `o-voxel` (hyphen); Python import is `o_voxel`.
-        # --no-deps because cumesh + flex_gemm are already installed above.
+        # Folder is o-voxel (hyphen), Python package is o_voxel.
         f"pip install {TRELLIS_SRC}/o-voxel --no-build-isolation --no-deps",
         "git clone -b v0.4.0 https://github.com/NVlabs/nvdiffrast.git /tmp/extensions/nvdiffrast",
         "pip install /tmp/extensions/nvdiffrast --no-build-isolation",
@@ -181,13 +159,11 @@ trellis_image = (
         "pip install git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8",
         gpu="A10G",
     )
-    # Modal no longer auto-mounts sibling files; ship common.lib explicitly.
     .add_local_python_source("common.lib")
 )
 
 
-# submit/poll only spawn / inspect a FunctionCall — no torch needed. A
-# thin image keeps their cold-start small. Same pattern as sharp/app.py.
+# Thin image for submit/poll — no torch, fast cold-start.
 trellis_thin_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
@@ -198,11 +174,8 @@ trellis_thin_image = (
 )
 
 
-# NOTE: o_voxel + trellis2 cannot be imported on a CPU container — they
-# pull flex_gemm, which triggers triton autotune init at module load and
-# needs an NVIDIA driver. preload_weights and any CPU-snapshot hook would
-# crash. So we import lazily inside the GPU-only generate() method below
-# and skip Modal's CPU memory snapshot entirely.
+# o_voxel + trellis2 require a GPU at import time (flex_gemm triton
+# autotune). Import them lazily inside generate(), not at module level.
 
 
 @app.function(
@@ -212,11 +185,9 @@ trellis_thin_image = (
     secrets=[modal.Secret.from_name("huggingface", required_keys=[])],
 )
 def preload_weights() -> str:
-    """Download TRELLIS.2-4B + transitive HF deps into the persistent volume.
+    """Download TRELLIS.2-4B + transitive HF deps into the volume.
 
-    Run once: `python services/modal/trellis/preload.py`. Re-running is a
-    no-op when files are already up to date. dinov3 is gated — HF_TOKEN
-    in the `huggingface` Modal secret must have access approval.
+    Idempotent; runs via services/modal/trellis/preload.py.
     """
 
     from huggingface_hub import snapshot_download
@@ -239,9 +210,7 @@ def preload_weights() -> str:
         f"preload: main repo done in {(time.perf_counter() - t0) * 1000:.0f}ms"
     )
 
-    # Rewrite in-place so the feature extractors load from open mirrors
-    # instead of the gated facebook/ and briaai/ repos. Touches both
-    # pipeline.json and texturing_pipeline.json.
+    # Swap gated repo names in the pipeline configs to their mirrors.
     import glob
 
     rewrites = 0
@@ -258,9 +227,7 @@ def preload_weights() -> str:
             log.info(f"preload: rewrote gated repo paths in {cfg}")
     log.info(f"preload: patched {rewrites} pipeline config(s) to mirrors")
 
-    # Transitive deps pulled by Trellis2ImageTo3DPipeline.from_pretrained
-    # at runtime. Cache them into HF_CACHE_DIR (== HF_HOME on inference
-    # containers) so cold starts skip the network entirely.
+    # Preload transitive HF deps so cold inference skips the network.
     for repo in HF_AUX_REPOS:
         t_aux = time.perf_counter()
         log.info(f"preload: aux repo {repo} -> {HF_CACHE_DIR}")
@@ -276,9 +243,8 @@ def preload_weights() -> str:
                 f"{(time.perf_counter() - t_aux) * 1000:.0f}ms"
             )
         except Exception as e:
-            # Don't kill the whole preload if one aux repo fails (e.g. user
-            # hasn't approved a gated repo yet). Log loudly and continue —
-            # the inference cold start will surface the same error.
+            # One aux repo failure (e.g. unapproved gated access) shouldn't
+            # break the whole preload — runtime cold-start surfaces it too.
             log.error(f"preload: aux repo {repo} FAILED: {e!r}")
 
     t1 = time.perf_counter()
@@ -302,12 +268,9 @@ def preload_weights() -> str:
     volumes={MODEL_DIR: volume},
     scaledown_window=10,
     timeout=600,
-    # Once the function actually runs, never retry — if generation fails
-    # on a real input we want one clear error, not 3x the GPU bill.
     retries=modal.Retries(max_retries=0),
-    # GPU memory snapshot: snap=True runs on a GPU container (unlike the
-    # default CPU snapshot), so flex_gemm/triton driver init at import
-    # works. Cold restores skip the ~5 min model load + warmup.
+    # GPU snapshot keeps the GPU attached during snap=True, which is
+    # required because flex_gemm/triton init driver state on import.
     enable_memory_snapshot=True,
     experimental_options={"enable_gpu_snapshot": True},
     secrets=[
@@ -323,16 +286,12 @@ def preload_weights() -> str:
 class TrellisInference:
     @modal.enter(snap=True)
     def load(self) -> None:
-        """Snapshot hook. Modal's GPU memory snapshot keeps the GPU
-        attached during snap=True (alpha feature), so flex_gemm/triton
-        driver init at import works. Snapshot captures the loaded
-        pipeline + warmed JIT state; subsequent cold starts restore
-        in seconds instead of ~5 minutes.
+        """Load the pipeline + run a warmup pass.
 
-        Errors are caught and stashed; generate() raises on first call.
-        Otherwise Modal treats an enter failure as "container couldn't
-        start" and spins up a fresh container for the same FunctionCall,
-        burning GPU time in a crash loop instead of failing the request.
+        Errors are stashed on self instead of raising — a raise from an
+        enter hook makes Modal restart the container indefinitely (it
+        thinks the container couldn't start), so generate() surfaces
+        the failure as a normal function error instead.
         """
 
         self.pipe = None
@@ -357,7 +316,7 @@ class TrellisInference:
             to_cuda_ms = (time.perf_counter() - t_gpu) * 1000
             log.info(f"enter: pipe.cuda() finished in {to_cuda_ms:.0f}ms")
         except Exception as e:
-            log.exception("enter: pipeline init failed; will fail fast on first call")
+            log.exception("enter: pipeline init failed")
             self.init_error = e
             return
 
@@ -381,16 +340,12 @@ class TrellisInference:
         image_key: str,
         request_id: str,
     ) -> dict[str, Any]:
-        # Bail out as a normal function error if load() couldn't bring
-        # the pipeline up — Modal then completes the FunctionCall as
-        # failed instead of restarting the container indefinitely.
         if self.init_error is not None or self.pipe is None:
             raise RuntimeError(
                 f"TrellisInference init failed: {self.init_error!r}"
             )
 
-        # Same lazy-import rationale as in load(): these modules need
-        # a GPU at import time and would crash on any CPU container.
+        # Lazy: these modules touch the GPU on import, can't load on CPU.
         import o_voxel
         from PIL import Image
 
@@ -431,7 +386,7 @@ class TrellisInference:
             voxel_size=mesh.voxel_size,
             aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
             decimation_target=1000000,
-            texture_size=RENDER_RESOLUTION,
+            texture_size=TEXTURE_RESOLUTION,
             remesh=True,
             remesh_band=1,
             remesh_project=0,
@@ -439,9 +394,8 @@ class TrellisInference:
         )
         with tempfile.TemporaryDirectory() as tmp:
             out_path = os.path.join(tmp, "out.glb")
-            # Plain PNG/JPEG textures — EXT_texture_webp is unsupported by
-            # most viewers (including our WebGPU renderer) and gets dropped
-            # to a grey default material per glTF spec.
+            # Default PNG textures — EXT_texture_webp falls back to grey
+            # in viewers that don't support the extension.
             glb.export(out_path)
             with open(out_path, "rb") as f:
                 glb_bytes = f.read()
