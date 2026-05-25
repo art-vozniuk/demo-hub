@@ -27,6 +27,13 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import GenerationCard from "@/components/GenerationCard";
 import {
   useGenerationSession,
@@ -58,12 +65,17 @@ const MB = 1024 * 1024;
 const TRANSPARENT_PX =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
-// Mesh quality presets shown in the pick-output stage; values match the
-// trellis cost-multiplier table on the backend.
-const MESH_QUALITY_OPTIONS: { label: string; steps: MeshSteps }[] = [
-  { label: "Low", steps: 4 },
-  { label: "Standard", steps: 8 },
-  { label: "High", steps: 12 },
+// Mesh quality presets shown in the pick-output stage. `multiplier` is for
+// display only — the server re-resolves the final price at charge time
+// using the trellis cost-multiplier table.
+const MESH_QUALITY_OPTIONS: {
+  label: string;
+  steps: MeshSteps;
+  multiplier: string;
+}[] = [
+  { label: "Low", steps: 4, multiplier: "×0.75" },
+  { label: "Standard", steps: 8, multiplier: "×1" },
+  { label: "High", steps: 12, multiplier: "×1.5" },
 ];
 
 export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
@@ -303,11 +315,10 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
     if (stage === "edit" && session.iterateCost !== undefined) {
       parts.push(`Edit: ${session.iterateCost}`);
     }
-    if (stage === "pick-output") {
-      const shown = isMesh ? meshCost ?? session.objectCost : session.objectCost;
-      if (shown !== undefined) {
-        parts.push(`${isMesh ? "Mesh" : "Splat"}: ${shown}`);
-      }
+    if (stage === "pick-output" && !isMesh && session.objectCost !== undefined) {
+      // Mesh cost lives inline next to the Quality picker; splat has no
+      // quality knob so we keep the header summary.
+      parts.push(`Splat: ${session.objectCost}`);
     }
     if (balance !== null) parts.push(`Balance: ${balance}`);
     return parts.join(" · ");
@@ -578,49 +589,57 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
               imageUrl: session.image.result_url,
               maxW: "max-w-xs",
             })}
-            <Label className="text-xs">Output</Label>
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              size="sm"
-              value={session.outputKind}
-              onValueChange={(v) => {
-                if (v) session.setOutputKind(v as OutputKind);
-              }}
-              className="justify-start"
-            >
-              <ToggleGroupItem value="glb" className="text-[11px] px-3">
-                GLB mesh
-              </ToggleGroupItem>
-              <ToggleGroupItem value="splat" className="text-[11px] px-3">
-                Gaussian splat
-              </ToggleGroupItem>
-            </ToggleGroup>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="output-kind" className="text-xs">
+                Output
+              </Label>
+              <Select
+                value={session.outputKind}
+                onValueChange={(v) => session.setOutputKind(v as OutputKind)}
+              >
+                <SelectTrigger id="output-kind">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="glb">GLB mesh · faster</SelectItem>
+                  <SelectItem value="splat">Gaussian splat · photoreal</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
 
             {isMesh && (
-              <>
-                <Label className="text-xs">Quality</Label>
-                <ToggleGroup
-                  type="single"
-                  variant="outline"
-                  size="sm"
+              <div className="space-y-1.5">
+                <Label htmlFor="mesh-quality" className="text-xs">
+                  Quality
+                </Label>
+                <Select
                   value={String(session.meshSteps)}
-                  onValueChange={(v) => {
-                    if (v) session.setMeshSteps(Number(v) as MeshSteps);
-                  }}
-                  className="justify-start"
+                  onValueChange={(v) =>
+                    session.setMeshSteps(Number(v) as MeshSteps)
+                  }
                 >
-                  {MESH_QUALITY_OPTIONS.map((q) => (
-                    <ToggleGroupItem
-                      key={q.steps}
-                      value={String(q.steps)}
-                      className="text-[11px] px-3"
-                    >
-                      {q.label}
-                    </ToggleGroupItem>
-                  ))}
-                </ToggleGroup>
-              </>
+                  <SelectTrigger id="mesh-quality">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MESH_QUALITY_OPTIONS.map((q) => (
+                      <SelectItem key={q.steps} value={String(q.steps)}>
+                        {q.label} · {q.steps} steps · {q.multiplier}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {meshCost !== undefined && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Final cost:{" "}
+                    <span className="font-medium text-foreground tabular-nums">
+                      {meshCost}
+                    </span>{" "}
+                    token{meshCost === 1 ? "" : "s"}
+                  </p>
+                )}
+              </div>
             )}
 
             <div className="flex justify-end pt-1">
