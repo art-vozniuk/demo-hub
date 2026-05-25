@@ -18,6 +18,9 @@ interface GenerationCardProps {
   estimatedFinishAt?: string | null;
   workersMissing?: boolean;
   onAnimationComplete?: () => void;
+  // "cover" crops to fill (default — matches Flux/Face Swap square previews);
+  // "contain" letterboxes so non-square outputs aren't cut.
+  objectFit?: "cover" | "contain";
 }
 
 const formatRemaining = (seconds: number): string => {
@@ -40,6 +43,7 @@ const GenerationCard = ({
   estimatedFinishAt,
   workersMissing = false,
   onAnimationComplete,
+  objectFit = "cover",
 }: GenerationCardProps) => {
   const [blurAmount, setBlurAmount] = useState(0);
   const [displayImage, setDisplayImage] = useState(imageUrl);
@@ -107,10 +111,12 @@ const GenerationCard = ({
 
   const handleDownload = async (e?: React.MouseEvent) => {
     e?.stopPropagation();
-    if (!generatedImage) return;
+    // Prefer the freshly generated image, fall back to whatever's on screen.
+    const src = generatedImage ?? (blurAmount === 0 ? displayImage : null);
+    if (!src) return;
 
     try {
-      const response = await fetch(generatedImage);
+      const response = await fetch(src);
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -127,7 +133,10 @@ const GenerationCard = ({
   };
 
   const handleImageClick = () => {
-    if (generatedImage && blurAmount === 0) {
+    // Open the full-screen view whenever a sharp image is on screen —
+    // either an animated-in generatedImage, or a static imageUrl that
+    // was never put through the processing flow.
+    if (displayImage && blurAmount === 0) {
       setIsModalOpen(true);
     }
   };
@@ -160,7 +169,9 @@ const GenerationCard = ({
             <img
               src={displayImage}
               alt={templateName || "Template"}
-              className="h-full w-full object-cover transition-all duration-700"
+              className={`h-full w-full transition-all duration-700 ${
+                objectFit === "contain" ? "object-contain" : "object-cover"
+              }`}
               style={{
                 filter: `blur(${blurAmount}px)`,
               }}
@@ -194,7 +205,7 @@ const GenerationCard = ({
               </div>
             )}
 
-            {generatedImage && blurAmount === 0 && (
+            {!isProcessing && blurAmount === 0 && displayImage && (
               <div
                 className="absolute top-2 right-2 flex items-center gap-1.5"
                 onClick={(e) => e.stopPropagation()}
@@ -230,7 +241,7 @@ const GenerationCard = ({
         
         {pipelineId && (
           <div className="flex justify-end items-center gap-1">
-            {generatedImage && blurAmount === 0 && (
+            {!isProcessing && blurAmount === 0 && displayImage && (
               <SharePipelineButton
                 pipelineId={pipelineId}
                 pipelineDisplayName={templateName ?? undefined}

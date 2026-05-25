@@ -77,9 +77,18 @@ export default defineConfig(({ mode }) => {
         // forget here so the agent has a single tailable timeline of what
         // happened. No request is ever rejected; this is dev-only.
         const devLogPath = path.resolve(__dirname, "../external/renderer/dev.log");
+        // Renderer iframe is cross-origin, so its POST triggers a preflight.
+        const corsHeaders = {
+          "access-control-allow-origin": "*",
+          "access-control-allow-methods": "POST, OPTIONS",
+          "access-control-allow-headers": "content-type",
+        };
         server.middlewares.use("/__dev_log", (req, res) => {
+          if (req.method === "OPTIONS") {
+            res.writeHead(204, corsHeaders); res.end(); return;
+          }
           if (req.method !== "POST") {
-            res.writeHead(405); res.end(); return;
+            res.writeHead(405, corsHeaders); res.end(); return;
           }
           const chunks: Buffer[] = [];
           req.on("data", (c: Buffer) => chunks.push(c));
@@ -89,7 +98,7 @@ export default defineConfig(({ mode }) => {
             const line = `[${ts}] ${body}\n`;
             try { fs.appendFileSync(devLogPath, line); } catch {}
             process.stdout.write(`[dev-log] ${body}\n`);
-            res.writeHead(204); res.end();
+            res.writeHead(204, corsHeaders); res.end();
           });
         });
       },

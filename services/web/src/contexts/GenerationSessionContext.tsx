@@ -22,7 +22,7 @@ import {
   type PipelineStatusItem,
   type FluxResult,
 } from "@/api";
-import { parseS3Url } from "@/lib/s3";
+import { parseS3Url, uploadToS3, getFileExtension } from "@/lib/s3";
 import { useWallet } from "@/contexts/WalletContext";
 import { useAnalytics } from "@/hooks/useAnalytics";
 
@@ -73,6 +73,9 @@ export interface GenerationSessionState {
   outputKind: OutputKind;
   prompt: string;
   image: T2IImage | null;
+  // True when the image originates from a user upload, not flux-t2i. Lets
+  // the overlay skip the "iterate via prompt" affordance for uploads.
+  imageFromUpload: boolean;
   iterating: boolean;
   fluxPipelineId: string | null;
   objectPipelineId: string | null;
@@ -88,6 +91,10 @@ interface StartArgs {
   iterate?: boolean;
 }
 
+interface StartFromImageArgs {
+  file: File;
+}
+
 export interface GenerationSessionApi extends GenerationSessionState {
   fluxCost: number | undefined;
   iterateCost: number | undefined;
@@ -95,6 +102,7 @@ export interface GenerationSessionApi extends GenerationSessionState {
   totalCost: number | undefined;
   setOutputKind: (kind: OutputKind) => void;
   start: (args: StartArgs) => Promise<void>;
+  startFromImage: (args: StartFromImageArgs) => Promise<void>;
   confirm: () => Promise<void>;
   cancel: () => void;
   reset: () => void;
@@ -115,6 +123,7 @@ const INITIAL_STATE: GenerationSessionState = {
   outputKind: "glb",
   prompt: "",
   image: null,
+  imageFromUpload: false,
   iterating: false,
   fluxPipelineId: null,
   objectPipelineId: null,
@@ -580,7 +589,9 @@ export const GenerationSessionProvider = ({
       toast.error("Not enough tokens for 3D generation.");
       return;
     }
-    const name = slugifyPrompt(state.prompt);
+    // Uploaded images stash a filename-derived objectName up front so the
+    // asset doesn't end up named after an empty prompt slug.
+    const name = state.objectName ?? slugifyPrompt(state.prompt);
     track({
       name: "editor_generate_splat_confirmed",
       params: { name, output_kind: state.outputKind },
@@ -590,12 +601,61 @@ export const GenerationSessionProvider = ({
     state.phase,
     state.image,
     state.prompt,
+    state.objectName,
     state.outputKind,
     balance,
     getCost,
     startObject,
     track,
   ]);
+
+  // Upload a user-provided image and skip straight to the review stage.
+  // 3D generation is not kicked off here — confirm() does that, same as
+  // the text→image path.
+  const startFromImage = useCallback(
+    async ({ file }: StartFromImageArgs) => {
+      if (state.phase === "flux-pending" || state.phase === "object-pending") {
+        toast.error("Generation already in progress.");
+        return;
+      }
+
+      const ext = getFileExtension(file.name).toLowerCase();
+      const key = `editor-uploads/${uuidv4()}.${ext}`;
+      let upload;
+      try {
+        upload = await uploadToS3(file, outputBucket, key);
+      } catch (err) {
+        toast.error(`Image upload failed: ${err}`);
+        return;
+      }
+
+      const baseName = file.name.replace(/\.[^.]+$/, "") || "uploaded-image";
+      const name = slugifyPrompt(baseName);
+      const image: T2IImage = {
+        result_url: upload.url,
+        image_bucket: upload.bucket,
+        image_key: upload.key,
+      };
+      setState((prev) => ({
+        ...prev,
+        phase: "flux-ready",
+        prompt: "",
+        image,
+        imageFromUpload: true,
+        objectName: name,
+        iterating: false,
+        errorMessage: null,
+        errorPhase: null,
+        estimatedFinishAt: null,
+        workersMissing: false,
+      }));
+      track({
+        name: "editor_generate_image_uploaded",
+        params: { name },
+      });
+    },
+    [state.phase, outputBucket, track],
+  );
 
   const fluxCost = getCost(T2I_PIPELINE);
   const iterateCost = getCost(ITERATE_PIPELINE);
@@ -615,6 +675,7 @@ export const GenerationSessionProvider = ({
         totalCost,
         setOutputKind,
         start,
+        startFromImage,
         confirm,
         cancel,
         reset,

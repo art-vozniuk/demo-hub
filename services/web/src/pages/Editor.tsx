@@ -654,25 +654,37 @@ const Editor = () => {
           .filter((o) => o.kind === "splat" || o.kind === "mesh")
           .map((o) => ({ name: o.name, kind: o.kind })),
       );
+      const dropPlaceholder = (name: string) => {
+        setLoadingPlaceholders((prev) => {
+          const idx = prev.findIndex((p) => p.name === name);
+          if (idx < 0) return prev;
+          const next = prev.slice();
+          next.splice(idx, 1);
+          return next;
+        });
+      };
       try {
         for (const o of manifest.objects) {
           if (o.kind === "splat" || o.kind === "mesh") {
             let bytes: ArrayBuffer | undefined;
             if (o.asset?.url) {
-              const r = await fetch(o.asset.url);
-              if (!r.ok) throw new Error(`Asset fetch failed: ${o.asset.url}`);
-              bytes = await r.arrayBuffer();
+              try {
+                const r = await fetch(o.asset.url);
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                bytes = await r.arrayBuffer();
+              } catch (err) {
+                // Skip a broken asset rather than aborting the whole hydrate.
+                devLog(
+                  "react.hydrate.assetFail",
+                  `name=${o.name} url=${o.asset.url} err=${String(err)}`,
+                );
+                toast.error(`Couldn't load "${o.name}"`);
+                dropPlaceholder(o.name);
+                continue;
+              }
             }
             if (!bytes) {
-              // Couldn't fetch — remove its placeholder so the user isn't
-              // stuck staring at a never-resolving spinner.
-              setLoadingPlaceholders((prev) => {
-                const idx = prev.findIndex((p) => p.name === o.name);
-                if (idx < 0) return prev;
-                const next = prev.slice();
-                next.splice(idx, 1);
-                return next;
-              });
+              dropPlaceholder(o.name);
               continue;
             }
             // Queue the asset so the editor-objects handler links the
