@@ -202,9 +202,7 @@ const FluxCustom = () => {
       .catch((err) => {
         if (previewTokenRef.current !== token) return;
         console.warn("cost preview failed:", err);
-        // Fall back to base while preview is unavailable — server
-        // remains authoritative at charge time, so the user just sees
-        // the conservative price.
+        // Fall back to base cost; the server re-resolves at charge time.
         setFinalCost(baseCost);
       });
   }, [quality, baseCost]);

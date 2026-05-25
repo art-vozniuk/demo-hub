@@ -298,10 +298,9 @@ async def preview_cost(
     request: CostPreviewRequest,
     db: DbSession,
 ) -> CostPreviewResponse:
-    """Compute the final cost that would be charged for the given input,
-    without queuing anything. Lets the UI display "Final cost: N" live
-    as the user changes pricing-sensitive params. Server stays
-    authoritative — actual queue still re-resolves at charge time."""
+    """Resolve the final cost for the given input without queuing. The
+    actual queue endpoint re-resolves at charge time, so this is
+    advisory only."""
 
     if request.pipeline_name not in known_pipeline_names():
         raise HTTPException(

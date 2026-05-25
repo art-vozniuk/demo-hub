@@ -1,16 +1,10 @@
 """Resolve the final token cost for a queued pipeline.
 
-The wallet layer stays generic: each pipeline_type may have zero or more
-rows in `pipeline_cost_multipliers`. Every row carries a `type` (which
-handler to dispatch to) and a `params` JSON payload (validated by the
-handler's pydantic model). Handlers return a percent multiplier; the
-resolver composes them multiplicatively so additional rules can be
-added without revisiting existing pricing logic.
-
-Composition example: base 10, rules return [70, 150] → 10 * 70 / 100 *
-150 / 100 = 10.5 → 10 (integer truncation favours the user). A handler
-that doesn't match the input returns IDENTITY_PCT (100) so the cost is
-unaffected by an inactive rule.
+Each pipeline_type has zero or more rows in `pipeline_cost_multipliers`;
+each row's `type` selects a handler and `params` carries its config.
+Handlers return a percent multiplier and the resolver composes them
+multiplicatively. Integer truncation favours the user; an inactive rule
+returns 100 (identity).
 """
 
 from __future__ import annotations
@@ -31,9 +25,8 @@ async def load_rules(
     db: AsyncSession,
     pipeline_type_id: int,
 ) -> list[tuple[str, dict[str, Any]]]:
-    """Fetch all multiplier rules for a pipeline_type, ordered by id so
-    composition is deterministic (matters only for non-commutative
-    handlers added in the future)."""
+    """Fetch all multiplier rules for a pipeline_type, ordered by id for
+    deterministic composition under non-commutative handlers."""
 
     result = await db.execute(
         select(CostMultiplier.type, CostMultiplier.params)
@@ -48,9 +41,9 @@ def apply_rules(
     rules: list[tuple[str, dict[str, Any]]],
     pipeline_input: dict[str, Any],
 ) -> int:
-    """Walk every rule, multiply the percents into the running cost.
-    Unknown handler types are logged and skipped (rule treated as
-    identity) — fail open, never overcharge for a config typo."""
+    """Compose the rule percents into the running cost. Unknown handler
+    types are skipped (treated as identity) to avoid overcharging on a
+    config typo."""
 
     cost = base_cost
     for rule_type, params in rules:

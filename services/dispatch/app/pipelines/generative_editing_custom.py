@@ -1,8 +1,7 @@
-"""User photo + free-form prompt → FLUX.2 klein image edit on Modal.
+"""Free-form prompt + user photo → FLUX.2 klein image edit on Modal.
 
-Same Modal app as generative_editing, just without preset resolution —
-the user supplies the prompt directly. Dispatch forwards the S3 source
-location and the prompt; Modal handles download, inference, upload.
+Shares the generative_editing Modal app but takes a caller-supplied
+prompt instead of a server-resolved preset.
 """
 
 from __future__ import annotations
@@ -26,8 +25,7 @@ class GenerativeEditingCustomPipeline(AsyncPipeline):
         s3: S3Client,
         pipeline_input: GenerativeEditingCustomPipelineInput,
     ) -> None:
-        # s3 is plumbed in by the service factory but unused — Modal owns
-        # both the download and the upload.
+        # s3 is unused here; Modal handles download and upload itself.
         self.s3 = s3
         self.pipeline_input = pipeline_input
 

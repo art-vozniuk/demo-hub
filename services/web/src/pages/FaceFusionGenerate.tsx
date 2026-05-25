@@ -361,7 +361,7 @@ const FaceFusionGenerate = () => {
             );
           }
 
-          // Pull post-refund balance so users see returned tokens.
+          // Refresh balance so refunds from failures show up.
           if (hasFailures) refreshBalance();
         }
 
@@ -465,7 +465,7 @@ const FaceFusionGenerate = () => {
 
       toast.success("Your generation pipelines are queued.", { duration: 5000 });
 
-      // Fetch ETA per pipeline; failures shouldn't block the generation flow.
+      // Per-pipeline ETA fetch; failures here don't block generation.
       Promise.all(
         ids.map((id) =>
           pipelinesApi
@@ -556,8 +556,7 @@ const FaceFusionGenerate = () => {
     };
   }, [clearPolling]);
 
-  // Empty-state guard: someone landed on /generate without picking
-  // anything (and not via custom flow). Send them back.
+  // Empty-state guard for the preset flow (custom mode has its own UI).
   if (!isCustom && selectedTemplates.length === 0) {
     return (
       <main className="container mx-auto px-6 py-16 flex items-center justify-center min-h-[calc(100vh-8rem)]">
@@ -603,8 +602,6 @@ const FaceFusionGenerate = () => {
     (completedAnimations.size === generationCount ||
       countCompletedOrFailed() === generationCount);
 
-  // Generate button is enabled only when every prerequisite is satisfied
-  // for the current mode.
   const selfieReady =
     selfieRecognition.status === "complete" &&
     selfieRecognition.selectedBbox !== null;

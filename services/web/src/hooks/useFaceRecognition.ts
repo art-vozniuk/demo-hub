@@ -25,14 +25,9 @@ interface RunArgs {
   key: string;
 }
 
-/**
- * Drives a single-image face_recognition pipeline run.
- *
- * Caller passes the S3 reference of the uploaded image; the hook submits
- * a `face_recognition` job, polls until it terminates, and exposes the
- * resulting payload (detected faces) plus a selectedFaceId that defaults
- * to the first (largest) face but can be re-selected by clicking.
- */
+// Submits a face_recognition job for an S3 image, polls until terminal,
+// and exposes the detected faces with a selectedFaceId that defaults to
+// the largest face.
 export function useFaceRecognition() {
   const [state, setState] = useState<State>(initialState);
   const intervalRef = useRef<number | null>(null);
@@ -156,9 +151,8 @@ export function useFaceRecognition() {
         }
       };
 
-      // Kick off an immediate poll plus the recurring one — submit→detect
-      // is fast enough on the GPU box that the first request often finds
-      // it already done, so don't waste the first second.
+      // Poll immediately in addition to the interval — detection often
+      // finishes inside the first second.
       void poll();
       intervalRef.current = window.setInterval(poll, 1000);
       timeoutRef.current = window.setTimeout(() => {

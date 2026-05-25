@@ -6,13 +6,11 @@ import { useAuth } from '@/contexts/AuthContext';
 interface WalletContextType {
   balance: number | null;
   isLoading: boolean;
-  // pipeline_name -> base_cost, sourced from the DB via /me/balance.
-  // For variable-priced pipelines, use pipelinesApi.previewCost() to get
-  // the final cost for a given input.
+  // pipeline_name -> base_cost. For variable-priced pipelines, call
+  // pipelinesApi.previewCost() for the final input-aware cost.
   costs: Record<string, number> | null;
   getCost: (pipelineName: string) => number | undefined;
-  // One-time signup grant, sourced from core via /me/balance. Null until
-  // the first balance fetch resolves.
+  // One-time signup grant. Null until the first /me/balance resolves.
   signupGrant: number | null;
   refresh: () => Promise<void>;
 }
@@ -25,8 +23,7 @@ export const WalletProvider = ({ children }: { children: ReactNode }) => {
   const [costs, setCosts] = useState<Record<string, number> | null>(null);
   const [signupGrant, setSignupGrant] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  // Coalesce concurrent /me/balance calls so StrictMode + auth state
-  // churn don't each fire their own request.
+  // Coalesces concurrent /me/balance requests into a single in-flight promise.
   const inFlightRef = useRef<Promise<void> | null>(null);
 
   const refresh = useCallback((): Promise<void> => {

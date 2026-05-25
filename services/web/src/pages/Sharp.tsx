@@ -114,8 +114,7 @@ const Sharp = () => {
     return diff > 0 ? diff : 0.01;
   })();
 
-  // Reset uploadedRef when a new file is picked so we don't submit
-  // the stale S3 key against the newly chosen photo.
+  // Upload the picked photo and stash its S3 ref; a new photo invalidates the prior key.
   useEffect(() => {
     if (!photo || uploadedRef) return;
     let alive = true;
