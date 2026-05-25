@@ -3,13 +3,10 @@ import { apiClient } from "../client";
 export interface BalanceResponse {
   // 0 when caller is not authenticated.
   tokens: number;
-  // pipeline_name -> base_cost. Source of truth lives in pipeline_types
-  // (DB); the frontend never hardcodes prices. For pipelines with
-  // variable pricing, the final cost comes from
-  // POST /pipelines/cost-preview, not from this map.
+  // pipeline_name -> base_cost. Variable-priced pipelines must hit
+  // POST /pipelines/cost-preview for the input-aware final cost.
   pipeline_costs: Record<string, number>;
-  // One-time grant a user receives on first sign-in. Source of truth lives
-  // in services/core/app/wallet/service.py — the frontend never hardcodes it.
+  // One-time grant a user receives on first sign-in.
   signup_grant: number;
 }
 

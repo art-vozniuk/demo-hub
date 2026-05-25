@@ -11,7 +11,7 @@ let initialized = false;
 export function initSentry(): void {
   if (initialized) return;
   if (!DSN) {
-    // Soft-disable when DSN isn't provided so local dev doesn't shout.
+    // Soft-disable when DSN is absent (local dev).
     if (import.meta.env.DEV) {
       console.info("[sentry] VITE_SENTRY_DSN not set — Sentry disabled");
     }
@@ -23,9 +23,8 @@ export function initSentry(): void {
     environment: ENV ?? "unknown",
     release: RELEASE,
     integrations: [Sentry.browserTracingIntegration()],
-    // Performance: keep low until we know we have headroom in the Sentry quota.
     tracesSampleRate: 0.1,
-    // Replay disabled by default — adds bundle weight; opt-in later if needed.
+    // Replay disabled; pulls in extra bundle weight.
     replaysSessionSampleRate: 0,
     replaysOnErrorSampleRate: 0,
     sendDefaultPii: true,

@@ -53,8 +53,7 @@ const Navbar = () => {
       // collapse into "More" while the user is interacting with a menu.
       if (document.body.hasAttribute("data-scroll-locked")) return;
       const available = area.clientWidth;
-      // The adaptive nav is hidden on mobile (display:none → clientWidth 0).
-      // Nothing to compute in that state; the hamburger handles mobile.
+      // Adaptive nav is display:none on mobile; the hamburger takes over.
       if (available === 0) return;
       const itemEls = measure.querySelectorAll<HTMLElement>("[data-m-item]");
       const moreEl = measure.querySelector<HTMLElement>("[data-m-more]");
@@ -93,7 +92,6 @@ const Navbar = () => {
     return () => ro.disconnect();
   }, []);
 
-  // Close the mobile sheet on route change so it doesn't linger after a tap.
   useEffect(() => {
     setMobileOpen(false);
   }, [location.pathname]);

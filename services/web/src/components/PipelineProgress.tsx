@@ -18,9 +18,7 @@ const DEFAULT_STAGES: PipelineStage[] = [
 
 interface PipelineProgressProps {
   status: PipelineStatusItem | null;
-  // ISO 8601 timestamp captured once at queue time from /pipelines/{id}/estimate.
-  // Null when the estimate has not arrived yet — the UI then shows just the
-  // current status without a countdown.
+  // ISO 8601 from /pipelines/{id}/estimate. Null suppresses the countdown.
   estimatedFinishAt?: string | null;
   workersMissing?: boolean;
   stages?: PipelineStage[];
@@ -49,8 +47,7 @@ function activeStageIndex(
     if (remaining > 2) return 2;
     return 3;
   }
-  // Past every stage so all entries (including "Done") render as completed
-  // — not as the active spinner. Comparison-friendly sentinel.
+  // +Infinity sentinel so every stage (including "Done") renders as completed.
   if (status.status === "COMPLETED") return Number.POSITIVE_INFINITY;
   if (status.status === "FAILED") return -1;
   return 0;
@@ -65,8 +62,7 @@ const PipelineProgress = ({
 }: PipelineProgressProps) => {
   const [now, setNow] = useState(() => Date.now());
 
-  // 250ms ticker drives the countdown. Stops once the pipeline reaches a
-  // terminal state.
+  // 250ms countdown ticker; stops in terminal states.
   useEffect(() => {
     if (!estimatedFinishAt) return;
     if (
@@ -143,10 +139,8 @@ const PipelineProgress = ({
         </div>
       )}
 
-      {/* Overall progress bar — proxy via the elapsed/total ratio when an
-          estimate is present, otherwise a slim indeterminate shimmer.
-          Snaps to 100% on completion so a wrong-low estimate doesn't
-          leave the bar stuck partway after the result is already in. */}
+      {/* Progress bar: elapsed/total when an estimate is set, indeterminate
+          shimmer otherwise, snapping to 100% on completion. */}
       <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
         {completed ? (
           <div className="h-full w-full bg-primary" />

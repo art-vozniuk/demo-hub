@@ -5,14 +5,11 @@ import { cn } from "@/lib/utils";
 interface FaceSelectionOverlayProps {
   imageUrl: string;
   faces: DetectedFace[];
-  // Pixel space of `faces` bboxes — needed to scale them to the rendered
-  // image size, since the layout-driven width is rarely the original width.
+  // Native pixel dimensions of `faces` bboxes; used to scale them onto the rendered image.
   imageWidth: number;
   imageHeight: number;
   selectedFaceId: string | null;
   onFaceSelect: (faceId: string) => void;
-  // Spinner / "no faces" overlay text. Used while the face_recognition
-  // pipeline is running and after it completes empty-handed.
   isAnalyzing?: boolean;
   errorMessage?: string | null;
 }
@@ -32,8 +29,7 @@ const FaceSelectionOverlay = ({
     null
   );
 
-  // Watch the rendered image's box so bbox overlays follow responsive
-  // resizes (window resize, layout shifts from sibling reflow, etc.).
+  // Track the rendered image box so bbox overlays follow responsive resizes.
   useEffect(() => {
     if (!containerRef.current) return;
 

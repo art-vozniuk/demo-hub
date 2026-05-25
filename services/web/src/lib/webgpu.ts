@@ -1,19 +1,6 @@
-/**
- * WebGPU pre-flight: tells us up-front whether the user can run the renderer
- * at all, *before* we boot a 30 MB WASM module that's just going to assert
- * and trap. Three failure modes worth distinguishing:
- *
- *   - no-api      → browser doesn't expose `navigator.gpu`. iOS <18, older
- *                   Android Chrome, Firefox without flag, etc. Most common.
- *   - no-adapter  → API exists but `requestAdapter()` returned null. Means
- *                   the device has no WebGPU-compatible GPU surfaced (some
- *                   integrated GPUs on Linux, some virtualised desktops).
- *   - no-device   → adapter granted but `requestDevice()` threw. Rare; usually
- *                   means the adapter doesn't satisfy minimum limits.
- *
- * We return adapter info on success so Sentry can tag every later report with
- * vendor/architecture — letting us slice crash rate by GPU class.
- */
+// WebGPU preflight: check API → adapter → device before booting the WASM
+// renderer. Returns adapter info on success so Sentry tags crash reports
+// with vendor/architecture.
 
 export interface AdapterInfo {
   vendor: string;
@@ -32,7 +19,7 @@ const EMPTY_INFO: AdapterInfo = {
   vendor: "", architecture: "", device: "", description: "",
 };
 
-// Narrow inline shapes — avoids depending on @webgpu/types just for two calls.
+// Inline shapes avoid depending on @webgpu/types for two calls.
 interface MinimalAdapter {
   info?: Partial<AdapterInfo>;
   requestDevice: () => Promise<{ destroy?: () => void }>;
@@ -53,11 +40,9 @@ export async function checkWebGpu(): Promise<WebGpuStatus> {
     const adapter = await gpu.requestAdapter();
     if (!adapter) return { kind: "no-adapter" };
 
-    // Try to grab a device too — same as the renderer will do moments later.
-    // If it fails here, we get a clean error instead of a mid-boot WASM trap.
+    // Probe device acquisition so a failure surfaces here, not as a mid-boot WASM trap.
     try {
       const device = await adapter.requestDevice();
-      // Drop it immediately — we just wanted to confirm it's grantable.
       device.destroy?.();
     } catch (err) {
       return {
@@ -76,29 +61,24 @@ export async function checkWebGpu(): Promise<WebGpuStatus> {
 }
 
 function extractAdapterInfo(adapter: MinimalAdapter): AdapterInfo {
-  // New spec: adapter.info is a plain getter. Older Chrome only had
-  // requestAdapterInfo() (async); we can only return the new shape here.
+  // Older Chrome only exposed requestAdapterInfo() (async); we read the
+  // synchronous adapter.info getter from the current spec.
   if (adapter.info) return { ...EMPTY_INFO, ...adapter.info };
   return EMPTY_INFO;
 }
 
-// All iOS browsers are forced to use WebKit, but Apple gates the WebGPU
-// feature flag to Safari.app — third-party iOS browsers (Chrome via CriOS,
-// Firefox via FxiOS, Edge via EdgiOS) sit on WKWebView and don't get the
-// toggle. So we have to tell the two cases apart and give different advice.
+// Apple gates the WebGPU flag to Safari.app; third-party iOS browsers
+// (CriOS/FxiOS/EdgiOS) run on WKWebView and can't see the toggle, so the
+// two cases need different remediation copy.
 function isIOS(): boolean {
   if (typeof navigator === "undefined") return false;
   if (/iPad|iPhone|iPod/.test(navigator.userAgent)) return true;
-  // iPadOS 13+ reports as desktop Safari; the touch-points heuristic is
-  // Apple's own recommended workaround.
+  // iPadOS 13+ reports as desktop Safari; touch-points is Apple's recommended check.
   return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
 }
 
 function isIOSSafari(): boolean {
   if (!isIOS() || typeof navigator === "undefined") return false;
-  // Any of these tokens means we're inside a non-Safari WKWebView wrapper.
-  // Keep the list narrow on purpose: future browsers without their own
-  // token would (correctly) fall through to the Safari branch.
   if (/CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser|DuckDuckGo|GSA/.test(navigator.userAgent)) {
     return false;
   }
