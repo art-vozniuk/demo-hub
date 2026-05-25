@@ -169,6 +169,48 @@ trellis_thin_image = (
 # autotune). Import them lazily inside generate(), not at module level.
 
 
+def _drop_pivot_to_feet(glb: Any, request_id: str) -> None:
+    """Shift vertices so combined scene min(Y) == 0; keep nodes identity."""
+
+    import numpy as np
+
+    geoms = getattr(glb, "geometry", None)
+    if not geoms:
+        log.warning(f"[{request_id}] pivot: no geometries to recenter")
+        return
+
+    # World-frame min(Y) across all geometry, honouring scene-graph transforms.
+    min_y = float("inf")
+    graph = getattr(glb, "graph", None)
+    node_iter = list(graph.nodes_geometry) if graph is not None else []
+    for node_name in node_iter:
+        T, geom_name = graph[node_name]
+        g = geoms.get(geom_name)
+        if g is None or getattr(g, "vertices", None) is None or len(g.vertices) == 0:
+            continue
+        v = np.asarray(g.vertices)
+        if not np.allclose(T, np.eye(4)):
+            v_world = (T[:3, :3] @ v.T).T + T[:3, 3]
+        else:
+            v_world = v
+        min_y = min(min_y, float(v_world[:, 1].min()))
+
+    if not (min_y < float("inf")):
+        log.warning(f"[{request_id}] pivot: no vertices found")
+        return
+    dy = -min_y
+    if abs(dy) < 1e-6:
+        log.info(f"[{request_id}] pivot: already at Y=0 (dy={dy:.6f})")
+        return
+
+    # Bake the shift into vertex coords so glb.export can't compensate via
+    # a node-level translation. Node transforms stay identity.
+    for g in geoms.values():
+        if getattr(g, "vertices", None) is not None and len(g.vertices) > 0:
+            g.vertices[:, 1] += dy
+    log.info(f"[{request_id}] pivot: shifted Y by {dy:+.4f} so min(Y)=0")
+
+
 @app.function(
     image=trellis_image,
     volumes={MODEL_DIR: volume},
@@ -391,6 +433,11 @@ class TrellisInference:
             remesh_project=0,
             verbose=False,
         )
+
+        # Drop pivot to feet so the editor gizmo lands at the base, not the
+        # bbox centre. Vertices baked in; no compensating node transform.
+        _drop_pivot_to_feet(glb, request_id)
+
         with tempfile.TemporaryDirectory() as tmp:
             out_path = os.path.join(tmp, "out.glb")
             # PNG textures — EXT_texture_webp falls back to grey on viewers
