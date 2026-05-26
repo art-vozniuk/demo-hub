@@ -2,6 +2,7 @@ import type { UserPipelineItem } from "@/api";
 import FluxDetails from "./FluxDetails";
 import FaceSwapDetails from "./FaceSwapDetails";
 import FaceRecognitionDetails from "./FaceRecognitionDetails";
+import GenerativeT2iDetails from "./GenerativeT2iDetails";
 import SharpDetails from "./SharpDetails";
 import TrellisDetails from "./TrellisDetails";
 import UnknownPipelineDetails from "./UnknownPipelineDetails";
@@ -25,6 +26,8 @@ const PipelineDetails = ({ pipeline }: Props) => {
       return <SharpDetails pipeline={pipeline} />;
     case "trellis":
       return <TrellisDetails pipeline={pipeline} />;
+    case "generative_t2i":
+      return <GenerativeT2iDetails pipeline={pipeline} />;
     default:
       return <UnknownPipelineDetails pipeline={pipeline} />;
   }
@@ -39,6 +42,7 @@ export const PIPELINE_DISPLAY_NAME: Record<string, string> = {
   face_recognition: "Face Recognition",
   sharp: "SHARP",
   trellis: "TRELLIS",
+  generative_t2i: "Generative T2I",
 };
 
 export const getPipelineDisplayName = (name: string): string => {

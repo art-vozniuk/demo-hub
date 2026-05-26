@@ -23,6 +23,14 @@ const buildViewerHref = (
   return `/trellis/view?${params.toString()}`;
 };
 
+// Mirrors MESH_QUALITY_OPTIONS in GenerateAssetOverlay — the picker in
+// the generation UI is the only place these step counts are user-facing.
+const QUALITY_BY_STEPS: Record<number, string> = {
+  4: "Low",
+  8: "Standard",
+  12: "High",
+};
+
 const TrellisDetails = ({ pipeline }: Props) => {
   const input = pipeline.input ?? {};
   const result = (pipeline.result ?? {}) as TrellisResult;
@@ -31,6 +39,7 @@ const TrellisDetails = ({ pipeline }: Props) => {
     typeof input.image_key === "string" ? input.image_key : null,
   );
   const steps = typeof input.steps === "number" ? input.steps : null;
+  const qualityLabel = steps !== null ? QUALITY_BY_STEPS[steps] ?? null : null;
   const viewerHref = buildViewerHref(result, "TRELLIS result");
 
   return (
@@ -48,9 +57,11 @@ const TrellisDetails = ({ pipeline }: Props) => {
             >
               <Boxes className="h-9 w-9 text-muted-foreground group-hover:text-foreground transition-colors" />
               <span className="text-xs font-medium">Open renderer</span>
-              {steps !== null && (
-                <span className="text-[10px] text-muted-foreground tabular-nums">
-                  {steps} steps
+              {(qualityLabel || steps !== null) && (
+                <span className="text-[10px] text-muted-foreground">
+                  {qualityLabel
+                    ? `${qualityLabel} quality`
+                    : `${steps} steps`}
                 </span>
               )}
             </Link>
