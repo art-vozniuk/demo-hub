@@ -165,8 +165,14 @@ trellis_thin_image = (
 )
 
 
-# o_voxel + trellis2 require a GPU at import time (flex_gemm triton
-# autotune). Import them lazily inside generate(), not at module level.
+# Module-level imports are captured by Modal's memory snapshot — they
+# stay loaded after restore. `image.imports()` skips them on containers
+# that don't run trellis_image (submit/poll on the thin image), where
+# o_voxel/trellis2 would otherwise fail (flex_gemm needs a GPU at import).
+with trellis_image.imports():
+    import o_voxel
+    from PIL import Image
+    from trellis2.pipelines import Trellis2ImageTo3DPipeline
 
 
 def _warmup_pipeline(pipe: Any) -> None:
@@ -175,9 +181,6 @@ def _warmup_pipeline(pipe: Any) -> None:
     cumesh remesh + nvdiffrast texture bake (to_glb). Otherwise the
     first real request hits cold-JIT and export inflates ~3-5x.
     """
-
-    import o_voxel
-    from PIL import Image
 
     image_path = f"{TRELLIS_SRC}/assets/example_image/T.png"
     mesh = pipe.run(Image.open(image_path).convert("RGB"))[0]
@@ -400,10 +403,6 @@ class TrellisInference:
         t0 = time.perf_counter()
 
         try:
-            # Lazy: top-level import would also fail on the CPU containers
-            # serving preload_weights / submit / poll.
-            from trellis2.pipelines import Trellis2ImageTo3DPipeline
-
             self.pipe = Trellis2ImageTo3DPipeline.from_pretrained(MODEL_LOCAL_DIR)
             from_pretrained_ms = (time.perf_counter() - t0) * 1000
             log.info(
@@ -440,10 +439,6 @@ class TrellisInference:
             raise RuntimeError(
                 f"TrellisInference init failed: {self.init_error!r}"
             )
-
-        # Lazy: these modules touch the GPU on import, can't load on CPU.
-        import o_voxel
-        from PIL import Image
 
         steps = steps if steps in ALLOWED_SAMPLER_STEPS else DEFAULT_SAMPLER_STEPS
         log.info(f"[{request_id}] inference: start; key={image_key}; steps={steps}")

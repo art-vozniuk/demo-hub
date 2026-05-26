@@ -111,7 +111,7 @@ def preload_weights() -> str:
     # schnell bfloat16 weights are ~24GB — A10G's 22GB OOMs on .to("cuda").
     gpu="L40S",
     volumes={MODEL_DIR: volume},
-    scaledown_window=10,
+    scaledown_window=1,
     timeout=600,
     enable_memory_snapshot=True,
     secrets=[modal.Secret.from_name("supabase-s3")],
