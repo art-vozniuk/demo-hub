@@ -18,9 +18,7 @@ depends_on = None
 # 4 / 8 / 12 sampling steps → Low / Standard / High in the UI.
 # Multiplier reflects roughly linear sampling time + fixed cold-start
 # and export overhead.
-PARAMS = (
-    '{"input_field": "steps", "values": {"4": 75, "8": 100, "12": 150}}'
-)
+PARAMS = '{"input_field": "steps", "values": {"4": 75, "8": 100, "12": 150}}'
 
 
 def upgrade() -> None:
