@@ -1,7 +1,9 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import {
@@ -153,6 +155,16 @@ const MyPipelines = () => {
   const toggleRow = (id: string) =>
     setExpanded((prev) => ({ ...prev, [id]: !(prev[id] ?? true) }));
 
+  const copyPipelineId = async (id: string) => {
+    try {
+      await navigator.clipboard.writeText(id);
+      toast.success("Pipeline ID copied to clipboard");
+    } catch (err) {
+      console.error("Failed to copy pipeline ID:", err);
+      toast.error("Failed to copy pipeline ID");
+    }
+  };
+
   if (authLoading || !user) {
     return null;
   }
@@ -236,11 +248,11 @@ const MyPipelines = () => {
                             </div>
                           )}
                           <PipelineDetails pipeline={p} />
-                          {p.status === "COMPLETED" && (
-                            <div
-                              className="mt-3 flex justify-end"
-                              onClick={(e) => e.stopPropagation()}
-                            >
+                          <div
+                            className="mt-3 flex justify-end items-center gap-1"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {p.status === "COMPLETED" && (
                               <SharePipelineButton
                                 pipelineId={p.id}
                                 pipelineDisplayName={getPipelineDisplayName(
@@ -248,8 +260,20 @@ const MyPipelines = () => {
                                 )}
                                 variant="full"
                               />
-                            </div>
-                          )}
+                            )}
+                            <Button
+                              onClick={() => copyPipelineId(p.id)}
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 gap-1 text-[11px] text-muted-foreground tabular-nums hover:text-foreground"
+                              title={`Copy pipeline ID: ${p.id}`}
+                            >
+                              <Copy className="h-3 w-3" />
+                              <span className="font-mono">
+                                {p.id.slice(0, 8)}
+                              </span>
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     )}
