@@ -38,6 +38,15 @@ const POLL_INTERVAL_MS = 1000;
 const POLL_TIMEOUT_MS = 600_000;
 const ITERATE_STEPS = 4;
 
+// Wraps the user prompt for text→image so FLUX schnell yields a
+// TRELLIS-friendly photo. Front-loaded "wide full-body shot of" carries
+// the framing because schnell weights early tokens heavily; suffix
+// reinforces the white background for RMBG. Belongs server-side
+// per-pipeline eventually.
+const MESH_SOURCE_PROMPT_PREFIX = "wide full-body shot of ";
+const MESH_SOURCE_PROMPT_SUFFIX =
+  ", entire subject from top to bottom in frame, plain white background, three-quarter view, sharp focus, studio lighting";
+
 // What the second stage produces. "glb" → trellis mesh, "splat" → sharp.
 export type OutputKind = "glb" | "splat";
 
@@ -494,6 +503,17 @@ export const GenerationSessionProvider = ({
       const useInit = iterate && state.image !== null;
       const initImage = useInit ? state.image : null;
 
+      // Edits accumulate onto the previous prompt so klein keeps the
+      // original style (e.g. "minecraft character" sticks across edits
+      // that only mention arms/colour). Fresh runs use the user prompt
+      // directly + a TRELLIS-friendly framing suffix for FLUX schnell.
+      const accumulatedPrompt = initImage && state.prompt
+        ? `${state.prompt}, ${trimmed}`
+        : trimmed;
+      const promptForFlux = initImage
+        ? accumulatedPrompt
+        : `${MESH_SOURCE_PROMPT_PREFIX}${accumulatedPrompt}${MESH_SOURCE_PROMPT_SUFFIX}`;
+
       const pipelineId = uuidv4();
       const traceId = uuidv4();
       const pipelineName = initImage ? ITERATE_PIPELINE : T2I_PIPELINE;
@@ -501,18 +521,18 @@ export const GenerationSessionProvider = ({
         ? {
             image_bucket: initImage.image_bucket,
             image_key: initImage.image_key,
-            prompt: trimmed,
+            prompt: promptForFlux,
             num_inference_steps: ITERATE_STEPS,
           }
         : {
-            prompt: trimmed,
+            prompt: promptForFlux,
             output_bucket: outputBucket,
           };
 
       setState((prev) => ({
         ...prev,
         phase: "flux-pending",
-        prompt: trimmed,
+        prompt: accumulatedPrompt,
         iterating: !!initImage,
         fluxPipelineId: pipelineId,
         objectPipelineId: null,
