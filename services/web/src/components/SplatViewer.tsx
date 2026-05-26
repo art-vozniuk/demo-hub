@@ -25,6 +25,9 @@ export type SplatViewerScene = {
   sceneUrl: string;
   cameraEye: number[];
   cameraFwd: number[];
+  // Renderer-side scene id (e.g. "gsplat", "glb_viewer"). Defaults to
+  // "gsplat" so existing splat callers don't need to change.
+  sceneKind?: string;
 };
 
 const RENDERER_URL = import.meta.env.VITE_RENDERER_URL as string | undefined;
@@ -55,10 +58,13 @@ type WebGpuState = { kind: "checking" } | WebGpuStatus;
 
 function buildIframeSrc(base: string, scene: SplatViewerScene): string {
   const params = new URLSearchParams();
-  params.set("scene", scene.slug);
+  // The renderer's scene-id whitelist only accepts a-z0-9-_; scene.slug
+  // (which can include URLs for SHARP) is for React-side cache busting,
+  // so pass the renderer kind separately and let it fall back to default.
+  params.set("scene", scene.sceneKind ?? "gsplat");
   params.set("scene_url", scene.sceneUrl);
-  params.set("eye", scene.cameraEye.join(","));
-  params.set("fwd", scene.cameraFwd.join(","));
+  if (scene.cameraEye.length === 3) params.set("eye", scene.cameraEye.join(","));
+  if (scene.cameraFwd.length === 3) params.set("fwd", scene.cameraFwd.join(","));
   try {
     const url = new URL(base, window.location.origin);
     params.forEach((v, k) => url.searchParams.set(k, v));

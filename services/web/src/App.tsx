@@ -19,6 +19,7 @@ import Renderer from "./pages/Renderer";
 import Editor from "./pages/Editor";
 import Sharp from "./pages/Sharp";
 import SharpViewer from "./pages/SharpViewer";
+import TrellisViewer from "./pages/TrellisViewer";
 import Auth from "./pages/Auth";
 import MyPipelines from "./pages/MyPipelines";
 import PipelineShare from "./pages/PipelineShare";
@@ -51,6 +52,7 @@ const App = () => (
                       <Route path="/editor" element={<Editor />} />
                       <Route path="/sharp" element={<Sharp />} />
                       <Route path="/sharp/view" element={<SharpViewer />} />
+                      <Route path="/trellis/view" element={<TrellisViewer />} />
                       <Route path="/me/pipelines" element={<MyPipelines />} />
                       <Route path="/p/:pipelineId" element={<PipelineShare />} />
                       <Route path="/auth" element={<Auth />} />

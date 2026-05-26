@@ -3,6 +3,7 @@ import FluxDetails from "./FluxDetails";
 import FaceSwapDetails from "./FaceSwapDetails";
 import FaceRecognitionDetails from "./FaceRecognitionDetails";
 import SharpDetails from "./SharpDetails";
+import TrellisDetails from "./TrellisDetails";
 import UnknownPipelineDetails from "./UnknownPipelineDetails";
 
 interface Props {
@@ -22,6 +23,8 @@ const PipelineDetails = ({ pipeline }: Props) => {
       return <FaceRecognitionDetails pipeline={pipeline} />;
     case "sharp":
       return <SharpDetails pipeline={pipeline} />;
+    case "trellis":
+      return <TrellisDetails pipeline={pipeline} />;
     default:
       return <UnknownPipelineDetails pipeline={pipeline} />;
   }
@@ -35,6 +38,7 @@ export const PIPELINE_DISPLAY_NAME: Record<string, string> = {
   face_swap: "Face Swap",
   face_recognition: "Face Recognition",
   sharp: "SHARP",
+  trellis: "TRELLIS",
 };
 
 export const getPipelineDisplayName = (name: string): string => {
