@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 
 # Single source of truth for the post-signup grant. Exposed through
 # /me/balance so the frontend never hardcodes it.
-SIGNUP_GRANT = 200
+SIGNUP_GRANT = 1000
 
 _USER_LOCK_NS = "wallet:user:"
 
