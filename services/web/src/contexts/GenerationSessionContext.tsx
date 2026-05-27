@@ -127,7 +127,12 @@ export interface GenerationSessionApi extends GenerationSessionState {
 interface ProviderProps {
   children: ReactNode;
   outputBucket?: string;
-  onAssetReady: (args: { url: string; name: string; kind: AssetKind }) => void;
+  onAssetReady: (args: {
+    url: string;
+    name: string;
+    kind: AssetKind;
+    pipelineId: string | null;
+  }) => void;
 }
 
 const GenerationSessionContext = createContext<GenerationSessionApi | undefined>(
@@ -268,6 +273,7 @@ export const GenerationSessionProvider = ({
         url: result.result_url,
         name,
         kind: assetKindFor(kind),
+        pipelineId: item.id,
       });
       reset();
     },

@@ -24,6 +24,7 @@ type NavItem = { to: string; label: string; end?: boolean };
 
 const ALL_LINKS: NavItem[] = [
   { to: "/flux", label: "Flux" },
+  { to: "/trellis", label: "Trellis" },
   { to: "/sharp", label: "SHARP" },
   { to: "/renderer", label: "Gaussian Splatting" },
   { to: "/face-fusion", label: "Face Swap" },
@@ -130,6 +131,8 @@ const Navbar = () => {
       track({ name: 'nav_editor_clicked', params: {} });
     } else if (to === "/sharp") {
       track({ name: 'nav_sharp_clicked', params: {} });
+    } else if (to === "/trellis") {
+      track({ name: 'nav_trellis_clicked', params: {} });
     }
   };
 
