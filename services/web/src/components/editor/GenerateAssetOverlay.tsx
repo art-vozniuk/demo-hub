@@ -9,8 +9,6 @@ import {
   Sparkles,
   RefreshCcw,
   Check,
-  ImagePlus,
-  X,
   ArrowLeft,
   Loader2,
   Pencil,
@@ -26,7 +24,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   Select,
   SelectContent,
@@ -36,47 +33,34 @@ import {
 } from "@/components/ui/select";
 import GenerationCard from "@/components/GenerationCard";
 import {
+  GenerationSourcePicker,
+  type SourceMode,
+} from "@/components/generation/GenerationSourcePicker";
+import {
+  MeshQualityPicker,
+  useMeshCost,
+} from "@/components/generation/MeshQualityPicker";
+import {
   useGenerationSession,
-  type MeshSteps,
   type OutputKind,
 } from "@/contexts/GenerationSessionContext";
-import { pipelinesApi } from "@/api";
 import { useWallet } from "@/contexts/WalletContext";
 import { cn } from "@/lib/utils";
-import { toast } from "sonner";
 
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-type SourceMode = "text" | "image";
 // "review" and "pick-output" are both reached during phase=flux-ready;
 // "edit" puts the overlay into refinement mode without changing phase.
 type SubStep = "review" | "edit" | "pick-output";
 type Submitting = null | "source" | "edit" | "build3d";
 
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-const ACCEPTED_IMAGE_TYPES = "image/png,image/jpeg,image/webp";
-const MB = 1024 * 1024;
-
 // 1x1 transparent PNG — placeholder fed to GenerationCard when there's no
 // previous image (fresh text→image run). The card paints a spinner on top.
 const TRANSPARENT_PX =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
-
-// Mesh quality presets shown in the pick-output stage. `multiplier` is for
-// display only — the server re-resolves the final price at charge time
-// using the trellis cost-multiplier table.
-const MESH_QUALITY_OPTIONS: {
-  label: string;
-  steps: MeshSteps;
-  multiplier: string;
-}[] = [
-  { label: "Low", steps: 4, multiplier: "×0.75" },
-  { label: "Standard", steps: 8, multiplier: "×1" },
-  { label: "High", steps: 12, multiplier: "×1.5" },
-];
 
 export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
   const session = useGenerationSession();
@@ -86,36 +70,12 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
   const [prompt, setPrompt] = useState("");
   const [editPrompt, setEditPrompt] = useState("");
   const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
   const [subStep, setSubStep] = useState<SubStep>("review");
   const [submitting, setSubmitting] = useState<Submitting>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isMesh = session.outputKind === "glb";
 
-  // Mesh cost depends on the sampler-steps multiplier — resolved server-side
-  // so the UI doesn't drift from the wallet handler. Stale responses are
-  // ignored via a token ref.
-  const [meshCost, setMeshCost] = useState<number | undefined>(undefined);
-  const meshCostTokenRef = useRef(0);
-  useEffect(() => {
-    if (!isMesh) return;
-    const token = ++meshCostTokenRef.current;
-    pipelinesApi
-      .previewCost({
-        pipeline_name: "trellis",
-        input: { steps: session.meshSteps },
-      })
-      .then((res) => {
-        if (meshCostTokenRef.current !== token) return;
-        setMeshCost(res.cost);
-      })
-      .catch(() => {
-        if (meshCostTokenRef.current !== token) return;
-        setMeshCost(undefined);
-      });
-  }, [isMesh, session.meshSteps]);
+  const meshCost = useMeshCost(session.meshSteps, isMesh);
 
   // Whenever a new image lands, restart on the review screen.
   useEffect(() => {
@@ -148,17 +108,6 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
     }
   }, [open, session.phase, session.image]);
 
-  // Object URL for the upload preview; revoke on swap/unmount.
-  useEffect(() => {
-    if (!imageFile) {
-      setImagePreview(null);
-      return;
-    }
-    const url = URL.createObjectURL(imageFile);
-    setImagePreview(url);
-    return () => URL.revokeObjectURL(url);
-  }, [imageFile]);
-
   type Stage =
     | "source"
     | "gen-image"
@@ -178,18 +127,6 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
     }
     return "source";
   })();
-
-  const onPickFile = (file: File) => {
-    if (!file.type.startsWith("image/")) {
-      toast.error("Please choose an image file.");
-      return;
-    }
-    if (file.size > MAX_IMAGE_BYTES) {
-      toast.error(`Image is too large (max ${MAX_IMAGE_BYTES / MB} MB).`);
-      return;
-    }
-    setImageFile(file);
-  };
 
   const canStartSource = (() => {
     if (submitting) return false;
@@ -384,119 +321,17 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
 
         {/* ──────────────────── STAGE: source ──────────────────── */}
         {stage === "source" && (
-          <div className="space-y-3">
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              size="sm"
-              value={sourceMode}
-              onValueChange={(v) => v && setSourceMode(v as SourceMode)}
-              className="justify-start"
-            >
-              <ToggleGroupItem value="text" className="text-[11px] px-3">
-                Text
-              </ToggleGroupItem>
-              <ToggleGroupItem value="image" className="text-[11px] px-3">
-                Image
-              </ToggleGroupItem>
-            </ToggleGroup>
-
-            {sourceMode === "text" ? (
-              <>
-                <Label htmlFor="generate-prompt" className="text-xs">
-                  Prompt
-                </Label>
-                <Textarea
-                  id="generate-prompt"
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  placeholder="e.g. a small wooden toy train"
-                  rows={3}
-                />
-              </>
-            ) : (
-              <>
-                <Label className="text-xs">Image</Label>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept={ACCEPTED_IMAGE_TYPES}
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) onPickFile(f);
-                    e.target.value = "";
-                  }}
-                />
-                {imageFile && imagePreview ? (
-                  <div className="flex items-center gap-3 rounded-md border border-border/60 px-3 py-2">
-                    <img
-                      src={imagePreview}
-                      alt={imageFile.name}
-                      className="h-16 w-16 rounded object-cover bg-muted"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs truncate">{imageFile.name}</div>
-                      <div className="text-[10px] text-muted-foreground">
-                        {(imageFile.size / 1024).toFixed(0)} KB
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setImageFile(null)}
-                      className="text-muted-foreground hover:text-destructive"
-                      aria-label="Remove image"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      setIsDragging(true);
-                    }}
-                    onDragLeave={() => setIsDragging(false)}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      setIsDragging(false);
-                      const f = e.dataTransfer.files?.[0];
-                      if (f) onPickFile(f);
-                    }}
-                    className={cn(
-                      "w-full rounded-md border border-dashed px-4 py-8 text-center cursor-pointer",
-                      "border-border/60 hover:border-border hover:bg-muted/30 transition-colors",
-                      isDragging && "border-primary/70 bg-primary/5",
-                    )}
-                  >
-                    <ImagePlus className="h-6 w-6 mx-auto mb-1.5 text-muted-foreground" />
-                    <div className="text-xs">Drop image or click to upload</div>
-                    <div className="text-[10px] text-muted-foreground">
-                      PNG, JPG, WebP · up to {MAX_IMAGE_BYTES / MB} MB
-                    </div>
-                  </button>
-                )}
-              </>
-            )}
-
-            <div className="flex justify-end pt-1">
-              <Button
-                size="sm"
-                onClick={onSourceGenerate}
-                disabled={!canStartSource}
-                className="gap-1"
-              >
-                {submitting === "source" ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Sparkles className="h-4 w-4" />
-                )}
-                {sourceMode === "text" ? "Generate" : "Continue"}
-              </Button>
-            </div>
-          </div>
+          <GenerationSourcePicker
+            sourceMode={sourceMode}
+            onSourceModeChange={setSourceMode}
+            prompt={prompt}
+            onPromptChange={setPrompt}
+            imageFile={imageFile}
+            onImageFileChange={setImageFile}
+            onSubmit={onSourceGenerate}
+            canSubmit={canStartSource}
+            submitting={submitting === "source"}
+          />
         )}
 
         {/* ──────────────────── STAGE: gen-image ──────────────────── */}
@@ -609,37 +444,11 @@ export const GenerateAssetOverlay = ({ open, onOpenChange }: Props) => {
             </div>
 
             {isMesh && (
-              <div className="space-y-1.5">
-                <Label htmlFor="mesh-quality" className="text-xs">
-                  Quality
-                </Label>
-                <Select
-                  value={String(session.meshSteps)}
-                  onValueChange={(v) =>
-                    session.setMeshSteps(Number(v) as MeshSteps)
-                  }
-                >
-                  <SelectTrigger id="mesh-quality">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {MESH_QUALITY_OPTIONS.map((q) => (
-                      <SelectItem key={q.steps} value={String(q.steps)}>
-                        {q.label} · {q.steps} steps · {q.multiplier}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {meshCost !== undefined && (
-                  <p className="text-[11px] text-muted-foreground">
-                    Final cost:{" "}
-                    <span className="font-medium text-foreground tabular-nums">
-                      {meshCost}
-                    </span>{" "}
-                    token{meshCost === 1 ? "" : "s"}
-                  </p>
-                )}
-              </div>
+              <MeshQualityPicker
+                value={session.meshSteps}
+                onChange={session.setMeshSteps}
+                cost={meshCost}
+              />
             )}
 
             <div className="flex justify-end pt-1">

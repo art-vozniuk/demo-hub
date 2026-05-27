@@ -17,6 +17,7 @@ import FluxCustom from "./pages/FluxCustom";
 import FluxGenerate from "./pages/FluxGenerate";
 import Renderer from "./pages/Renderer";
 import Editor from "./pages/Editor";
+import Trellis from "./pages/Trellis";
 import Sharp from "./pages/Sharp";
 import SharpViewer from "./pages/SharpViewer";
 import TrellisViewer from "./pages/TrellisViewer";
@@ -50,6 +51,7 @@ const App = () => (
                       <Route path="/flux/custom" element={<FluxCustom />} />
                       <Route path="/renderer" element={<Renderer />} />
                       <Route path="/editor" element={<Editor />} />
+                      <Route path="/trellis" element={<Trellis />} />
                       <Route path="/sharp" element={<Sharp />} />
                       <Route path="/sharp/view" element={<SharpViewer />} />
                       <Route path="/trellis/view" element={<TrellisViewer />} />

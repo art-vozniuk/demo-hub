@@ -20,6 +20,7 @@ export type AnalyticsEvent =
   | { name: 'nav_renderer_clicked'; params: Record<string, never> }
   | { name: 'nav_editor_clicked'; params: Record<string, never> }
   | { name: 'nav_sharp_clicked'; params: Record<string, never> }
+  | { name: 'nav_trellis_clicked'; params: Record<string, never> }
   | { name: 'sharp_generate_started'; params: { pipeline_id: string } }
   | { name: 'generative_preset_opened'; params: { preset_slug: string } }
   | { name: 'generative_generate_started'; params: { preset_slug: string; pipeline_id: string } }
