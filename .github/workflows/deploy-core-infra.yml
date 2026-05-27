@@ -47,10 +47,17 @@ jobs:
           has_compute=false
           has_dispatch=false
 
-          echo "$changed" | grep -qE '^services/core/|^services/common/' && has_core=true
-          echo "$changed" | grep -qE '^services/web/'                    && has_web=true
-          echo "$changed" | grep -qE '^services/compute/|^services/common/|^services/external/face_swap' && has_compute=true
-          echo "$changed" | grep -qE '^services/dispatch/|^services/common/' && has_dispatch=true
+          # Detection also fires when the per-service build workflow YAML
+          # itself changes — otherwise an env / secret / dockerfile-arg
+          # tweak in .github/workflows/build-<svc>.yml ships to main but
+          # never triggers a rebuild, and prod silently runs the old image
+          # with the old baked-in env (DEMO-HUB-style: trellis URLs added
+          # to build-dispatch.yml but build-dispatch was skipped because
+          # nothing under services/dispatch/ changed in the same commit).
+          echo "$changed" | grep -qE '^services/core/|^services/common/|^\.github/workflows/build-core\.yml$' && has_core=true
+          echo "$changed" | grep -qE '^services/web/|^\.github/workflows/build-web\.yml$' && has_web=true
+          echo "$changed" | grep -qE '^services/compute/|^services/common/|^services/external/face_swap|^\.github/workflows/build-compute(-cpu)?\.yml$' && has_compute=true
+          echo "$changed" | grep -qE '^services/dispatch/|^services/common/|^\.github/workflows/build-dispatch\.yml$' && has_dispatch=true
 
           echo "core=$has_core"         >> $GITHUB_OUTPUT
           echo "web=$has_web"           >> $GITHUB_OUTPUT
