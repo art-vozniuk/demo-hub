@@ -47,7 +47,16 @@ async def publish_once(worker_id: str, snapshot: Mapping[str, int]) -> None:
             ex=HEARTBEAT_TTL_SECONDS,
         )
 
-    await asyncio.gather(*(write(name, ms) for name, ms in snapshot.items()))
+    # return_exceptions: one Redis blip on a single pipeline's heartbeat
+    # shouldn't cancel the rest in this snapshot. Failures are surfaced
+    # by the next tick (TTL expires) and logged here for visibility.
+    results = await asyncio.gather(
+        *(write(name, ms) for name, ms in snapshot.items()),
+        return_exceptions=True,
+    )
+    for name, result in zip(snapshot.keys(), results):
+        if isinstance(result, Exception):
+            log.warning(f"heartbeat write failed for {name}: {result!r}")
 
 
 async def run_loop(

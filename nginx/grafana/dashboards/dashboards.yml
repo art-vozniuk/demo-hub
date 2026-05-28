@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: demo-hub
+    folder: ""
+    type: file
+    disableDeletion: true
+    editable: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

@@ -1,0 +1,22 @@
+groups:
+  - name: bench_headline
+    interval: 30s
+    rules:
+      # Headline metric: images per dollar. Computed per-config so
+      # Grafana panels can drop in raw without arithmetic.
+      - record: demo_hub:images_per_dollar:rate5m
+        expr: |
+          sum by (config, tier) (rate(demo_hub_bench_run_images_total[5m]))
+          /
+          sum by (config, tier) (rate(demo_hub_bench_run_cost_usd_total[5m]) > 0)
+
+      - record: demo_hub:dollar_per_image:rate5m
+        expr: |
+          sum by (config, tier) (rate(demo_hub_bench_run_cost_usd_total[5m]))
+          /
+          sum by (config, tier) (rate(demo_hub_bench_run_images_total[5m]) > 0)
+
+      # 0.10 USD literal multiplied into the headline number for the
+      # post-ready Grafana panel ("images per $0.10").
+      - record: demo_hub:images_per_dime:rate5m
+        expr: 0.10 * demo_hub:images_per_dollar:rate5m

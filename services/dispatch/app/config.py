@@ -21,10 +21,37 @@ class Config(BaseSettings):
     MODAL_PROXY_AUTH_TOKEN_ID: str | None = None
     MODAL_PROXY_AUTH_TOKEN_SECRET: str | None = None
 
-    # End-to-end Modal call ceiling, sized for the slowest pipeline
-    # (TRELLIS image-to-3D: ~3 min warm, plus cold restore overhead).
-    MODAL_REQUEST_TIMEOUT_SECONDS: int = 600
+    # Per-HTTP-call timeout (submit, one poll). Short so we surface a
+    # hung Modal-gateway fast and retry it.
+    MODAL_REQUEST_TIMEOUT_SECONDS: int = 30
+    # End-to-end pipeline deadline: how long _submit_and_poll will keep
+    # polling before giving up. Sized for the slowest pipeline (TRELLIS
+    # image-to-3D: ~3 min warm, plus cold restore overhead).
+    MODAL_PIPELINE_DEADLINE_SECONDS: int = 600
     MODAL_POLL_INTERVAL_SECONDS: float = 2.0
+
+    # Transient HTTP errors against Modal-gateway are retried in-place
+    # inside _post_to_modal — that way a single 502 doesn't unwind the
+    # whole pipeline back to RabbitMQ (which would re-spawn a new Modal
+    # call from scratch and re-charge cold start).
+    MODAL_RETRY_MAX_ATTEMPTS: int = 5
+    MODAL_RETRY_BASE_DELAY_MS: int = 500
+    MODAL_RETRY_MAX_DELAY_MS: int = 4000
+
+    # Single shared httpx.AsyncClient across the whole worker; keep the
+    # pool generous so the dispatch worker's prefetch=256 doesn't choke on
+    # TCP handshake churn during a bench burst.
+    MODAL_HTTP_POOL_KEEPALIVE: int = 128
+    MODAL_HTTP_POOL_MAX: int = 256
+
+    # New Modal apps wired through the bench/optimization stack. Each app
+    # is its own deployment; URLs are written by services/modal/<name>/deploy.py.
+    MODAL_FLUX_OPT_A10G_SUBMIT_URL: str | None = None
+    MODAL_FLUX_OPT_A10G_POLL_URL: str | None = None
+    MODAL_FLUX_OPT_H100_SUBMIT_URL: str | None = None
+    MODAL_FLUX_OPT_H100_POLL_URL: str | None = None
+    MODAL_FLUX_MOCK_SUBMIT_URL: str | None = None
+    MODAL_FLUX_MOCK_POLL_URL: str | None = None
 
 
 config = Config()

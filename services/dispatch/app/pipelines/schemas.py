@@ -58,3 +58,27 @@ class GenerativeT2IPipelineInput(PipelineInput):
     num_inference_steps: int | None = None
     width: int | None = None
     height: int | None = None
+
+
+class FluxOptPipelineInput(PipelineInput):
+    """Same as generative editing, plus a run_id tag so the bench
+    coordinator can aggregate metrics per experiment. Both A10G and
+    H100 variants share this shape — the variant comes from the
+    pipeline_name routing."""
+
+    image_bucket: str
+    image_key: str
+    prompt: str
+    run_id: str
+    num_inference_steps: int | None = None
+    max_side: int | None = None
+
+
+class FluxMockPipelineInput(PipelineInput):
+    """MOCK_LOCAL and MOCK_MODAL share this — the image key may be a
+    stub since neither tier touches S3 in a way that matters."""
+
+    image_bucket: str = ""
+    image_key: str = ""
+    prompt: str = ""
+    run_id: str

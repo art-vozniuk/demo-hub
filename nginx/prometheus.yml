@@ -1,0 +1,34 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    deployment: demo-hub
+
+# Self-scrape, plus our two app services and the gateway that Modal
+# containers push to. Pushgateway aggregates ephemeral metrics from
+# Modal containers (which can't be scraped directly) and exposes them
+# as a Prometheus-compatible /metrics for Prometheus to pull.
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: core
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["core:8081"]
+
+  - job_name: dispatch
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["dispatch:9100"]
+
+  - job_name: pushgateway
+    honor_labels: true
+    static_configs:
+      - targets: ["pushgateway:9091"]
+
+# Recording rules: cheap precomputations for the bench-headline metrics
+# so Grafana panels don't recompute them each scrape.
+rule_files:
+  - "recording_rules.yml"

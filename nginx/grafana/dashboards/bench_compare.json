@@ -1,0 +1,100 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Images per $0.10 (hero)",
+      "description": "Headline metric — rolling 5m, by config and tier. This is what the post is about.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 24, "x": 0, "y": 0},
+      "id": 1,
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "orientation": "horizontal",
+        "textMode": "value_and_name",
+        "colorMode": "background"
+      },
+      "targets": [
+        {"expr": "demo_hub:images_per_dime:rate5m",
+         "legendFormat": "{{config}} / {{tier}}", "refId": "A"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 1}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "Images per $1 over time",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 7},
+      "id": 2,
+      "targets": [
+        {"expr": "demo_hub:images_per_dollar:rate5m",
+         "legendFormat": "{{config}} / {{tier}}", "refId": "A"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "Cost per image over time ($)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 7},
+      "id": 3,
+      "targets": [
+        {"expr": "demo_hub:dollar_per_image:rate5m",
+         "legendFormat": "{{config}} / {{tier}}", "refId": "A"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []}
+    },
+    {
+      "type": "stat",
+      "title": "Active bench runs",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 15},
+      "id": 4,
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value"},
+      "targets": [
+        {"expr": "sum(demo_hub_bench_run_active)", "refId": "A"}
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Today's bench spend ($)",
+      "description": "Sum of cost across all bench runs today.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 15},
+      "id": 5,
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "targets": [
+        {"expr": "sum(increase(demo_hub_bench_run_cost_usd_total[24h]))", "refId": "A"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "currencyUSD", "decimals": 4}, "overrides": []}
+    },
+    {
+      "type": "stat",
+      "title": "Total images generated today",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 15},
+      "id": 6,
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value"},
+      "targets": [
+        {"expr": "sum(increase(demo_hub_bench_run_images_total[24h]))", "refId": "A"}
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["bench", "experiments"],
+  "templating": {"list": []},
+  "time": {"from": "now-30m", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Bench Run Comparison",
+  "uid": "bench-compare",
+  "version": 1,
+  "weekStart": ""
+}

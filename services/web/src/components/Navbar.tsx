@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAnalytics } from "@/hooks/useAnalytics";
+import { usePermissions } from "@/hooks/usePermissions";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -22,7 +23,7 @@ import TokenBalance from "@/components/TokenBalance";
 
 type NavItem = { to: string; label: string; end?: boolean };
 
-const ALL_LINKS: NavItem[] = [
+const BASE_LINKS: NavItem[] = [
   { to: "/flux", label: "Flux" },
   { to: "/trellis", label: "Trellis" },
   { to: "/sharp", label: "SHARP" },
@@ -32,11 +33,18 @@ const ALL_LINKS: NavItem[] = [
   { to: "/author", label: "Author", end: true },
 ];
 
+const EXPERIMENT_LINK: NavItem = { to: "/experiments", label: "Experiments" };
+
 const Navbar = () => {
   const { user, signOut } = useAuth();
+  const { permissions } = usePermissions();
   const { track } = useAnalytics();
   const location = useLocation();
   const navigate = useNavigate();
+
+  const ALL_LINKS: NavItem[] = permissions.can_run_experiments
+    ? [...BASE_LINKS, EXPERIMENT_LINK]
+    : BASE_LINKS;
 
   const navAreaRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);

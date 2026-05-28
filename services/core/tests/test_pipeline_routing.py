@@ -79,9 +79,27 @@ def test_same_pool_names_for_dispatch():
         "generative_editing_custom",
         "generative_t2i",
         "trellis",
+        "flux_opt_a10g",
+        "flux_opt_h100",
+        "flux_modal_mock",
+        "flux_local_mock",
     }
     assert names_in_same_pool("generative_editing") == expected
     assert names_in_same_pool("sharp") == expected
     assert names_in_same_pool("generative_editing_custom") == expected
     assert names_in_same_pool("generative_t2i") == expected
     assert names_in_same_pool("trellis") == expected
+
+
+def test_flux_opt_routes_to_dispatch_queue():
+    assert get_routing_key("flux_opt_a10g") == rabbitmq_config.routing_dispatch
+    assert get_routing_key("flux_opt_h100") == rabbitmq_config.routing_dispatch
+    assert get_routing_key("flux_modal_mock") == rabbitmq_config.routing_dispatch
+    assert get_routing_key("flux_local_mock") == rabbitmq_config.routing_dispatch
+
+
+def test_flux_opt_is_parallel():
+    assert is_parallel_pipeline("flux_opt_a10g") is True
+    assert is_parallel_pipeline("flux_opt_h100") is True
+    assert is_parallel_pipeline("flux_modal_mock") is True
+    assert is_parallel_pipeline("flux_local_mock") is True

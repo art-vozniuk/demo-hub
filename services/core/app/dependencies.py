@@ -1,6 +1,8 @@
 import logging
 from typing import Optional
 
+from fastapi import Depends
+
 from services.common.rabbitmq import (
     RabbitMQConnection,
     RabbitMQPublisher,
@@ -23,6 +25,30 @@ _rabbitmq_consumer: Optional[RabbitMQConsumer] = None
 
 get_current_user = create_get_current_user(config.SUPABASE_URL)
 get_current_user_optional = create_get_current_user_optional(config.SUPABASE_URL)
+
+
+def is_experimenter(user) -> bool:
+    """Pure helper: does this user match the bench whitelist? Re-used by
+    the dependency below and by /me/permissions so both stay in sync."""
+
+    if user is None or not user.email:
+        return False
+    return user.email.lower() in config.experiment_allowed_emails
+
+
+async def require_experimenter(
+    user=Depends(get_current_user),
+):
+    """403s anyone who isn't on the bench whitelist. Pin this dependency
+    on every /api/v1/bench/* route."""
+    from fastapi import HTTPException, status
+
+    if not is_experimenter(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="experimenter access required",
+        )
+    return user
 
 
 async def init_rabbitmq() -> None:

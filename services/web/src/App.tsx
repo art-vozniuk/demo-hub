@@ -24,6 +24,7 @@ import TrellisViewer from "./pages/TrellisViewer";
 import Auth from "./pages/Auth";
 import MyPipelines from "./pages/MyPipelines";
 import PipelineShare from "./pages/PipelineShare";
+import Experiments from "./pages/Experiments";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -57,6 +58,7 @@ const App = () => (
                       <Route path="/trellis/view" element={<TrellisViewer />} />
                       <Route path="/me/pipelines" element={<MyPipelines />} />
                       <Route path="/p/:pipelineId" element={<PipelineShare />} />
+                      <Route path="/experiments" element={<Experiments />} />
                       <Route path="/auth" element={<Auth />} />
                       <Route path="*" element={<NotFound />} />
                     </Routes>

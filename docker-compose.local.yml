@@ -87,6 +87,14 @@ services:
     build:
       context: .
       dockerfile: services/dispatch/Dockerfile
+    environment:
+      RABBITMQ_PREFETCH: "256"
+      WORKER_MAX_CONCURRENT_TASKS: "256"
+      DISPATCH_METRICS_PORT: "9100"
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     volumes:
       - ./services/dispatch/.env.docker:/app/.env:ro
     depends_on:
@@ -94,6 +102,52 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks:
+      - app_network
+
+  pushgateway:
+    image: prom/pushgateway:v1.10.0
+    command:
+      - "--web.listen-address=:9091"
+      - "--persistence.file=/data/pushgateway"
+      - "--persistence.interval=1m"
+    volumes:
+      - pushgateway_data_local:/data
+    networks:
+      - app_network
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--storage.tsdb.retention.size=512MB"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./nginx/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data_local:/prometheus
+    depends_on:
+      - pushgateway
+    networks:
+      - app_network
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./nginx/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./nginx/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - grafana_data_local:/var/lib/grafana
+    depends_on:
+      - prometheus
     networks:
       - app_network
 
@@ -132,6 +186,12 @@ volumes:
     name: meme-fusion-local-rabbitmq
   face_swap_models_local:
     name: meme-fusion-local-face-swap-models
+  pushgateway_data_local:
+    name: meme-fusion-local-pushgateway
+  prometheus_data_local:
+    name: meme-fusion-local-prometheus
+  grafana_data_local:
+    name: meme-fusion-local-grafana
 
 networks:
   app_network:

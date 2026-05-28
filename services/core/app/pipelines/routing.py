@@ -25,6 +25,14 @@ _ROUTES: dict[str, str] = {
     "generative_t2i": rabbitmq_config.routing_dispatch,
     "sharp": rabbitmq_config.routing_dispatch,
     "trellis": rabbitmq_config.routing_dispatch,
+    # Bench/optimization stack. Each variant targets a distinct Modal
+    # deployment (different GPU / batching config) so per-config billing
+    # in Modal UI stays separable. flux_local_mock never leaves
+    # dispatch — used for $0 UI/coordinator iteration.
+    "flux_opt_a10g": rabbitmq_config.routing_dispatch,
+    "flux_opt_h100": rabbitmq_config.routing_dispatch,
+    "flux_modal_mock": rabbitmq_config.routing_dispatch,
+    "flux_local_mock": rabbitmq_config.routing_dispatch,
 }
 
 
