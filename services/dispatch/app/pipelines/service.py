@@ -15,10 +15,12 @@ from pydantic_core._pydantic_core import ValidationError
 from services.common.s3.client import S3Client
 
 from .base import AsyncPipeline
+from .flux_opt import FluxOptA10GPipeline, FluxOptH100Pipeline
 from .generative_editing import GenerativeEditingPipeline
 from .generative_editing_custom import GenerativeEditingCustomPipeline
 from .generative_t2i import GenerativeT2IPipeline
 from .schemas import (
+    FluxOptPipelineInput,
     GenerativeEditingCustomPipelineInput,
     GenerativeEditingPipelineInput,
     GenerativeT2IPipelineInput,
@@ -111,6 +113,24 @@ class GenerativeT2IService(Service):
         )
 
 
+class FluxOptA10GService(Service):
+    async def prepare_pipeline(self) -> AsyncPipeline:
+        if not isinstance(self.pipeline_input, FluxOptPipelineInput):
+            raise ValueError("Invalid pipeline input for FluxOptA10GService")
+        return FluxOptA10GPipeline(
+            s3=self.s3, pipeline_input=self.pipeline_input,
+        )
+
+
+class FluxOptH100Service(Service):
+    async def prepare_pipeline(self) -> AsyncPipeline:
+        if not isinstance(self.pipeline_input, FluxOptPipelineInput):
+            raise ValueError("Invalid pipeline input for FluxOptH100Service")
+        return FluxOptH100Pipeline(
+            s3=self.s3, pipeline_input=self.pipeline_input,
+        )
+
+
 class PipelineType:
     def __init__(
         self,
@@ -151,6 +171,16 @@ pipeline_templates: dict[str, PipelineType] = {
         service_type=GenerativeT2IService,
         input_type=GenerativeT2IPipelineInput,
         estimated_time_ms=30_000,
+    ),
+    "flux_opt_a10g": PipelineType(
+        service_type=FluxOptA10GService,
+        input_type=FluxOptPipelineInput,
+        estimated_time_ms=4_000,
+    ),
+    "flux_opt_h100": PipelineType(
+        service_type=FluxOptH100Service,
+        input_type=FluxOptPipelineInput,
+        estimated_time_ms=2_000,
     ),
 }
 

@@ -86,3 +86,46 @@ def destroy(app_name: str, volume_name: str) -> None:
 
     subprocess.run(["modal", "app", "stop", app_name], check=False)
     print(f"Stopped {app_name}. Volume '{volume_name}' and secrets are preserved.")
+
+
+def deploy_multi_endpoint(
+    app_path: str,
+    endpoint_file: str,
+    app_name: str,
+    endpoints: list[tuple[str, str]],
+) -> dict[str, str]:
+    """Deploy an app that exposes more than one submit/poll endpoint pair
+    (e.g. flux_opt: A10G + H100 variants in the same app). `endpoints`
+    is [(function_name, env_var_name), ...]. URLs get written to
+    endpoint_file as `function_name=URL` lines and the env-var
+    assignments are printed for copy-paste."""
+
+    print(f"Deploying {app_path}...")
+    out = _run_streaming(["modal", "deploy", app_path])
+
+    urls: dict[str, str] = {}
+    for fn_name, env_name in endpoints:
+        pattern = rf"https://[^\s]+--{re.escape(app_name)}-{re.escape(fn_name)}\.modal\.run"
+        match = re.search(pattern, out)
+        if not match:
+            print(
+                f"Failed to extract {fn_name} URL from modal output.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        urls[fn_name] = match.group(0)
+
+    Path(endpoint_file).write_text(
+        "\n".join(f"{k}={v}" for k, v in urls.items()) + "\n"
+    )
+
+    print()
+    print(f"Deployed {app_name}.")
+    for fn, url in urls.items():
+        print(f"  {fn:18s}: {url}")
+    print()
+    print("Set on the dispatch worker:")
+    for fn_name, env_name in endpoints:
+        print(f"  {env_name}={urls[fn_name]}")
+
+    return urls

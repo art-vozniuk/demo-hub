@@ -58,3 +58,15 @@ class GenerativeT2IPipelineInput(PipelineInput):
     num_inference_steps: int | None = None
     width: int | None = None
     height: int | None = None
+
+
+class FluxOptPipelineInput(PipelineInput):
+    """Input for the optimised FLUX deployment. Same shape as
+    generative_editing — the A10G vs H100 variant comes from the
+    pipeline_name routing in core, not from this payload."""
+
+    image_bucket: str
+    image_key: str
+    prompt: str
+    num_inference_steps: int | None = None
+    max_side: int | None = None

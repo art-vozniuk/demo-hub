@@ -59,6 +59,15 @@ class RabbitMQConsumer:
                         await message.ack()
                         log.info(f"Message processed successfully from {queue_name}")
                     except Exception as e:
+                        # TODO: unbounded nack(requeue=True) loops a
+                        # permanently-failing message forever — each
+                        # retry is a full pipeline (and a new Modal call
+                        # on the dispatch side). Add a per-message
+                        # retry-count header + reject(requeue=False)
+                        # to dead-letter after N attempts. Retry+backoff
+                        # inside dispatch's _post_to_modal already
+                        # absorbs transient Modal blips so this is only
+                        # a guardrail against persistent bugs.
                         await message.nack(requeue=True)
                         log.error(
                             f"Error processing message from {queue_name}: {e}",

@@ -27,6 +27,15 @@ from services.common.redis import heartbeat as _hb
 from services.common.s3.client import S3Client
 
 
+# Default ceiling on concurrent in-flight tasks per worker. Dispatch
+# (pure async I/O, no model in process) can take 256 easily on an 8GB
+# VPS; compute (face_swap on local CPU with the GAN loaded) should not.
+# Each worker overrides through WORKER_MAX_CONCURRENT_TASKS in its env.
+_DEFAULT_MAX_CONCURRENT_TASKS = int(
+    os.getenv("WORKER_MAX_CONCURRENT_TASKS", "50")
+)
+
+
 class _ServiceLike(Protocol):
     last_inference_ms: float
 
@@ -49,8 +58,10 @@ class PipelineWorker:
         queue_name: str,
         pipeline_templates: Mapping[str, _PipelineTemplateLike],
         create_service: CreateService,
-        max_concurrent_tasks: int = 50,
+        max_concurrent_tasks: int | None = None,
     ) -> None:
+        if max_concurrent_tasks is None:
+            max_concurrent_tasks = _DEFAULT_MAX_CONCURRENT_TASKS
         self._pool_name = pool_name
         self._queue_name = queue_name
         self._templates = pipeline_templates
@@ -102,6 +113,14 @@ class PipelineWorker:
         )
 
     async def _process(self, message: dict[str, Any]) -> None:
+        # Imported lazily so the metric registration doesn't happen for
+        # processes that don't import this module (e.g. unit tests that
+        # only exercise routing).
+        from services.common.observability.metrics import (
+            pipeline_duration_seconds,
+            pipeline_failures_total,
+        )
+
         t0 = time.perf_counter()
 
         trace_id = message["trace_id"]
@@ -131,14 +150,20 @@ class PipelineWorker:
             )
 
             self._record_success(pipeline_name, service.last_inference_ms)
-            duration_ms = (time.perf_counter() - t0) * 1000.0
+            duration_s = time.perf_counter() - t0
+            pipeline_duration_seconds.labels(pipeline_name=pipeline_name).observe(
+                duration_s
+            )
             self._log.info(
                 f"Pipeline completed: {pipeline_name} pipeline_id={pipeline_id} "
-                f"total={duration_ms:.1f}ms heartbeat={service.last_inference_ms:.1f}ms"
+                f"total={duration_s * 1000:.1f}ms heartbeat={service.last_inference_ms:.1f}ms"
             )
 
         except Exception as e:
             error_message = str(e)
+            pipeline_failures_total.labels(
+                pipeline_name=pipeline_name, error_type=type(e).__name__
+            ).inc()
             self._log.error(
                 f"Pipeline failed: {error_message} pipeline_id={pipeline_id}",
                 exc_info=True,

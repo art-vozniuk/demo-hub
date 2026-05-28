@@ -60,11 +60,19 @@ async def lifespan(app: FastAPI):
     await init_rabbitmq()
 
     consumer = await get_rabbitmq_consumer()
-    asyncio.create_task(start_pipeline_update_consumer(consumer))
+    # Hold a strong reference so the task can't be garbage-collected
+    # mid-flight — bare `asyncio.create_task(...)` returns an object
+    # that the loop only weakrefs.
+    app.state.background_tasks = {
+        asyncio.create_task(start_pipeline_update_consumer(consumer)),
+    }
 
     yield
 
     log.info("Shutting down core service")
+    for task in app.state.background_tasks:
+        task.cancel()
+    await asyncio.gather(*app.state.background_tasks, return_exceptions=True)
     await shutdown_rabbitmq()
     await shutdown_redis()
 
@@ -82,6 +90,22 @@ app = FastAPI(
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus scrape target. Same shape as any other Prometheus
+    text-exposition endpoint — registered against the default registry
+    so any service code that imports services.common.observability.metrics
+    contributes."""
+
+    from fastapi import Response
+    from services.common.observability import collect_text, CONTENT_TYPE_LATEST
+    # Import for side effects: registers the canonical metric set on
+    # the default registry, even if no code has touched them yet.
+    import services.common.observability.metrics  # noqa: F401
+
+    return Response(content=collect_text(), media_type=CONTENT_TYPE_LATEST)
 
 
 app.add_middleware(
