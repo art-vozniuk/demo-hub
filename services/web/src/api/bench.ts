@@ -57,16 +57,15 @@ export interface BenchRunSummary {
 export const benchApi = {
   startRun: (body: BenchRunCreate) =>
     apiClient.post<{ run_id: string; status: BenchRunStatus }, BenchRunCreate>(
-      "/api/v1/bench/runs",
+      "/bench/runs",
       body,
     ),
-  listRuns: () =>
-    apiClient.get<{ runs: BenchRunSummary[] }>("/api/v1/bench/runs"),
+  listRuns: () => apiClient.get<{ runs: BenchRunSummary[] }>("/bench/runs"),
   getRun: (runId: string) =>
-    apiClient.get<BenchRunSummary>(`/api/v1/bench/runs/${runId}`),
+    apiClient.get<BenchRunSummary>(`/bench/runs/${runId}`),
   estimate: (body: BenchEstimateRequest) =>
     apiClient.post<BenchEstimateResponse, BenchEstimateRequest>(
-      "/api/v1/bench/estimate",
+      "/bench/estimate",
       body,
     ),
 };

@@ -16,7 +16,7 @@ export const usePermissions = () => {
   // when there's no user — saves one round-trip per anonymous page load.
   const { data, isLoading } = useQuery({
     queryKey: ["permissions", user?.id ?? "anon"],
-    queryFn: () => apiClient.get<Permissions>("/api/v1/me/permissions"),
+    queryFn: () => apiClient.get<Permissions>("/me/permissions"),
     enabled: !!user && !authLoading,
     staleTime: 5 * 60 * 1000,
   });
