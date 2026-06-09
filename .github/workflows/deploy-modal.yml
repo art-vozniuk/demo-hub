@@ -17,6 +17,10 @@ name: deploy modal (main)
 # functions on flux/sharp/trellis/flux_t2i (submit+poll each). See the
 # commented-out `deploy gateway` step and docs/DEPLOY.md.
 
+# Manual-only (workflow_dispatch) on purpose: prod Modal deploys are a
+# deliberate button-press, matching deploy-core-infra.yml — never an
+# automatic side effect of merging to main. Re-add a `push: branches:
+# [main]` trigger here if you later want deploy-on-merge.
 on:
   workflow_dispatch:
     inputs:
@@ -32,11 +36,6 @@ on:
           - trellis
           - flux_t2i
           - flux_opt
-  push:
-    branches: [main]
-    paths:
-      - 'services/modal/**'
-      - '.github/workflows/deploy-modal.yml'
 
 # Don't cancel an in-flight deploy — a half-applied `modal deploy` is worse
 # than a queued one. Serialize instead.

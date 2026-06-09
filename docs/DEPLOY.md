@@ -71,8 +71,10 @@ Modal's free/Starter tier caps **web functions at 8 per workspace**. Today
 
 Workflow: **`.github/workflows/deploy-modal.yml`**
 
-- **Triggers:** push to `main` touching `services/modal/**`, or manual
-  `workflow_dispatch` (pick `changed` / `all` / a single app).
+- **Triggers:** manual `workflow_dispatch` only (pick `changed` / `all` / a
+  single app) — prod Modal deploys are deliberate, never an automatic
+  side effect of merging to `main` (matches `deploy-core-infra.yml`). Re-add
+  a `push` trigger in the workflow if you later want deploy-on-merge.
 - **Per-app gating:** deploys an app only when its files (or
   `services/modal/common/`) changed since the `last-modal-deploy` tag — so a
   one-line edit doesn't redeploy every GPU app and pay N cold starts.
