@@ -101,6 +101,7 @@ async def metrics():
 
     from fastapi import Response
     from services.common.observability import collect_text, CONTENT_TYPE_LATEST
+
     # Import for side effects: registers the canonical metric set on
     # the default registry, even if no code has touched them yet.
     import services.common.observability.metrics  # noqa: F401

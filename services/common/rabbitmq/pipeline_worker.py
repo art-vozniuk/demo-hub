@@ -31,9 +31,7 @@ from services.common.s3.client import S3Client
 # (pure async I/O, no model in process) can take 256 easily on an 8GB
 # VPS; compute (face_swap on local CPU with the GAN loaded) should not.
 # Each worker overrides through WORKER_MAX_CONCURRENT_TASKS in its env.
-_DEFAULT_MAX_CONCURRENT_TASKS = int(
-    os.getenv("WORKER_MAX_CONCURRENT_TASKS", "50")
-)
+_DEFAULT_MAX_CONCURRENT_TASKS = int(os.getenv("WORKER_MAX_CONCURRENT_TASKS", "50"))
 
 
 class _ServiceLike(Protocol):

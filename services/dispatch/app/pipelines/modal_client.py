@@ -178,9 +178,7 @@ async def _post_to_modal(
         if attempt < config.MODAL_RETRY_MAX_ATTEMPTS - 1:
             await _backoff_sleep(attempt)
 
-    modal_call_requests_total.labels(
-        endpoint=endpoint_label, status="exhausted"
-    ).inc()
+    modal_call_requests_total.labels(endpoint=endpoint_label, status="exhausted").inc()
     raise ModalInferenceError(
         f"{endpoint_label}: exhausted {config.MODAL_RETRY_MAX_ATTEMPTS} "
         f"retry attempts; last_err={last_err!r}"

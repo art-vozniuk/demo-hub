@@ -118,7 +118,8 @@ class FluxOptA10GService(Service):
         if not isinstance(self.pipeline_input, FluxOptPipelineInput):
             raise ValueError("Invalid pipeline input for FluxOptA10GService")
         return FluxOptA10GPipeline(
-            s3=self.s3, pipeline_input=self.pipeline_input,
+            s3=self.s3,
+            pipeline_input=self.pipeline_input,
         )
 
 
@@ -127,7 +128,8 @@ class FluxOptH100Service(Service):
         if not isinstance(self.pipeline_input, FluxOptPipelineInput):
             raise ValueError("Invalid pipeline input for FluxOptH100Service")
         return FluxOptH100Pipeline(
-            s3=self.s3, pipeline_input=self.pipeline_input,
+            s3=self.s3,
+            pipeline_input=self.pipeline_input,
         )
 
 

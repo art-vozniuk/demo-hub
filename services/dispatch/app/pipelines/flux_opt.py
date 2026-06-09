@@ -32,9 +32,7 @@ def _to_payload(inp: FluxOptPipelineInput) -> dict[str, Any]:
 
 
 class FluxOptA10GPipeline(AsyncPipeline):
-    def __init__(
-        self, s3: S3Client, pipeline_input: FluxOptPipelineInput
-    ) -> None:
+    def __init__(self, s3: S3Client, pipeline_input: FluxOptPipelineInput) -> None:
         self.s3 = s3
         self.pipeline_input = pipeline_input
 
@@ -43,9 +41,7 @@ class FluxOptA10GPipeline(AsyncPipeline):
 
 
 class FluxOptH100Pipeline(AsyncPipeline):
-    def __init__(
-        self, s3: S3Client, pipeline_input: FluxOptPipelineInput
-    ) -> None:
+    def __init__(self, s3: S3Client, pipeline_input: FluxOptPipelineInput) -> None:
         self.s3 = s3
         self.pipeline_input = pipeline_input
 

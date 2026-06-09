@@ -53,13 +53,47 @@ log = logging.getLogger(__name__)
 # Histogram bucket sets reused across services. Tuned for our expected
 # distributions — short-tail HTTP calls, long-tail inference durations.
 HTTP_BUCKETS = (
-    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
+    0.005,
+    0.01,
+    0.025,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
+    30.0,
 )
 INFERENCE_BUCKETS = (
-    0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0, 30.0, 60.0, 120.0,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.0,
+    3.0,
+    5.0,
+    8.0,
+    12.0,
+    20.0,
+    30.0,
+    60.0,
+    120.0,
 )
 COLD_START_BUCKETS = (
-    0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 20.0, 30.0, 45.0, 60.0, 90.0, 120.0,
+    0.5,
+    1.0,
+    2.0,
+    5.0,
+    10.0,
+    15.0,
+    20.0,
+    30.0,
+    45.0,
+    60.0,
+    90.0,
+    120.0,
 )
 
 
@@ -127,13 +161,20 @@ def push_metrics(
     try:
         if handler is not None:
             push_to_gateway(
-                url, job=job, registry=registry,
-                grouping_key=grouping_key or {}, handler=handler, timeout=timeout,
+                url,
+                job=job,
+                registry=registry,
+                grouping_key=grouping_key or {},
+                handler=handler,
+                timeout=timeout,
             )
         else:
             push_to_gateway(
-                url, job=job, registry=registry,
-                grouping_key=grouping_key or {}, timeout=timeout,
+                url,
+                job=job,
+                registry=registry,
+                grouping_key=grouping_key or {},
+                timeout=timeout,
             )
     except Exception as e:
         # Metric push failures must NEVER take down the inference call.
