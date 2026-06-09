@@ -71,6 +71,8 @@ services:
     build:
       context: .
       dockerfile: services/compute/Dockerfile.cpu
+    environment:
+      COMPUTE_METRICS_PORT: "9100"
     volumes:
       - ./services/compute/.env.docker:/app/.env:ro
       # Cache downloaded face-swap models between restarts (~hundreds of MB)

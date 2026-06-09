@@ -52,6 +52,7 @@ services:
       RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
       REDIS_URL: redis://redis:6379
       RABBITMQ_PREFETCH: "10"
+      COMPUTE_METRICS_PORT: "9100"
     depends_on:
       rabbitmq:
         condition: service_healthy

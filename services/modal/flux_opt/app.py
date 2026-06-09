@@ -223,32 +223,47 @@ class _FluxOptBase:
     @modal.enter(snap=True)
     def load_to_cpu(self) -> None:
         """CPU snapshot stage. GPU-agnostic — one snapshot serves both
-        A10G and H100 variants."""
+        A10G and H100 variants.
 
-        reg, io_h, pipe_h, batch_h, cold_h, uptime_c = _build_metric_registry()
-        self._reg = reg
-        self._io_h = io_h
-        self._pipe_h = pipe_h
-        self._batch_h = batch_h
-        self._cold_h = cold_h
-        self._uptime_c = uptime_c
-        self._container_id = uuid.uuid4().hex[:8]
+        Runs ONCE at snapshot-build time, so it must not create any
+        per-container state (identity, metric registry): that would get
+        baked into the shared snapshot and reused by every restored
+        container. All of that lives in move_to_gpu (snap=False)."""
 
         t0 = time.perf_counter()
-        log.info(f"[{self._container_id}] snapshot-load: load_to_cpu() begin")
+        log.info("snapshot-load: load_to_cpu() begin")
         self.pipe = Flux2KleinPipeline.from_pretrained(
             MODEL_LOCAL_DIR,
             torch_dtype=torch.bfloat16,
         )
-        dt = time.perf_counter() - t0
-        self._cold_h.labels(config=self.CONFIG, phase="snapshot_load_cpu").observe(dt)
+        # Stashed, not observed — the per-container registry doesn't exist
+        # yet. move_to_gpu records this into it after restore.
+        self._snapshot_load_cpu_s = time.perf_counter() - t0
         log.info(
-            f"[{self._container_id}] snapshot-load: from_pretrained "
-            f"finished in {dt * 1000:.0f}ms"
+            "snapshot-load: from_pretrained finished in "
+            f"{self._snapshot_load_cpu_s * 1000:.0f}ms"
         )
 
     @modal.enter(snap=False)
     async def move_to_gpu(self) -> None:
+        # Per-container identity + metric registry are created HERE
+        # (snap=False, runs per restored container) — not in load_to_cpu.
+        # Otherwise every container shares one snapshot-baked container_id
+        # and their Pushgateway groups overwrite each other (uptime/cold
+        # start get clobbered instead of summed).
+        (
+            self._reg,
+            self._io_h,
+            self._pipe_h,
+            self._batch_h,
+            self._cold_h,
+            self._uptime_c,
+        ) = _build_metric_registry()
+        self._container_id = uuid.uuid4().hex[:8]
+        self._cold_h.labels(config=self.CONFIG, phase="snapshot_load_cpu").observe(
+            getattr(self, "_snapshot_load_cpu_s", 0.0)
+        )
+
         t0 = time.perf_counter()
         log.info(f"[{self._container_id}] post-restore: move_to_gpu() begin")
         self.pipe.to("cuda")
@@ -272,14 +287,7 @@ class _FluxOptBase:
         self._cold_h.labels(config=self.CONFIG, phase="s3_session_open").observe(s3_dt)
 
         self._container_started_at = time.monotonic()
-        _push(
-            self._reg,
-            job="flux_opt_cold_start",
-            grouping_key={
-                "config": self.CONFIG,
-                "container_id": self._container_id,
-            },
-        )
+        self._push_state()
         log.info(
             f"[{self._container_id}] post-restore: ready "
             f"(to_cuda={gpu_dt * 1000:.0f}ms, s3_open={s3_dt * 1000:.0f}ms)"
@@ -293,14 +301,22 @@ class _FluxOptBase:
             log.warning(f"[{self._container_id}] s3 client close failed: {e}")
 
         uptime = time.monotonic() - self._container_started_at
+        # Rough real-time cost proxy only. Modal billing (modal.billing
+        # API/CLI + per-App tags) is the source of truth for actual $.
         self._uptime_c.labels(config=self.CONFIG, gpu=self.GPU_NAME).inc(uptime)
+        self._push_state()
+
+    def _push_state(self) -> None:
+        """Push this container's whole cumulative registry under a stable
+        per-container grouping key. Last-write-wins on the gateway then
+        means "current cumulative state of this container" — one group
+        per live container, bounded by container count (NOT batch count,
+        which would leak a new group per inference forever)."""
+
         _push(
             self._reg,
-            job="flux_opt_container_uptime",
-            grouping_key={
-                "config": self.CONFIG,
-                "container_id": self._container_id,
-            },
+            job="flux_opt",
+            grouping_key={"config": self.CONFIG, "container_id": self._container_id},
         )
 
     async def _generate_batch(
@@ -353,12 +369,17 @@ class _FluxOptBase:
 
         # 3. Batched GPU forward. Blocking — by design, the event loop
         # has nothing else useful to do here.
+        # One scalar drives the whole batched forward — diffusers can't
+        # vary steps per sample. Take the max so a batched request never
+        # silently runs fewer steps than asked (quality floor); guidance
+        # is uniform (dispatch never varies it).
+        steps = max(int(it.get("num_inference_steps") or 4) for it in items)
         t_pipe = time.perf_counter()
         out = self.pipe(
             image=inputs,
             prompt=[it["prompt"] for it in items],
             guidance_scale=items[0].get("guidance_scale", 1.0),
-            num_inference_steps=items[0].get("num_inference_steps", 4),
+            num_inference_steps=steps,
         )
         pipe_dt = time.perf_counter() - t_pipe
         self._pipe_h.labels(config=self.CONFIG).observe(pipe_dt)
@@ -392,15 +413,10 @@ class _FluxOptBase:
         # right story for the dashboard.
         self._io_h.labels(config=self.CONFIG, phase="encode_upload").observe(up_dt)
 
-        _push(
-            self._reg,
-            job="flux_opt_generate",
-            grouping_key={
-                "config": self.CONFIG,
-                "container_id": self._container_id,
-                "batch_id": batch_id,
-            },
-        )
+        # Cumulative push on the stable per-container key (batch_id stays
+        # a log field only — never a grouping key, or the gateway leaks a
+        # group per batch).
+        self._push_state()
 
         return [
             {"result_url": u, "width": img.width, "height": img.height}
