@@ -298,23 +298,26 @@ async def invoke_generative_t2i(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+# Both flux_opt variants go through the shared Modal web gateway; the
+# variant is selected server-side by payload["model"]. Poll is the same
+# endpoint (call_id is global).
 async def invoke_flux_opt_a10g(payload: dict[str, Any]) -> dict[str, Any]:
     return await _submit_and_poll(
         label="flux_opt_a10g",
-        submit_url=config.MODAL_FLUX_OPT_A10G_SUBMIT_URL,
-        poll_url=config.MODAL_FLUX_OPT_A10G_POLL_URL,
-        submit_url_label="MODAL_FLUX_OPT_A10G_SUBMIT_URL",
-        poll_url_label="MODAL_FLUX_OPT_A10G_POLL_URL",
-        payload=payload,
+        submit_url=config.MODAL_GATEWAY_SUBMIT_URL,
+        poll_url=config.MODAL_GATEWAY_POLL_URL,
+        submit_url_label="MODAL_GATEWAY_SUBMIT_URL",
+        poll_url_label="MODAL_GATEWAY_POLL_URL",
+        payload={**payload, "model": "flux_opt_a10g"},
     )
 
 
 async def invoke_flux_opt_h100(payload: dict[str, Any]) -> dict[str, Any]:
     return await _submit_and_poll(
         label="flux_opt_h100",
-        submit_url=config.MODAL_FLUX_OPT_H100_SUBMIT_URL,
-        poll_url=config.MODAL_FLUX_OPT_H100_POLL_URL,
-        submit_url_label="MODAL_FLUX_OPT_H100_SUBMIT_URL",
-        poll_url_label="MODAL_FLUX_OPT_H100_POLL_URL",
-        payload=payload,
+        submit_url=config.MODAL_GATEWAY_SUBMIT_URL,
+        poll_url=config.MODAL_GATEWAY_POLL_URL,
+        submit_url_label="MODAL_GATEWAY_SUBMIT_URL",
+        poll_url_label="MODAL_GATEWAY_POLL_URL",
+        payload={**payload, "model": "flux_opt_h100"},
     )

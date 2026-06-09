@@ -39,7 +39,6 @@ from common.lib import (
     bake_exif_orientation,
     configure_logging,
     make_app,
-    poll_function_call,
 )
 
 
@@ -77,16 +76,6 @@ flux_image = (
             "HF_HOME": "/root/.cache/huggingface",
             "TRANSFORMERS_OFFLINE": "0",
         }
-    )
-    .add_local_python_source("common.lib")
-)
-
-
-flux_thin_image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .pip_install(
-        "fastapi[standard]==0.115.6",
-        "pydantic==2.10.3",
     )
     .add_local_python_source("common.lib")
 )
@@ -468,67 +457,3 @@ class FluxOptH100(_FluxOptBase):
     @modal.batched(max_batch_size=8, wait_ms=200)
     async def generate(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return await self._generate_batch(items)
-
-
-# ---------------------------------------------------------------------------
-# Submit/poll endpoints — same pattern as the original flux app. One
-# pair per class so dispatch hits the right variant.
-# ---------------------------------------------------------------------------
-
-
-@app.function(image=flux_thin_image, timeout=120)
-@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-def submit_a10g(payload: dict[str, Any]) -> dict[str, Any]:
-    request_id = uuid.uuid4().hex[:8]
-    err = _validate_payload(payload)
-    if err is not None:
-        log.warning(f"[{request_id}] submit_a10g: {err}")
-        return {"error": err}
-
-    call = FluxOptA10G().generate.spawn(_to_item(payload, request_id))
-    return {"call_id": call.object_id, "request_id": request_id}
-
-
-@app.function(image=flux_thin_image, timeout=120)
-@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-def poll_a10g(payload: dict[str, Any]) -> dict[str, Any]:
-    return poll_function_call(payload.get("call_id"), log)
-
-
-@app.function(image=flux_thin_image, timeout=120)
-@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-def submit_h100(payload: dict[str, Any]) -> dict[str, Any]:
-    request_id = uuid.uuid4().hex[:8]
-    err = _validate_payload(payload)
-    if err is not None:
-        log.warning(f"[{request_id}] submit_h100: {err}")
-        return {"error": err}
-
-    call = FluxOptH100().generate.spawn(_to_item(payload, request_id))
-    return {"call_id": call.object_id, "request_id": request_id}
-
-
-@app.function(image=flux_thin_image, timeout=120)
-@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-def poll_h100(payload: dict[str, Any]) -> dict[str, Any]:
-    return poll_function_call(payload.get("call_id"), log)
-
-
-def _validate_payload(payload: dict[str, Any]) -> str | None:
-    if not payload.get("image_bucket") or not payload.get("image_key"):
-        return "image_bucket and image_key are required"
-    if not payload.get("prompt"):
-        return "prompt is required"
-    return None
-
-
-def _to_item(payload: dict[str, Any], request_id: str) -> dict[str, Any]:
-    return {
-        "image_bucket": payload["image_bucket"],
-        "image_key": payload["image_key"],
-        "prompt": payload["prompt"],
-        "guidance_scale": float(payload.get("guidance_scale", 1.0)),
-        "num_inference_steps": int(payload.get("num_inference_steps", 4)),
-        "max_side": int(payload.get("max_side", 1024)),
-        "request_id": request_id,
-    }

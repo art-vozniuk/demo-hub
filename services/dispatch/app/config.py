@@ -44,13 +44,11 @@ class Config(BaseSettings):
     MODAL_HTTP_POOL_KEEPALIVE: int = 128
     MODAL_HTTP_POOL_MAX: int = 256
 
-    # Optimised FLUX deployment (services/modal/flux_opt). Each (gpu, batch)
-    # variant is its own deployment so per-config billing in the Modal UI
-    # stays separable. URLs are written by services/modal/flux_opt/deploy.py.
-    MODAL_FLUX_OPT_A10G_SUBMIT_URL: str | None = None
-    MODAL_FLUX_OPT_A10G_POLL_URL: str | None = None
-    MODAL_FLUX_OPT_H100_SUBMIT_URL: str | None = None
-    MODAL_FLUX_OPT_H100_POLL_URL: str | None = None
+    # Single Modal web gateway (services/modal/gateway) fronts every model
+    # — one submit/poll pair, routed by payload["model"]. Keeps us under the
+    # free-tier web-function cap. URLs written by gateway/deploy.py.
+    MODAL_GATEWAY_SUBMIT_URL: str | None = None
+    MODAL_GATEWAY_POLL_URL: str | None = None
 
 
 config = Config()

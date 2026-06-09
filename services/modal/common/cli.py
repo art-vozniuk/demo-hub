@@ -81,6 +81,16 @@ def preload(app_path: str) -> None:
     print("Volume populated successfully.")
 
 
+def deploy_app(app_path: str, app_name: str) -> None:
+    """Deploy an app that exposes NO web endpoints — its classes are
+    invoked cross-app by the gateway (modal.Cls.from_name), so there are
+    no endpoint URLs to extract; just deploy."""
+
+    print(f"Deploying {app_path}...")
+    _run_streaming(["modal", "deploy", app_path])
+    print(f"Deployed {app_name}.")
+
+
 def destroy(app_name: str, volume_name: str) -> None:
     """Stop a deployed app. Volume + secrets are preserved."""
 
