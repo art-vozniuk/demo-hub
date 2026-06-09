@@ -167,6 +167,10 @@ services:
     depends_on:
       - web
       - core
+      # nginx.conf proxies /pushgateway/ and /grafana/ to these hostnames;
+      # nginx resolves upstreams at startup, so they must exist first.
+      - pushgateway
+      - grafana
     networks:
       - app_network
 
