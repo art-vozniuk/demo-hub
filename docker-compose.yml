@@ -161,6 +161,10 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/user_conf.d/default.conf:ro
       - ./nginx/local.conf:/etc/nginx/user_conf.d/local.conf:ro
+      # Basic-auth file for /pushgateway/. Host-mounted so it survives nginx
+      # recreation on every deploy. Create it once on the VDS (docs/DEPLOY.md):
+      #   htpasswd -B -c nginx/pushgateway.htpasswd modal
+      - ./nginx/pushgateway.htpasswd:/etc/nginx/pushgateway.htpasswd:ro
       - nginx_secrets:/etc/letsencrypt
       - nginx_webroot:/var/www/letsencrypt
       - ./renderer-data:/var/www/renderer_data:ro

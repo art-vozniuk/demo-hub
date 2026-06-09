@@ -4,6 +4,10 @@ Three new services join the compose stack: `pushgateway`, `prometheus`,
 `grafana`. Everything wires together over the existing `app_network`,
 so no extra compose file or external network plumbing.
 
+> Deploy ordering (bring the stack up together so nginx can resolve its
+> `/pushgateway/` and `/grafana/` upstreams) and the prod/dev Modal runbooks
+> live in [../docs/DEPLOY.md](../docs/DEPLOY.md).
+
 ## Local
 
 ```
