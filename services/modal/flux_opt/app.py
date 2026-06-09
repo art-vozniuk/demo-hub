@@ -57,10 +57,12 @@ flux_image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0")
     .pip_install(
-        "torch==2.5.1",
-        "torchvision==0.20.1",
-        "git+https://github.com/huggingface/diffusers.git",
-        "transformers",
+        # FLUX.2-klein needs torch>=2.7 (float8_e8m0fnu, absent in 2.5.1)
+        # + diffusers-main; commit + transformers pinned for reproducibility.
+        "torch==2.7.1",
+        "torchvision==0.22.1",
+        "git+https://github.com/huggingface/diffusers.git@2c7efb95349296cf6bcce981ea036275a82a94df",
+        "transformers==5.10.2",
         "accelerate",
         "huggingface-hub[hf-transfer]>=0.34.0",
         "Pillow==11.0.0",
