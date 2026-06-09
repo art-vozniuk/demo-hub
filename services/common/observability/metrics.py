@@ -27,7 +27,6 @@ from __future__ import annotations
 from . import (
     COLD_START_BUCKETS,
     Counter,
-    Gauge,
     Histogram,
     HTTP_BUCKETS,
     INFERENCE_BUCKETS,

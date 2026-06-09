@@ -106,12 +106,11 @@ def push_metrics(
     auth_token = os.environ.get("PUSHGATEWAY_TOKEN")
     handler = None
     if auth_token:
-        from urllib.request import HTTPSHandler, build_opener
         import base64
 
         # prometheus_client takes a handler callable matching the
         # urllib request shape; the simplest path is to bake an auth
-        # header into a custom opener and wrap it.
+        # header into a Request inside _handler.
         encoded = base64.b64encode(f"modal:{auth_token}".encode()).decode()
 
         def _handler(url, method, timeout, headers, data):  # noqa: ARG001
