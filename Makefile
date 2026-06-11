@@ -148,8 +148,14 @@ lint-fix:
 run-dev:
 	docker compose -f docker-compose.local.yml up --build
 
+ngrok-dev:
+	bash scripts/ngrok-dev.sh
+
+run-dev-modal: ngrok-dev run-dev
+
 stop-dev:
 	docker compose -f docker-compose.local.yml down
+	-pkill -x ngrok
 
 deploy-core:
 	docker compose -f docker-compose.local.yml up --build core --detach

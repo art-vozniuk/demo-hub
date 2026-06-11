@@ -1,3 +1,4 @@
+
 #!/usr/bin/env bash
 # One-time setup for the `dev` Modal environment — laptop development against
 # the docker-compose.local.yml stack. Idempotent where it can be.
