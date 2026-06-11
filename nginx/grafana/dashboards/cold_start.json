@@ -14,7 +14,7 @@
       "gridPos": {"h": 7, "w": 12, "x": 0, "y": 0},
       "id": 1,
       "targets": [
-        {"expr": "sum by (config) (rate(demo_hub_inference_cold_start_duration_seconds_count{config=~\"$config\"}[5m]))",
+        {"expr": "sum by (config) (demo_hub_inference_cold_start_duration_seconds_count{config=~\"$config\"})",
          "legendFormat": "{{config}}", "refId": "A"}
       ],
       "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
@@ -26,7 +26,7 @@
       "gridPos": {"h": 7, "w": 12, "x": 12, "y": 0},
       "id": 2,
       "targets": [
-        {"expr": "histogram_quantile(0.95, sum by (le, config, phase) (rate(demo_hub_inference_cold_start_duration_seconds_bucket{config=~\"$config\"}[10m])))",
+        {"expr": "histogram_quantile(0.95, sum by (le, config, phase) (demo_hub_inference_cold_start_duration_seconds_bucket{config=~\"$config\"}))",
          "legendFormat": "{{config}} / {{phase}}", "refId": "A"}
       ],
       "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
@@ -39,7 +39,7 @@
       "gridPos": {"h": 7, "w": 24, "x": 0, "y": 7},
       "id": 3,
       "targets": [
-        {"expr": "sum by (config, gpu) (rate(demo_hub_inference_container_uptime_seconds_total{config=~\"$config\"}[1m]))",
+        {"expr": "sum by (config, gpu) (demo_hub_inference_container_uptime_seconds_total{config=~\"$config\"})",
          "legendFormat": "{{config}} / {{gpu}}", "refId": "A"}
       ],
       "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
@@ -54,8 +54,8 @@
       "name": "config",
       "label": "config",
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "query": {"query": "label_values(demo_hub_inference_cold_start_duration_seconds, config)", "refId": "StandardVariableQuery"},
-      "definition": "label_values(demo_hub_inference_cold_start_duration_seconds, config)",
+      "query": {"query": "label_values(demo_hub_inference_cold_start_duration_seconds_count, config)", "refId": "StandardVariableQuery"},
+      "definition": "label_values(demo_hub_inference_cold_start_duration_seconds_count, config)",
       "includeAll": true,
       "multi": true,
       "refresh": 2,
