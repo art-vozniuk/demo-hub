@@ -24,7 +24,7 @@ ENV BUILD_TAG=${BUILD_TAG}
 
 EXPOSE 8081
 
-CMD sh -c 'export $(cat /app/.env | xargs) && \
+CMD sh -c 'export $(grep -vE "^[[:space:]]*#" /app/.env | xargs) && \
     alembic -c services/core/alembic.ini upgrade head && \
     uvicorn services.core.main:app --host 0.0.0.0 --port 8081'
 

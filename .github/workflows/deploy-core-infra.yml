@@ -21,6 +21,12 @@ jobs:
       web: ${{ steps.diff.outputs.web }}
       compute: ${{ steps.diff.outputs.compute }}
       dispatch: ${{ steps.diff.outputs.dispatch }}
+      modal_flux: ${{ steps.diff.outputs.modal_flux }}
+      modal_flux_opt: ${{ steps.diff.outputs.modal_flux_opt }}
+      modal_sharp: ${{ steps.diff.outputs.modal_sharp }}
+      modal_trellis: ${{ steps.diff.outputs.modal_trellis }}
+      modal_flux_t2i: ${{ steps.diff.outputs.modal_flux_t2i }}
+      modal_gateway: ${{ steps.diff.outputs.modal_gateway }}
     steps:
       - name: checkout repository
         uses: actions/checkout@v4
@@ -36,6 +42,9 @@ jobs:
             echo "web=true"      >> $GITHUB_OUTPUT
             echo "compute=true"  >> $GITHUB_OUTPUT
             echo "dispatch=true" >> $GITHUB_OUTPUT
+            for a in flux flux_opt sharp trellis flux_t2i gateway; do
+              echo "modal_$a=true" >> $GITHUB_OUTPUT
+            done
             exit 0
           fi
 
@@ -63,6 +72,15 @@ jobs:
           echo "web=$has_web"           >> $GITHUB_OUTPUT
           echo "compute=$has_compute"   >> $GITHUB_OUTPUT
           echo "dispatch=$has_dispatch" >> $GITHUB_OUTPUT
+
+          # Modal apps: per-app dir, or services/modal/common/ (ships into all).
+          mc=false
+          echo "$changed" | grep -qE '^services/modal/common/' && mc=true
+          for a in flux flux_opt sharp trellis flux_t2i gateway; do
+            v=$mc
+            echo "$changed" | grep -qE "^services/modal/$a/" && v=true
+            echo "modal_$a=$v" >> $GITHUB_OUTPUT
+          done
 
           echo "Changed files:"
           echo "$changed"
@@ -217,7 +235,63 @@ jobs:
 
             echo "Deployment completed successfully!"
 
-      # Tag current HEAD so the next deploy knows what changed since this one.
+  # Deploy changed Modal apps to the `main` environment. Endpoint-less model
+  # apps first, gateway LAST — each migrated app drops its 2 web endpoints, so
+  # the 8-web-function free-tier cap is never exceeded mid-deploy.
+  deploy-modal:
+    needs: [check-changes]
+    if: |
+      needs.check-changes.outputs.modal_flux == 'true' ||
+      needs.check-changes.outputs.modal_flux_opt == 'true' ||
+      needs.check-changes.outputs.modal_sharp == 'true' ||
+      needs.check-changes.outputs.modal_trellis == 'true' ||
+      needs.check-changes.outputs.modal_flux_t2i == 'true' ||
+      needs.check-changes.outputs.modal_gateway == 'true'
+    runs-on: ubuntu-latest
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      MODAL_ENVIRONMENT: main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install 'modal>=1.4.2'
+      - name: deploy flux
+        if: needs.check-changes.outputs.modal_flux == 'true'
+        run: python services/modal/flux/deploy.py
+      - name: deploy flux_opt
+        if: needs.check-changes.outputs.modal_flux_opt == 'true'
+        run: python services/modal/flux_opt/deploy.py
+      - name: deploy sharp
+        if: needs.check-changes.outputs.modal_sharp == 'true'
+        run: python services/modal/sharp/deploy.py
+      - name: deploy trellis
+        if: needs.check-changes.outputs.modal_trellis == 'true'
+        run: python services/modal/trellis/deploy.py
+      - name: deploy flux_t2i
+        if: needs.check-changes.outputs.modal_flux_t2i == 'true'
+        run: python services/modal/flux_t2i/deploy.py
+      - name: deploy gateway
+        if: needs.check-changes.outputs.modal_gateway == 'true'
+        run: python services/modal/gateway/deploy.py
+
+  # Advance the marker only after BOTH the VDS deploy and the Modal deploy
+  # succeed — else a failed Modal deploy would be skipped on the next run.
+  tag:
+    needs: [deploy, deploy-modal]
+    if: |
+      always() &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: update last-deploy tag
         run: |
           git tag -f last-deploy HEAD

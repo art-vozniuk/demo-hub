@@ -25,10 +25,11 @@ image = (
 ROUTES: dict[str, tuple[str, str]] = {
     "flux_opt_a10g": ("demo-hub-flux-opt", "FluxOptA10G"),
     "flux_opt_h100": ("demo-hub-flux-opt", "FluxOptH100"),
-    # migrate a live model: drop its web endpoints + generate(payload), enable here
-    # "sharp":   ("demo-hub-sharp", "SharpInference"),
-    # "trellis": ("demo-hub-trellis", "TrellisInference"),
-    # "generative_t2i": ("demo-hub-flux-t2i", "FluxT2IInference"),
+    "generative_editing": ("demo-hub-flux", "FluxInference"),
+    "generative_editing_custom": ("demo-hub-flux", "FluxInference"),
+    "sharp": ("demo-hub-sharp", "SharpInference"),
+    "trellis": ("demo-hub-trellis", "TrellisInference"),
+    "generative_t2i": ("demo-hub-flux-t2i", "FluxT2IInference"),
 }
 
 

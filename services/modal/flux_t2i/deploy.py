@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Deploy flux_t2i and persist its submit/poll endpoint URLs."""
+"""Deploy the FLUX.1 text-to-image app. No web endpoints — its class is
+invoked by name through the gateway; see services/modal/gateway."""
 
 import os
 import sys
@@ -9,14 +10,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
-from common.cli import deploy_submit_poll  # noqa: E402
+from common.cli import deploy_app  # noqa: E402
 
 
 if __name__ == "__main__":
-    deploy_submit_poll(
-        app_path="flux_t2i/app.py",
-        endpoint_file=".endpoint-flux-t2i",
-        app_name="demo-hub-flux-t2i",
-        submit_env="MODAL_GENERATIVE_T2I_SUBMIT_URL",
-        poll_env="MODAL_GENERATIVE_T2I_POLL_URL",
-    )
+    deploy_app("flux_t2i/app.py", "demo-hub-flux-t2i")

@@ -1,7 +1,8 @@
 """Modal app: TRELLIS.2 single-image → textured GLB mesh on GPU.
 
-Two HTTP endpoints (submit/poll) to dodge Modal's ~60s sync gateway cap.
-Deploy / preload via services/modal/trellis/{deploy,preload}.py.
+Endpoint-less: invoked by name through the gateway. Per-phase metrics
+via InferenceMetrics. Deploy / preload via
+services/modal/trellis/{deploy,preload}.py.
 """
 
 from __future__ import annotations
@@ -21,9 +22,9 @@ from common.lib import (
     configure_logging,
     download_from_s3,
     make_app,
-    poll_function_call,
     upload_to_s3,
 )
+from common.metrics import InferenceMetrics
 
 
 MODEL_REPO = "microsoft/TRELLIS.2-4B"
@@ -111,6 +112,7 @@ trellis_image = (
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
         "boto3==1.35.92",
+        "prometheus-client==0.20.0",
         extra_options="--extra-index-url https://download.pytorch.org/whl/cu124",
     )
     .env(
@@ -150,25 +152,12 @@ trellis_image = (
         "pip install git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8",
         gpu="A10G",
     )
-    .add_local_python_source("common.lib")
-)
-
-
-# Thin image for submit/poll — no torch, fast cold-start.
-trellis_thin_image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .pip_install(
-        "fastapi[standard]==0.115.6",
-        "pydantic==2.10.3",
-    )
-    .add_local_python_source("common.lib")
+    .add_local_python_source("common.lib", "common.metrics")
 )
 
 
 # Module-level imports are captured by Modal's memory snapshot — they
-# stay loaded after restore. `image.imports()` skips them on containers
-# that don't run trellis_image (submit/poll on the thin image), where
-# o_voxel/trellis2 would otherwise fail (flex_gemm needs a GPU at import).
+# stay loaded after restore.
 with trellis_image.imports():
     import o_voxel
     from PIL import Image
@@ -380,6 +369,7 @@ def preload_weights() -> str:
     experimental_options={"enable_gpu_snapshot": True},
     secrets=[
         modal.Secret.from_name("supabase-s3"),
+        modal.Secret.from_name("pushgateway"),
         # Belt-and-suspenders for HF deps the preload missed.
         modal.Secret.from_name("huggingface", required_keys=[]),
     ],
@@ -399,6 +389,7 @@ class TrellisInference:
 
         self.pipe = None
         self.init_error: BaseException | None = None
+        self._to_cuda_s = 0.0
         log.info("enter: load() begin on GPU container")
         t0 = time.perf_counter()
 
@@ -412,8 +403,8 @@ class TrellisInference:
 
             t_gpu = time.perf_counter()
             self.pipe.cuda()
-            to_cuda_ms = (time.perf_counter() - t_gpu) * 1000
-            log.info(f"enter: pipe.cuda() finished in {to_cuda_ms:.0f}ms")
+            self._to_cuda_s = time.perf_counter() - t_gpu
+            log.info(f"enter: pipe.cuda() finished in {self._to_cuda_s * 1000:.0f}ms")
         except Exception as e:
             log.exception("enter: pipeline init failed")
             self.init_error = e
@@ -427,26 +418,39 @@ class TrellisInference:
         except Exception as e:
             log.warning(f"enter: warmup failed (non-fatal): {e!r}")
 
+    @modal.enter(snap=False)
+    def post_restore(self) -> None:
+        # Built here (snap=False) so each container gets its own identity.
+        self.m = InferenceMetrics("trellis", "L40S")
+        self.m.cold_start("to_cuda", getattr(self, "_to_cuda_s", 0.0))
+        self.m.push()
+        log.info(f"[{self.m.container_id}] post-restore: ready")
+
+    @modal.exit()
+    async def cleanup(self) -> None:
+        self.m.push_uptime()
+
     @modal.method()
-    def generate(
-        self,
-        image_bucket: str,
-        image_key: str,
-        request_id: str,
-        steps: int | None = None,
-    ) -> dict[str, Any]:
+    def generate(self, payload: dict[str, Any]) -> dict[str, Any]:
         if self.init_error is not None or self.pipe is None:
             raise RuntimeError(
                 f"TrellisInference init failed: {self.init_error!r}"
             )
 
+        image_bucket = payload["image_bucket"]
+        image_key = payload["image_key"]
+        steps = payload.get("steps")
+        request_id = uuid.uuid4().hex[:8]
+
         steps = steps if steps in ALLOWED_SAMPLER_STEPS else DEFAULT_SAMPLER_STEPS
         log.info(f"[{request_id}] inference: start; key={image_key}; steps={steps}")
         t0 = time.perf_counter()
+        self.m.batch(1)
 
         t_dl = time.perf_counter()
-        raw = download_from_s3(image_bucket, image_key)
-        raw = bake_exif_orientation(raw)
+        with self.m.phase("download"):
+            raw = download_from_s3(image_bucket, image_key)
+            raw = bake_exif_orientation(raw)
         log.info(
             f"[{request_id}] s3 download + EXIF bake done in "
             f"{(time.perf_counter() - t_dl) * 1000:.0f}ms ({len(raw)} bytes)"
@@ -462,61 +466,63 @@ class TrellisInference:
         # All three samplers default from pipeline.json (steps=12); kwargs
         # here override per-request.
         steps_override = {"steps": steps}
-        mesh = self.pipe.run(
-            image,
-            sparse_structure_sampler_params=steps_override,
-            shape_slat_sampler_params=steps_override,
-            tex_slat_sampler_params=steps_override,
-        )[0]
-        # nvdiffrast hard limit on face count.
-        mesh.simplify(16777216)
+        with self.m.phase("gpu"):
+            mesh = self.pipe.run(
+                image,
+                sparse_structure_sampler_params=steps_override,
+                shape_slat_sampler_params=steps_override,
+                tex_slat_sampler_params=steps_override,
+            )[0]
+            # nvdiffrast hard limit on face count.
+            mesh.simplify(16777216)
         inference_ms = (time.perf_counter() - t_inf) * 1000
         log.info(
             f"[{request_id}] inference: pipe.run(...) returned in {inference_ms:.0f}ms"
         )
 
         t_exp = time.perf_counter()
-        glb = o_voxel.postprocess.to_glb(
-            vertices=mesh.vertices,
-            faces=mesh.faces,
-            attr_volume=mesh.attrs,
-            coords=mesh.coords,
-            attr_layout=mesh.layout,
-            voxel_size=mesh.voxel_size,
-            aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
-            decimation_target=1000000,
-            texture_size=TEXTURE_RESOLUTION,
-            remesh=True,
-            remesh_band=1,
-            remesh_project=0,
-            verbose=False,
-        )
+        with self.m.phase("upload"):
+            glb = o_voxel.postprocess.to_glb(
+                vertices=mesh.vertices,
+                faces=mesh.faces,
+                attr_volume=mesh.attrs,
+                coords=mesh.coords,
+                attr_layout=mesh.layout,
+                voxel_size=mesh.voxel_size,
+                aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+                decimation_target=1000000,
+                texture_size=TEXTURE_RESOLUTION,
+                remesh=True,
+                remesh_band=1,
+                remesh_project=0,
+                verbose=False,
+            )
 
-        with tempfile.TemporaryDirectory() as tmp:
-            out_path = os.path.join(tmp, "out.glb")
-            # PNG textures — EXT_texture_webp falls back to grey on viewers
-            # that don't implement the extension.
-            glb.export(out_path)
-            with open(out_path, "rb") as f:
-                glb_bytes = f.read()
+            with tempfile.TemporaryDirectory() as tmp:
+                out_path = os.path.join(tmp, "out.glb")
+                # PNG textures — EXT_texture_webp falls back to grey on viewers
+                # that don't implement the extension.
+                glb.export(out_path)
+                with open(out_path, "rb") as f:
+                    glb_bytes = f.read()
 
-        # Drop pivot to feet so the editor gizmo lands at the base, not the
-        # bbox centre. Runs on serialized bytes via trimesh round-trip.
-        glb_bytes = _drop_pivot_to_feet(glb_bytes, request_id)
-        export_ms = (time.perf_counter() - t_exp) * 1000
-        log.info(
-            f"[{request_id}] export: to_glb done in {export_ms:.0f}ms; "
-            f"glb_size={len(glb_bytes) / (1024 * 1024):.1f} MB"
-        )
+            # Drop pivot to feet so the editor gizmo lands at the base, not the
+            # bbox centre. Runs on serialized bytes via trimesh round-trip.
+            glb_bytes = _drop_pivot_to_feet(glb_bytes, request_id)
+            export_ms = (time.perf_counter() - t_exp) * 1000
+            log.info(
+                f"[{request_id}] export: to_glb done in {export_ms:.0f}ms; "
+                f"glb_size={len(glb_bytes) / (1024 * 1024):.1f} MB"
+            )
 
-        t_up = time.perf_counter()
-        result_url = upload_to_s3(
-            data_bytes=glb_bytes,
-            bucket=image_bucket,
-            folder="trellis_results",
-            extension="glb",
-        )
-        upload_ms = (time.perf_counter() - t_up) * 1000
+            t_up = time.perf_counter()
+            result_url = upload_to_s3(
+                data_bytes=glb_bytes,
+                bucket=image_bucket,
+                folder="trellis_results",
+                extension="glb",
+            )
+            upload_ms = (time.perf_counter() - t_up) * 1000
 
         total_ms = (time.perf_counter() - t0) * 1000
         log.info(
@@ -525,43 +531,8 @@ class TrellisInference:
             f"upload={upload_ms:.0f}ms); url={result_url}"
         )
 
+        self.m.push()
         return {
             "result_url": result_url,
             "glb_size_bytes": len(glb_bytes),
         }
-
-
-@app.function(image=trellis_thin_image, timeout=120)
-@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-def submit(payload: dict[str, Any]) -> dict[str, Any]:
-    """Kick off inference asynchronously; client polls /poll with the call_id."""
-
-    request_id = uuid.uuid4().hex[:8]
-    image_bucket = payload.get("image_bucket")
-    image_key = payload.get("image_key")
-    steps = payload.get("steps")
-    log.info(
-        f"[{request_id}] submit: received; bucket={image_bucket} "
-        f"key={image_key} steps={steps}"
-    )
-
-    if not image_bucket or not image_key:
-        log.warning(f"[{request_id}] submit: missing image_bucket or image_key")
-        return {"error": "image_bucket and image_key are required"}
-
-    call = TrellisInference().generate.spawn(
-        image_bucket=image_bucket,
-        image_key=image_key,
-        request_id=request_id,
-        steps=steps,
-    )
-    log.info(f"[{request_id}] submit: spawned call_id={call.object_id}")
-    return {"call_id": call.object_id, "request_id": request_id}
-
-
-@app.function(image=trellis_thin_image, timeout=120)
-@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-def poll(payload: dict[str, Any]) -> dict[str, Any]:
-    """Non-blocking status check; returns running / done / failed / expired."""
-
-    return poll_function_call(payload.get("call_id"), log)

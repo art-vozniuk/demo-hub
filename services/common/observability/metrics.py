@@ -68,47 +68,33 @@ pipeline_failures_total = Counter(
 )
 
 
-# --- Inference internals (pushed from Modal) ----------------------------
-#
-# These get re-declared on Modal-side CollectorRegistry objects with the
-# same names — push_to_gateway then ingests them into Prometheus through
-# the Pushgateway. The Grafana panels query them identically regardless
-# of whether the series came from a scrape or a push.
+# --- Inference internals (pushed from Modal via the Pushgateway) --------
+# Canonical names; services/modal/common/metrics.py re-declares these on the
+# per-container push registry. Same `config` label = pipeline key.
 
-flux_io_duration_seconds = Histogram(
-    "demo_hub_flux_io_duration_seconds",
-    "I/O phase wall-time inside a Modal generate() call.",
+inference_phase_duration_seconds = Histogram(
+    "demo_hub_inference_phase_duration_seconds",
+    "Per-phase generate() wall-time (download/decode/gpu/upload).",
     ["config", "phase"],
-    buckets=HTTP_BUCKETS,
-)
-
-flux_pipe_duration_seconds = Histogram(
-    "demo_hub_flux_pipe_duration_seconds",
-    "GPU pipe(...) wall-time per (batched) call.",
-    ["config"],
     buckets=INFERENCE_BUCKETS,
 )
 
-flux_batch_size = Histogram(
-    "demo_hub_flux_batch_size",
-    "Effective batch size at GPU dispatch time.",
+inference_batch_size = Histogram(
+    "demo_hub_inference_batch_size",
+    "Effective batch size at GPU dispatch.",
     ["config"],
     buckets=(1, 2, 4, 8, 12, 16, 24, 32),
 )
 
-
-# --- Cold start / container lifecycle -----------------------------------
-
-flux_cold_start_duration_seconds = Histogram(
-    "demo_hub_flux_cold_start_duration_seconds",
+inference_cold_start_duration_seconds = Histogram(
+    "demo_hub_inference_cold_start_duration_seconds",
     "Container lifecycle hook wall-time, by phase.",
     ["config", "phase"],
     buckets=COLD_START_BUCKETS,
 )
 
-flux_container_uptime_seconds_total = Counter(
-    "demo_hub_flux_container_uptime_seconds_total",
-    "Sum of container uptime seconds. Multiplied by the published Modal "
-    "GPU rate at dashboard time to get billed cost.",
+inference_container_uptime_seconds_total = Counter(
+    "demo_hub_inference_container_uptime_seconds_total",
+    "Container uptime seconds (x published GPU rate = billed cost).",
     ["config", "gpu"],
 )

@@ -2,9 +2,7 @@
 
 predict → pack Gaussians3D into 32-byte splat blob → auto-frame → S3
 upload, all on the GPU container; dispatch only forwards the result.
-Two HTTP endpoints to dodge Modal's ~60s sync gateway cap:
-  POST /submit {image_b64, f_px, image_bucket} → {call_id, request_id}
-  POST /poll   {call_id}                       → {status: ..., ...}
+Endpoint-less: invoked by name through the gateway.
 Deploy / preload via services/modal/sharp/{deploy,preload}.py.
 """
 
@@ -25,9 +23,9 @@ from common.lib import (
     configure_logging,
     download_from_s3,
     make_app,
-    poll_function_call,
     upload_to_s3,
 )
+from common.metrics import InferenceMetrics
 
 
 CHECKPOINT_URL = "https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh.pt"
@@ -54,6 +52,7 @@ sharp_image = (
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
         "boto3==1.35.92",
+        "prometheus-client==0.20.0",
         # ml-sharp is GitHub-only; pin to a commit once Apple ships a release.
         "git+https://github.com/apple/ml-sharp.git",
     )
@@ -61,22 +60,7 @@ sharp_image = (
     # common.sharp_utils explicitly. (sharp_utils lives under common/
     # rather than sharp/ to avoid clashing with the ml-sharp pip
     # package's own `sharp` namespace.)
-    .add_local_python_source("common.lib", "common.sharp_utils")
-)
-
-
-# submit/poll only spawn / inspect a FunctionCall — no torch needed. A
-# thin image keeps their cold-start small. common.lib ships here because
-# the module top-level calls `configure_logging` and `make_app` on every
-# container start; sharp_utils is gated behind `sharp_image.imports()`
-# so it never loads outside the inference container.
-sharp_thin_image = (
-    modal.Image.debian_slim(python_version="3.13")
-    .pip_install(
-        "fastapi[standard]==0.115.6",
-        "pydantic==2.10.3",
-    )
-    .add_local_python_source("common.lib")
+    .add_local_python_source("common.lib", "common.sharp_utils", "common.metrics")
 )
 
 
@@ -159,7 +143,10 @@ def preload_weights() -> str:
     scaledown_window=10,
     timeout=600,
     enable_memory_snapshot=True,
-    secrets=[modal.Secret.from_name("supabase-s3")],
+    secrets=[
+        modal.Secret.from_name("supabase-s3"),
+        modal.Secret.from_name("pushgateway"),
+    ],
     #min_containers=1,
 )
 @modal.concurrent(max_inputs=1)
@@ -197,22 +184,31 @@ class SharpInference:
         log.info("post-restore: move_to_gpu() begin (GPU now attached)")
         t0 = time.perf_counter()
         self.predictor.to("cuda")
-        to_cuda_ms = (time.perf_counter() - t0) * 1000
-        log.info(f"post-restore: predictor.to(cuda) done in {to_cuda_ms:.0f}ms")
+        to_cuda_s = time.perf_counter() - t0
+        log.info(f"post-restore: predictor.to(cuda) done in {to_cuda_s * 1000:.0f}ms")
+
+        # Built here (snap=False) so each container gets its own identity.
+        self.m = InferenceMetrics("sharp", "A10G")
+        self.m.cold_start("to_cuda", to_cuda_s)
+        self.m.push()
+
+    @modal.exit()
+    async def cleanup(self) -> None:
+        # Rough real-time cost proxy; Modal billing is source of truth for $.
+        self.m.push_uptime()
 
     @modal.method()
-    def generate(
-        self,
-        image_bucket: str,
-        image_key: str,
-        request_id: str,
-    ) -> dict[str, Any]:
+    def generate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        image_bucket = payload["image_bucket"]
+        image_key = payload["image_key"]
+        request_id = uuid.uuid4().hex[:8]
         log.info(f"[{request_id}] inference: start; key={image_key}")
         t0 = time.perf_counter()
 
         t_dl = time.perf_counter()
-        raw = download_from_s3(image_bucket, image_key)
-        raw = bake_exif_orientation(raw)
+        with self.m.phase("download"):
+            raw = download_from_s3(image_bucket, image_key)
+            raw = bake_exif_orientation(raw)
         log.info(
             f"[{request_id}] s3 download + EXIF bake done in "
             f"{(time.perf_counter() - t_dl) * 1000:.0f}ms ({len(raw)} bytes)"
@@ -228,7 +224,8 @@ class SharpInference:
         )
 
         t_inf = time.perf_counter()
-        gaussians = self._run_inference(arr, f_px)
+        with self.m.phase("gpu"):
+            gaussians = self._run_inference(arr, f_px)
         inference_ms = (time.perf_counter() - t_inf) * 1000
         log.info(
             f"[{request_id}] inference: predict_image done in "
@@ -248,12 +245,13 @@ class SharpInference:
         )
 
         t_up = time.perf_counter()
-        result_url = upload_to_s3(
-            data_bytes=splat_bytes,
-            bucket=image_bucket,
-            folder="sharp_results",
-            extension="splat",
-        )
+        with self.m.phase("upload"):
+            result_url = upload_to_s3(
+                data_bytes=splat_bytes,
+                bucket=image_bucket,
+                folder="sharp_results",
+                extension="splat",
+            )
         log.info(
             f"[{request_id}] upload: s3 put done in "
             f"{(time.perf_counter() - t_up) * 1000:.0f}ms; url={result_url}"
@@ -265,6 +263,8 @@ class SharpInference:
             f"(inference={inference_ms:.0f}ms)"
         )
 
+        self.m.batch(1)
+        self.m.push()
         return {
             "result_url": result_url,
             "splat_size_bytes": len(splat_bytes),
@@ -325,36 +325,3 @@ class SharpInference:
                 intrinsics_resized,
                 internal_shape,
             )
-
-
-@app.function(image=sharp_thin_image, timeout=120)
-@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-def submit(payload: dict[str, Any]) -> dict[str, Any]:
-    """Kick off inference asynchronously; client polls /poll with the call_id."""
-
-    request_id = uuid.uuid4().hex[:8]
-    image_bucket = payload.get("image_bucket")
-    image_key = payload.get("image_key")
-    log.info(
-        f"[{request_id}] submit: received; bucket={image_bucket} key={image_key}"
-    )
-
-    if not image_bucket or not image_key:
-        log.warning(f"[{request_id}] submit: missing image_bucket or image_key")
-        return {"error": "image_bucket and image_key are required"}
-
-    call = SharpInference().generate.spawn(
-        image_bucket=image_bucket,
-        image_key=image_key,
-        request_id=request_id,
-    )
-    log.info(f"[{request_id}] submit: spawned call_id={call.object_id}")
-    return {"call_id": call.object_id, "request_id": request_id}
-
-
-@app.function(image=sharp_thin_image, timeout=120)
-@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-def poll(payload: dict[str, Any]) -> dict[str, Any]:
-    """Non-blocking status check; returns running / done / failed / expired."""
-
-    return poll_function_call(payload.get("call_id"), log)

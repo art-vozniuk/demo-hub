@@ -8,16 +8,7 @@ class Config(BaseSettings):
     ENV: str = "local"
     SENTRY_DSN: str | None = None
 
-    # Every Modal app exposes a submit + poll endpoint pair (uniform shape,
-    # also dodges Modal's ~60s sync gateway cap on cold starts).
-    MODAL_GENERATIVE_SUBMIT_URL: str | None = None
-    MODAL_GENERATIVE_POLL_URL: str | None = None
-    MODAL_GENERATIVE_T2I_SUBMIT_URL: str | None = None
-    MODAL_GENERATIVE_T2I_POLL_URL: str | None = None
-    MODAL_SHARP_SUBMIT_URL: str | None = None
-    MODAL_SHARP_POLL_URL: str | None = None
-    MODAL_TRELLIS_SUBMIT_URL: str | None = None
-    MODAL_TRELLIS_POLL_URL: str | None = None
+    # Modal proxy-auth token (Modal-Key/Modal-Secret on requires_proxy_auth).
     MODAL_PROXY_AUTH_TOKEN_ID: str | None = None
     MODAL_PROXY_AUTH_TOKEN_SECRET: str | None = None
 

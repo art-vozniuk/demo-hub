@@ -1,4 +1,8 @@
-"""FLUX.1 [schnell] text-to-image on L40S."""
+"""FLUX.1 [schnell] text-to-image on L40S.
+
+Endpoint-less: invoked by name through the gateway. Per-phase metrics
+via InferenceMetrics.
+"""
 
 from __future__ import annotations
 
@@ -14,8 +18,8 @@ from common.lib import (
     MODEL_DIR,
     configure_logging,
     make_app,
-    poll_function_call,
 )
+from common.metrics import InferenceMetrics
 
 
 MODEL_REPO = "black-forest-labs/FLUX.1-schnell"
@@ -42,6 +46,7 @@ flux_image = (
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
         "boto3==1.35.92",
+        "prometheus-client==0.20.0",
     )
     .env(
         {
@@ -50,17 +55,7 @@ flux_image = (
             "TRANSFORMERS_OFFLINE": "0",
         }
     )
-    .add_local_python_source("common.lib")
-)
-
-
-flux_thin_image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .pip_install(
-        "fastapi[standard]==0.115.6",
-        "pydantic==2.10.3",
-    )
-    .add_local_python_source("common.lib")
+    .add_local_python_source("common.lib", "common.metrics")
 )
 
 
@@ -114,7 +109,10 @@ def preload_weights() -> str:
     scaledown_window=1,
     timeout=600,
     enable_memory_snapshot=True,
-    secrets=[modal.Secret.from_name("supabase-s3")],
+    secrets=[
+        modal.Secret.from_name("supabase-s3"),
+        modal.Secret.from_name("pushgateway"),
+    ],
 )
 @modal.concurrent(max_inputs=1)
 class FluxT2IInference:
@@ -133,26 +131,35 @@ class FluxT2IInference:
     def move_to_gpu(self) -> None:
         t0 = time.perf_counter()
         self.pipe.to("cuda")
-        ms = (time.perf_counter() - t0) * 1000
-        log.info(f"post-restore: pipe.to(cuda) in {ms:.0f}ms")
+        gpu_dt = time.perf_counter() - t0
+        log.info(f"post-restore: pipe.to(cuda) in {gpu_dt * 1000:.0f}ms")
+
+        # Built here (snap=False) so each container gets its own identity.
+        self.m = InferenceMetrics("generative_t2i", "L40S")
+        self.m.cold_start("to_cuda", gpu_dt)
+        self.m.push()
+
+    @modal.exit()
+    async def cleanup(self) -> None:
+        self.m.push_uptime()
 
     @modal.method()
-    def generate(
-        self,
-        prompt: str,
-        request_id: str,
-        output_bucket: str,
-        seed: int | None = None,
-        num_inference_steps: int = 4,
-        guidance_scale: float = 0.0,
-        width: int = 1024,
-        height: int = 1024,
-    ) -> dict[str, Any]:
+    def generate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        request_id = uuid.uuid4().hex[:8]
+        prompt = payload["prompt"]
+        output_bucket = payload["output_bucket"]
+        seed = payload.get("seed")
+        num_inference_steps = payload.get("num_inference_steps") or 4
+        guidance_scale = payload.get("guidance_scale", 0.0)
+        width = payload.get("width") or 1024
+        height = payload.get("height") or 1024
+
         log.info(
             f"[{request_id}] inference: start; prompt_len={len(prompt)} "
             f"steps={num_inference_steps} guidance={guidance_scale} seed={seed}"
         )
         t0 = time.perf_counter()
+        self.m.batch(1)
 
         generator = None
         if seed is not None:
@@ -163,23 +170,19 @@ class FluxT2IInference:
             f"[{request_id}] inference: pipe(...) call begin; "
             f"prompt={prompt[:80]!r}{'...' if len(prompt) > 80 else ''}"
         )
-        out = self.pipe(
-            prompt=prompt,
-            guidance_scale=guidance_scale,
-            num_inference_steps=num_inference_steps,
-            width=width,
-            height=height,
-            generator=generator,
-        )
+        with self.m.phase("gpu"):
+            out = self.pipe(
+                prompt=prompt,
+                guidance_scale=guidance_scale,
+                num_inference_steps=num_inference_steps,
+                width=width,
+                height=height,
+                generator=generator,
+            )
         inference_ms = (time.perf_counter() - t_inf) * 1000
         log.info(
             f"[{request_id}] inference: pipe(...) returned in {inference_ms:.0f}ms"
         )
-
-        result_image = out.images[0]
-        buf = io.BytesIO()
-        result_image.save(buf, format="PNG")
-        png_bytes = buf.getvalue()
 
         # Inlined upload — Sharp consumes bucket+key, so we build the key locally
         # instead of parsing it back out of common.lib.upload_to_s3's URL.
@@ -188,14 +191,19 @@ class FluxT2IInference:
 
         image_key = f"generative_t2i_results/{uuid.uuid4().hex}.png"
         t_up = time.perf_counter()
-        boto3.client(
-            "s3",
-            aws_access_key_id=os.environ["S3_ACCESS_KEY_ID"],
-            aws_secret_access_key=os.environ["S3_ACCESS_KEY_SECRET"],
-            endpoint_url=os.environ["S3_ENDPOINT"],
-            region_name=os.environ["S3_REGION"],
-            config=BotoConfig(retries={"max_attempts": 5, "mode": "adaptive"}),
-        ).put_object(Bucket=output_bucket, Key=image_key, Body=png_bytes)
+        with self.m.phase("upload"):
+            result_image = out.images[0]
+            buf = io.BytesIO()
+            result_image.save(buf, format="PNG")
+            png_bytes = buf.getvalue()
+            boto3.client(
+                "s3",
+                aws_access_key_id=os.environ["S3_ACCESS_KEY_ID"],
+                aws_secret_access_key=os.environ["S3_ACCESS_KEY_SECRET"],
+                endpoint_url=os.environ["S3_ENDPOINT"],
+                region_name=os.environ["S3_REGION"],
+                config=BotoConfig(retries={"max_attempts": 5, "mode": "adaptive"}),
+            ).put_object(Bucket=output_bucket, Key=image_key, Body=png_bytes)
         result_url = f"{os.environ['S3_PUBLIC_BUCKETS_ENDPOINT']}/{output_bucket}/{image_key}"
         upload_ms = (time.perf_counter() - t_up) * 1000
 
@@ -208,6 +216,7 @@ class FluxT2IInference:
             f"total_ms={total_ms:.0f} url={result_url}"
         )
 
+        self.m.push()
         return {
             "result_url": result_url,
             "image_bucket": output_bucket,
@@ -216,47 +225,3 @@ class FluxT2IInference:
             "height": result_image.height,
             "seed": seed,
         }
-
-
-@app.function(image=flux_thin_image, timeout=120)
-@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-def submit(payload: dict[str, Any]) -> dict[str, Any]:
-    request_id = uuid.uuid4().hex[:8]
-    prompt = payload.get("prompt")
-    log.info(
-        f"[{request_id}] submit: received; prompt_len={len(prompt) if prompt else 0}"
-    )
-    if not prompt:
-        log.warning(f"[{request_id}] submit: missing prompt")
-        return {"error": "prompt is required"}
-
-    output_bucket = payload.get("output_bucket")
-    if not output_bucket:
-        log.warning(f"[{request_id}] submit: missing output_bucket")
-        return {"error": "output_bucket is required"}
-
-    seed_raw = payload.get("seed")
-    seed = int(seed_raw) if seed_raw is not None else None
-    num_inference_steps = int(payload.get("num_inference_steps", 4))
-    guidance_scale = float(payload.get("guidance_scale", 0.0))
-    width = int(payload.get("width", 1024))
-    height = int(payload.get("height", 1024))
-
-    call = FluxT2IInference().generate.spawn(
-        request_id=request_id,
-        prompt=prompt,
-        output_bucket=output_bucket,
-        seed=seed,
-        num_inference_steps=num_inference_steps,
-        guidance_scale=guidance_scale,
-        width=width,
-        height=height,
-    )
-    log.info(f"[{request_id}] submit: spawned call_id={call.object_id}")
-    return {"call_id": call.object_id, "request_id": request_id}
-
-
-@app.function(image=flux_thin_image, timeout=120)
-@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-def poll(payload: dict[str, Any]) -> dict[str, Any]:
-    return poll_function_call(payload.get("call_id"), log)

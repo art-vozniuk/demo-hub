@@ -69,27 +69,23 @@ Modal's free/Starter tier caps **web functions at 8 per workspace**. Today
 
 ### A. Modal apps — CI/CD
 
-Workflow: **`.github/workflows/deploy-modal.yml`**
+Modal deploys run in the **`deploy-modal` job of
+`.github/workflows/deploy-core-infra.yml`** (manual `workflow_dispatch`,
+alongside the VDS deploy).
 
-- **Triggers:** manual `workflow_dispatch` only (pick `changed` / `all` / a
-  single app) — prod Modal deploys are deliberate, never an automatic
-  side effect of merging to `main` (matches `deploy-core-infra.yml`). Re-add
-  a `push` trigger in the workflow if you later want deploy-on-merge.
-- **Per-app gating:** deploys an app only when its files (or
-  `services/modal/common/`) changed since the `last-modal-deploy` tag — so a
-  one-line edit doesn't redeploy every GPU app and pay N cold starts.
-- **Auth:** repo secrets `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` (a Modal service
-  token). Give that service account **Contributor on the `main` environment
-  only**. `MODAL_ENVIRONMENT=main` is set by the workflow.
-- The gateway step is present but commented out (see the cap section).
+- **Per-app gating:** an app deploys only when its own dir — or
+  `services/modal/common/`, which ships into every app — changed since the
+  `last-deploy` tag (same detection as the service images).
+- **Order:** endpoint-less model apps first, **gateway last**, so the
+  8-web-function cap is never exceeded mid-deploy; prod ends at the gateway's 2.
+- **Auth:** repo secrets `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` (Modal service
+  token, Contributor on `main`); `MODAL_ENVIRONMENT=main` set by the job.
+- The shared `last-deploy` tag advances (in the `tag` job) only after BOTH the
+  VDS and Modal deploys succeed.
 
-**Seed the marker tag once** so the first run after this lands doesn't redeploy
-everything at once:
-
-```bash
-git tag last-modal-deploy <commit-already-live-on-main>
-git push origin last-modal-deploy
-```
+**Bootstrap once:** deploy the gateway to `main` to learn its URLs, then set repo
+secrets `MODAL_GATEWAY_SUBMIT_URL` / `MODAL_GATEWAY_POLL_URL` (baked into the
+dispatch image at build). The old per-app `MODAL_*_URL` repo secrets are unused.
 
 **Prerequisites in the `main` environment** (create once, values = prod):
 
