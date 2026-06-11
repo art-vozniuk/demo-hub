@@ -1,10 +1,5 @@
-"""Cross-app submit/poll used by the single web gateway.
-
-Only the gateway app exposes web endpoints (Modal's free tier caps them
-per workspace); it routes spawn calls to the per-model apps by name, so
-each model keeps its own deploy with an isolated image + memory snapshot.
-The spawn/poll mechanics live here once instead of being copied per app.
-"""
+"""Cross-app submit/poll for the single web gateway: route payload["model"]
+to a per-model app's class by name (each model keeps its own deploy)."""
 
 from __future__ import annotations
 
@@ -21,9 +16,6 @@ def submit(
     payload: Mapping[str, Any],
     log,
 ) -> dict[str, Any]:
-    """Route payload["model"] -> (app_name, class_name) and spawn that
-    class's `generate` with the raw payload. Returns a call_id to poll."""
-
     model = payload.get("model")
     route = routes.get(model) if isinstance(model, str) else None
     request_id = uuid.uuid4().hex[:8]

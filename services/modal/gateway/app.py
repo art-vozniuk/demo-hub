@@ -1,11 +1,5 @@
-"""Single web gateway — the only Modal app that exposes web endpoints.
-
-Modal's free tier caps web functions per workspace, so instead of a
-submit/poll pair per model (2 x N) we keep ONE pair here and route to the
-per-model apps by name (modal.Cls.from_name). Each model app exposes no
-web function of its own — just its GPU class + preload, invoked here.
-Adding a model = one ROUTES entry, zero new web functions.
-"""
+"""Single web gateway — the only Modal app with web endpoints (free tier caps
+them). Routes payload["model"] to per-model apps; add a model = one ROUTES row."""
 
 from __future__ import annotations
 
@@ -27,17 +21,14 @@ image = (
 )
 
 
-# payload["model"] (sent by dispatch) -> (app_name, class_name). The class
-# must expose a `generate` method accepting the raw payload dict.
+# payload["model"] -> (app_name, class_name); class exposes generate(payload).
 ROUTES: dict[str, tuple[str, str]] = {
     "flux_opt_a10g": ("demo-hub-flux-opt", "FluxOptA10G"),
     "flux_opt_h100": ("demo-hub-flux-opt", "FluxOptH100"),
-    # To migrate a live model: drop its own web endpoints, make generate()
-    # take the raw payload dict, then enable its route here.
-    # "generative_editing": ("demo-hub-flux-opt", "FluxOptA10G"),
-    # "sharp":              ("demo-hub-sharp", "SharpInference"),
-    # "trellis":            ("demo-hub-trellis", "TrellisInference"),
-    # "generative_t2i":     ("demo-hub-flux-t2i", "FluxT2IInference"),
+    # migrate a live model: drop its web endpoints + generate(payload), enable here
+    # "sharp":   ("demo-hub-sharp", "SharpInference"),
+    # "trellis": ("demo-hub-trellis", "TrellisInference"),
+    # "generative_t2i": ("demo-hub-flux-t2i", "FluxT2IInference"),
 }
 
 

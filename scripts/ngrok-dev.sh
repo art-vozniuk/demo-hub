@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
-# Per-session dev tunnel: expose the local nginx (:8080) via ngrok and push the
-# public URL into the dev Modal `pushgateway` secret, so dev flux_opt containers
-# push metrics back to the LOCAL Pushgateway -> Grafana.
-#
-# Detached + idempotent: kills any running ngrok first (ngrok free allows one
-# agent session anyway). One-time env/secret setup lives in setup-modal-dev.sh;
-# this only (re)starts the tunnel and refreshes the URL each session.
+# Expose local nginx (:8080) via ngrok, push the URL into the dev Modal
+# `pushgateway` secret. Detached; kills any running ngrok first.
 set -euo pipefail
 
 PORT="${NGROK_PORT:-8080}"

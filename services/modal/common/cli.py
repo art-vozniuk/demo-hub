@@ -10,10 +10,29 @@ sys.path and chdirs into it, so `modal deploy flux/app.py` and the
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+
+def _load_env_file() -> None:
+    """Load services/modal/.env if present (absent in CI → default `main`);
+    never overrides an already-set var, so shell/CI win."""
+
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.is_file():
+        return
+    for raw in env_path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+
+
+_load_env_file()
 
 
 def _run_streaming(cmd: list[str]) -> str:
