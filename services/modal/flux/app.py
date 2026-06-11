@@ -115,7 +115,7 @@ def preload_weights() -> str:
     image=flux_image,
     gpu="A10G",
     volumes={MODEL_DIR: volume},
-    scaledown_window=1,
+    scaledown_window=2,
     timeout=600,
     enable_memory_snapshot=True,
     secrets=[
