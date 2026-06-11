@@ -20,6 +20,7 @@ from common.lib import (
     make_app,
 )
 from common.metrics import InferenceMetrics
+from common.sentry import init_sentry
 
 
 MODEL_REPO = "black-forest-labs/FLUX.1-schnell"
@@ -47,6 +48,7 @@ flux_image = (
         "pydantic==2.10.3",
         "boto3==1.35.92",
         "prometheus-client==0.20.0",
+        "sentry-sdk>=2.42.0",
     )
     .env(
         {
@@ -55,7 +57,7 @@ flux_image = (
             "TRANSFORMERS_OFFLINE": "0",
         }
     )
-    .add_local_python_source("common.lib", "common.metrics")
+    .add_local_python_source("common.lib", "common.metrics", "common.sentry")
 )
 
 
@@ -112,6 +114,7 @@ def preload_weights() -> str:
     secrets=[
         modal.Secret.from_name("supabase-s3"),
         modal.Secret.from_name("pushgateway"),
+        modal.Secret.from_name("sentry"),
     ],
 )
 @modal.concurrent(max_inputs=1)
@@ -129,6 +132,7 @@ class FluxT2IInference:
 
     @modal.enter(snap=False)
     def move_to_gpu(self) -> None:
+        init_sentry("generative_t2i")
         t0 = time.perf_counter()
         self.pipe.to("cuda")
         gpu_dt = time.perf_counter() - t0

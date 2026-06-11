@@ -22,6 +22,7 @@ from common.lib import (
     upload_to_s3,
 )
 from common.metrics import InferenceMetrics
+from common.sentry import init_sentry
 
 
 MODEL_REPO = "black-forest-labs/FLUX.2-klein-4B"
@@ -49,6 +50,7 @@ flux_image = (
         "pydantic==2.10.3",
         "boto3==1.35.92",
         "prometheus-client==0.20.0",
+        "sentry-sdk>=2.42.0",
     )
     .env(
         {
@@ -58,7 +60,7 @@ flux_image = (
         }
     )
     # Modal no longer auto-mounts sibling files; ship common.lib explicitly.
-    .add_local_python_source("common.lib", "common.metrics")
+    .add_local_python_source("common.lib", "common.metrics", "common.sentry")
 )
 
 
@@ -121,6 +123,7 @@ def preload_weights() -> str:
     secrets=[
         modal.Secret.from_name("supabase-s3"),
         modal.Secret.from_name("pushgateway"),
+        modal.Secret.from_name("sentry"),
     ],
     #min_containers=1,
 )
@@ -157,6 +160,7 @@ class FluxInference:
         Cheap because weights are already in RAM — we just shuttle them
         across PCIe to the A10G."""
 
+        init_sentry("flux")
         log.info(
             "post-restore: move_to_gpu() begin; runs after each container "
             "start, with the GPU now attached"

@@ -25,6 +25,7 @@ from common.lib import (
     upload_to_s3,
 )
 from common.metrics import InferenceMetrics
+from common.sentry import init_sentry
 
 
 MODEL_REPO = "microsoft/TRELLIS.2-4B"
@@ -113,6 +114,7 @@ trellis_image = (
         "pydantic==2.10.3",
         "boto3==1.35.92",
         "prometheus-client==0.20.0",
+        "sentry-sdk>=2.42.0",
         extra_options="--extra-index-url https://download.pytorch.org/whl/cu124",
     )
     .env(
@@ -152,7 +154,7 @@ trellis_image = (
         "pip install git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8",
         gpu="A10G",
     )
-    .add_local_python_source("common.lib", "common.metrics")
+    .add_local_python_source("common.lib", "common.metrics", "common.sentry")
 )
 
 
@@ -370,6 +372,7 @@ def preload_weights() -> str:
     secrets=[
         modal.Secret.from_name("supabase-s3"),
         modal.Secret.from_name("pushgateway"),
+        modal.Secret.from_name("sentry"),
         # Belt-and-suspenders for HF deps the preload missed.
         modal.Secret.from_name("huggingface", required_keys=[]),
     ],
@@ -420,6 +423,7 @@ class TrellisInference:
 
     @modal.enter(snap=False)
     def post_restore(self) -> None:
+        init_sentry("trellis")
         # Built here (snap=False) so each container gets its own identity.
         self.m = InferenceMetrics("trellis", "L40S")
         self.m.cold_start("to_cuda", getattr(self, "_to_cuda_s", 0.0))

@@ -23,6 +23,7 @@ from common.lib import (
     make_app,
 )
 from common.metrics import InferenceMetrics
+from common.sentry import init_sentry
 
 
 MODEL_REPO = "black-forest-labs/FLUX.2-klein-4B"
@@ -50,6 +51,7 @@ flux_image = (
         "pydantic==2.10.3",
         "aioboto3==13.2.0",
         "prometheus-client==0.20.0",
+        "sentry-sdk>=2.42.0",
     )
     .env(
         {
@@ -58,7 +60,7 @@ flux_image = (
             "TRANSFORMERS_OFFLINE": "0",
         }
     )
-    .add_local_python_source("common.lib", "common.metrics")
+    .add_local_python_source("common.lib", "common.metrics", "common.sentry")
 )
 
 
@@ -113,6 +115,7 @@ class _FluxOptBase:
 
     @modal.enter(snap=False)
     async def move_to_gpu(self) -> None:
+        init_sentry(self.CONFIG)
         # Built here (snap=False) so each container gets its own identity.
         self.m = InferenceMetrics(self.CONFIG, self.GPU_NAME)
         self.m.cold_start(
@@ -241,6 +244,7 @@ class _FluxOptBase:
     secrets=[
         modal.Secret.from_name("supabase-s3"),
         modal.Secret.from_name("pushgateway"),
+        modal.Secret.from_name("sentry"),
     ],
 )
 @modal.concurrent(max_inputs=4)
@@ -264,6 +268,7 @@ class FluxOptA10G(_FluxOptBase):
     secrets=[
         modal.Secret.from_name("supabase-s3"),
         modal.Secret.from_name("pushgateway"),
+        modal.Secret.from_name("sentry"),
     ],
 )
 class FluxOptH100(_FluxOptBase):

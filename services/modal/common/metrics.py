@@ -9,10 +9,13 @@ prefix so one Grafana dashboard covers every pipeline (filter by `config`).
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 import uuid
 from contextlib import contextmanager
+
+log = logging.getLogger("inference.metrics")
 
 _COLD = (0.5, 1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120)
 _PHASE = (0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120)
@@ -51,7 +54,10 @@ def _push(registry, config: str, container_id: str) -> None:
             **kw,
         )
     except Exception:
-        pass
+        # Don't fail inference on a metrics push; surface in logs + Sentry.
+        log.error(
+            "pushgateway push failed (url=%s config=%s)", url, config, exc_info=True
+        )
 
 
 class InferenceMetrics:

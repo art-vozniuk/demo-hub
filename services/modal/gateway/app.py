@@ -9,15 +9,19 @@ import modal
 
 from common.lib import configure_logging
 from common.gateway import submit as gw_submit, poll as gw_poll
+from common.sentry import init_sentry
 
 
 log = configure_logging("gateway")
 app = modal.App("demo-hub-gateway")
 
+# No snapshot here, so init at import (no DSN locally -> no-op).
+init_sentry("gateway")
+
 image = (
     modal.Image.debian_slim(python_version="3.12")
-    .pip_install("fastapi[standard]==0.115.6", "pydantic==2.10.3")
-    .add_local_python_source("common.lib", "common.gateway")
+    .pip_install("fastapi[standard]==0.115.6", "pydantic==2.10.3", "sentry-sdk>=2.42.0")
+    .add_local_python_source("common.lib", "common.gateway", "common.sentry")
 )
 
 
@@ -33,13 +37,13 @@ ROUTES: dict[str, tuple[str, str]] = {
 }
 
 
-@app.function(image=image, timeout=120)
+@app.function(image=image, timeout=120, secrets=[modal.Secret.from_name("sentry")])
 @modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
 def submit(payload: dict[str, Any]) -> dict[str, Any]:
     return gw_submit(ROUTES, payload, log)
 
 
-@app.function(image=image, timeout=120)
+@app.function(image=image, timeout=120, secrets=[modal.Secret.from_name("sentry")])
 @modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
 def poll(payload: dict[str, Any]) -> dict[str, Any]:
     return gw_poll(payload, log)

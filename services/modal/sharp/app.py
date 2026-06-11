@@ -26,6 +26,7 @@ from common.lib import (
     upload_to_s3,
 )
 from common.metrics import InferenceMetrics
+from common.sentry import init_sentry
 
 
 CHECKPOINT_URL = "https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh.pt"
@@ -53,6 +54,7 @@ sharp_image = (
         "pydantic==2.10.3",
         "boto3==1.35.92",
         "prometheus-client==0.20.0",
+        "sentry-sdk>=2.42.0",
         # ml-sharp is GitHub-only; pin to a commit once Apple ships a release.
         "git+https://github.com/apple/ml-sharp.git",
     )
@@ -60,7 +62,7 @@ sharp_image = (
     # common.sharp_utils explicitly. (sharp_utils lives under common/
     # rather than sharp/ to avoid clashing with the ml-sharp pip
     # package's own `sharp` namespace.)
-    .add_local_python_source("common.lib", "common.sharp_utils", "common.metrics")
+    .add_local_python_source("common.lib", "common.sharp_utils", "common.metrics", "common.sentry")
 )
 
 
@@ -146,6 +148,7 @@ def preload_weights() -> str:
     secrets=[
         modal.Secret.from_name("supabase-s3"),
         modal.Secret.from_name("pushgateway"),
+        modal.Secret.from_name("sentry"),
     ],
     #min_containers=1,
 )
@@ -181,6 +184,7 @@ class SharpInference:
     def move_to_gpu(self) -> None:
         """Post-restore hook: shuttle preloaded weights to the GPU."""
 
+        init_sentry("sharp")
         log.info("post-restore: move_to_gpu() begin (GPU now attached)")
         t0 = time.perf_counter()
         self.predictor.to("cuda")
