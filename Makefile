@@ -168,3 +168,6 @@ deploy-web:
 
 deploy-services:
 	docker compose -f docker-compose.local.yml up --build web core compute dispatch --detach
+
+deploy-prom:
+	docker compose -f docker-compose.local.yml up --build pushgateway grafana prometheus --detach
