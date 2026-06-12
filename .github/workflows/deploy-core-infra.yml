@@ -73,9 +73,8 @@ jobs:
           echo "compute=$has_compute"   >> $GITHUB_OUTPUT
           echo "dispatch=$has_dispatch" >> $GITHUB_OUTPUT
 
-          # Modal apps: per-app dir, services/modal/common/ (ships into
-          # all), or the modal deploy workflow itself (same rationale as
-          # the build-<svc>.yml detection above).
+          # Modal apps: per-app dir, common/ (ships into all), or the deploy
+          # workflow itself (same rationale as build-<svc>.yml above).
           mc=false
           echo "$changed" | grep -qE '^services/modal/common/|^\.github/workflows/deploy-modal\.yml$' && mc=true
           for a in flux flux_opt sharp trellis flux_t2i gateway; do
@@ -177,12 +176,8 @@ jobs:
             CERTBOT_DOMAINS=${CERTBOT_DOMAINS}
             EOF
 
-            # docker-compose.yml bind-mounts nginx/otel.htpasswd into nginx
-            # (basic-auth for Modal's OTLP metric pushes). Ensure it exists as
-            # a FILE before `up`, or Docker creates a directory at that path.
-            # Empty => /otel/ 403 (Modal metrics blocked, site still up) until
-            # the real credential is set:
-            #   htpasswd -B -c nginx/otel.htpasswd otel
+            # Must exist as a FILE before `up` or Docker creates a directory.
+            # Empty file => /otel/ 403 until the real credential is set.
             [ -f nginx/otel.htpasswd ] || touch nginx/otel.htpasswd
 
             # Download renderer data files from GitHub Releases to serve statically.
@@ -240,9 +235,7 @@ jobs:
 
             echo "Deployment completed successfully!"
 
-  # Deploy changed Modal apps to the `main` environment. Lives in its own
-  # reusable workflow (deploy-modal.yml): model apps fan out in parallel,
-  # gateway strictly after them (its ROUTES point at apps by name).
+  # Model apps fan out in parallel, gateway after (see deploy-modal.yml).
   deploy-modal:
     needs: [check-changes]
     if: |

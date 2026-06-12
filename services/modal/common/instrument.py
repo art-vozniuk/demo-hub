@@ -1,28 +1,16 @@
-"""Per-request instrumentation for Modal inference apps.
+"""Per-request instrumentation for Modal inference apps. Nothing is pushed:
+each generate() call attaches an `_obs` block (phase timings, cold-start
+info on the container's first response, batch size, GPU) to its result and
+dispatch turns it into Prometheus observations. Sentry tracing continues
+from the payload.
 
-Nothing is pushed from containers. Each generate() call produces an
-`_obs` block attached to its response — phase timings, cold-start info
-(first response of a container only), batch size, GPU type — and the
-dispatch worker turns it into Prometheus observations where a normal
-scrape cadence exists. Sentry tracing is continued from the payload so
-the container's phases land in the same waterfall as the API call and
-the dispatch transaction.
+Usage: build one InferenceRunner per container in the snap=False enter
+hook, then in generate():
 
-Usage (one runner per container, built in the snap=False enter hook):
-
-    self.runner = InferenceRunner(
-        config="flux", gpu="A10G", scaledown_window_s=2,
-        log=log, cold={"snapshot_load": snap_s, "to_cuda": cuda_s},
-    )
-
-    @modal.method()
-    def generate(self, payload):
-        with self.runner.start(payload) as run:
-            with run.phase("download"):
-                ...
-            with run.phase("gpu"):
-                ...
-            return run.finish({"result_url": url})
+    with self.runner.start(payload) as run:
+        with run.phase("download"):
+            ...
+        return run.finish({"result_url": url})
 """
 
 from __future__ import annotations

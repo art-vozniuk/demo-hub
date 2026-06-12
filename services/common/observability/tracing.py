@@ -1,15 +1,6 @@
-"""Sentry trace propagation across process boundaries.
-
-One pipeline = one Sentry trace. The FastAPI integration starts the
-trace on POST /pipelines/queue; these helpers carry it over the two
-non-HTTP hops where nothing propagates automatically:
-
-  core --(RabbitMQ message)--> dispatch --(Modal payload)--> container
-
-`trace_headers()` snapshots the ambient trace into a plain dict that
-rides inside the message/payload; `continue_trace_from()` resumes it on
-the other side as a new transaction. Everything degrades to a no-op
-when Sentry has no DSN (tests, local runs without Sentry).
+"""Sentry trace propagation over the non-HTTP hops (core → RabbitMQ →
+dispatch → Modal payload), so one pipeline = one trace. All helpers are
+no-ops when Sentry has no DSN.
 """
 
 from __future__ import annotations
@@ -44,11 +35,7 @@ def continue_trace_from(
     name: str,
     tags: Mapping[str, str] | None = None,
 ) -> Iterator[None]:
-    """Resume the trace embedded in `carrier` inside a new transaction.
-
-    Starts a fresh trace when the carrier has no sentry keys, so a
-    directly-published message still produces a complete transaction.
-    """
+    """Resume the trace embedded in `carrier` (or start a fresh one)."""
 
     transaction = sentry_sdk.continue_trace(
         {

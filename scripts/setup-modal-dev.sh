@@ -29,10 +29,7 @@ else
     modal environment create "${ENV_NAME}" || echo "    (create failed — it may already exist)"
 fi
 
-# NOTE: no metrics secret needed. Containers return their timings inside
-# generate() responses (dispatch records them), and Modal's workspace-level
-# OpenTelemetry integration pushes system metrics straight to the prod
-# Prometheus — dev runs are visible there under environment_name="dev".
+# No metrics secret needed: timings ride back in generate() responses.
 
 # ---- supabase-s3 + huggingface secrets (dev) -------------------------------
 # These mirror the values already used in main. The script doesn't know them,

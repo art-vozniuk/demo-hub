@@ -1,26 +1,7 @@
-"""Canonical metric definitions for the platform.
-
-Everything is scraped — there is no push path. Modal containers return
-their per-request timings inside the generate() response (`_obs` block,
-see services/modal/common/instrument.py) and the dispatch worker turns
-them into histogram observations here, where Prometheus scrapes them on
-a normal cadence and rate()/increase() behave.
-
-Groups:
-
-  - Pipeline stages (dispatch): queue wait, whole-pipeline wall time,
-    failures — the user-visible decomposition.
-  - Modal HTTP edge (dispatch): submit/poll call durations, statuses,
-    retries.
-  - Inference internals (dispatch, from Modal-returned timings): phase
-    wall times, cold starts, batch size, estimated GPU cost.
-  - Core service health: HTTP per-route, DB query durations, RabbitMQ
-    publishes, end-to-end pipeline latency.
-
-All names share the `demo_hub_` prefix. Labels are kept low-cardinality
-on purpose — every new dimension costs Prometheus series. Bucket edges
-derive from services/common/constants.py so deadlines and histograms
-cannot drift apart.
+"""Canonical demo_hub_* metric definitions. Everything is scraped — Modal
+containers return timings inside generate() responses (`_obs` block) and
+the dispatch worker records them here. Buckets derive from
+services/common/constants.py so deadlines and histograms can't drift.
 """
 
 from __future__ import annotations
@@ -122,9 +103,8 @@ modal_overhead_seconds = Histogram(
 
 estimated_gpu_seconds_total = Counter(
     "demo_hub_estimated_gpu_seconds_total",
-    "Approximate billable GPU seconds derived from per-request timings "
-    "(work + cold start + scaledown tail per container session). The "
-    "authoritative source is Modal billing / modal.container.running.",
+    "Approx billable GPU seconds from per-request timings; authoritative "
+    "source is Modal billing / modal.container.running.",
     ["config", "gpu"],
 )
 

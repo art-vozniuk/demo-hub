@@ -1,7 +1,5 @@
-"""Guards the mirror between services/common/constants.py (canonical)
-and services/modal/common/constants.py (shipped into Modal images,
-which cannot import services.common). If this fails, someone changed
-one copy — update the other."""
+"""Guards the mirror between services/common/constants.py and
+services/modal/common/constants.py — if it fails, update the other copy."""
 
 import importlib.util
 from pathlib import Path

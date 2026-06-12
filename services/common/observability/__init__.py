@@ -1,17 +1,6 @@
-"""Prometheus instrumentation shared across services.
-
-One consumption shape: every long-lived service exposes a `/metrics`
-endpoint that Prometheus scrapes — core via a FastAPI route,
-dispatch/compute via `start_metrics_server(port)`. Ephemeral Modal
-containers do NOT push anywhere; they return per-request timings inside
-the generate() response and dispatch records them (see
-services/common/observability/metrics.py).
-
-All metric names use the `demo_hub_` prefix so they're easy to filter
-in Grafana, and every metric is registered against `REGISTRY` (the
-default process registry) so prometheus_client's standard scrape format
-works without extra wiring. Histogram buckets come from
-services/common/constants.py.
+"""Prometheus instrumentation shared across services: every long-lived
+service exposes /metrics for scraping (no push path anywhere). Metric
+definitions live in metrics.py, buckets in services/common/constants.py.
 """
 
 from __future__ import annotations

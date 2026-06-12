@@ -122,8 +122,7 @@ async def _process_pipeline(
         "pipeline_name": pipeline_name,
         "input": resolved_input,
         "enqueued_at": datetime.now(timezone.utc).isoformat(),
-        # Sentry trace context: the dispatch worker resumes this trace so
-        # one pipeline shows up as one waterfall (API → queue → Modal).
+        # Sentry trace context — dispatch resumes it.
         **trace_headers(),
     }
 
@@ -142,9 +141,7 @@ async def queue_pipelines(
     db: DbSession,
     user: User = Depends(_get_user_dep()),
 ) -> QueuePipelinesResponse:
-    # trace_id is a client-generated batch id (one frontend submit may
-    # queue several pipelines). Stored on the row for grouping; NOT used
-    # for tracing — Sentry owns correlation now.
+    # Client-generated batch id, stored for grouping; Sentry owns tracing.
     trace_id = request.trace_id
 
     log.info(f"Received queue request with {len(request.jobs)} jobs")

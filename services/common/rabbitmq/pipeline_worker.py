@@ -110,8 +110,7 @@ class PipelineWorker:
 
     @staticmethod
     def _queue_wait_seconds(message: Mapping[str, Any]) -> float | None:
-        """Time the job sat in RabbitMQ. Core and workers run on the same
-        host, so wall-clock comparison is safe."""
+        """Time the job sat in RabbitMQ (same host as core — wall clock ok)."""
 
         enqueued_at = message.get("enqueued_at")
         if not enqueued_at:

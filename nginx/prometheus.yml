@@ -4,15 +4,10 @@ global:
   external_labels:
     deployment: demo-hub
 
-# Modal's OpenTelemetry integration pushes workspace metrics
-# (modal.container.running, modal.gpu.*, modal.input_events.* — tagged
-# app_name/function_name/environment_name) straight into Prometheus's
-# native OTLP receiver. nginx fronts it at /otel/ with basic auth and
-# proxies to /api/v1/otlp/. Requires --web.enable-otlp-receiver on the
-# prometheus command line (docker-compose.yml).
+# Modal's OTel integration pushes modal.* workspace metrics into the native
+# OTLP receiver (nginx /otel/ → /api/v1/otlp/; needs --web.enable-otlp-receiver).
 otlp:
-  # Keep these resource attributes as real labels — they're how the
-  # Modal System dashboard slices by app and environment.
+  # Promoted to real labels — the Modal System dashboard slices on them.
   promote_resource_attributes:
     - app_name
     - function_name
@@ -22,13 +17,11 @@ otlp:
 
 storage:
   tsdb:
-    # Pushed OTLP samples can arrive late relative to the scrape
-    # timeline; allow a window of out-of-order appends.
+    # Pushed OTLP samples can arrive out of order vs the scrape timeline.
     out_of_order_time_window: 30m
 
-# Self-scrape plus our three long-lived services. Modal containers are
-# never scraped: their per-request timings come back inside generate()
-# responses and dispatch records them (services/common/observability).
+# Modal containers are never scraped — their timings come back inside
+# generate() responses and dispatch records them.
 scrape_configs:
   - job_name: prometheus
     static_configs:

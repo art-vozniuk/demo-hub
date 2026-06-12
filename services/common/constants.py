@@ -1,16 +1,9 @@
-"""Single source of truth for cross-service tunables whose values must
-agree with each other.
+"""Cross-service tunables that must agree with each other: any number used
+in more than one place (timeout + its histogram, poll interval + overhead
+math) lives here and everything derives from it.
 
-The rule: any number that appears in more than one place (a timeout AND
-the histogram that observes it, a poll interval AND the overhead math
-that subtracts it) lives here, and everything derives from it. Change
-the deadline → the buckets follow automatically.
-
-Modal app entrypoints (services/modal/*/app.py) cannot import this
-package — they ship only services/modal/common into their images — so
-the few values they need are mirrored in
-services/modal/common/constants.py and kept in lockstep by
-services/common/tests/test_constants_sync.py.
+Modal app entrypoints can't import this package; their few values are
+mirrored in services/modal/common/constants.py (guarded by a sync test).
 """
 
 from __future__ import annotations

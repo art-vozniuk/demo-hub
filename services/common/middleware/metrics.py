@@ -1,9 +1,5 @@
-"""HTTP RED metrics for FastAPI services.
-
-Records every request against the matched route *template*
-(/api/v1/pipelines/{pipeline_id}/estimate, not the concrete UUID path)
-so label cardinality stays bounded. Infra endpoints that Prometheus or
-the LB hit on a loop are excluded — they'd drown the signal."""
+"""HTTP RED metrics, recorded against the matched route *template* so
+label cardinality stays bounded; /metrics and /health are excluded."""
 
 from __future__ import annotations
 

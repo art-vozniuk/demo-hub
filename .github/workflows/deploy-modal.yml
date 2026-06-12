@@ -1,10 +1,6 @@
-# Reusable Modal deploy — called from deploy-core-infra.yml with per-app
-# change flags (computed there against the last-deploy tag).
-#
-# Model apps are independent of each other and deploy in PARALLEL (matrix).
-# The gateway goes strictly AFTER them: its ROUTES resolve target apps by
-# name at call time, so a gateway that knows a new route must never go live
-# before the app behind that route is deployed.
+# Reusable Modal deploy, called from deploy-core-infra.yml with per-app flags.
+# Model apps deploy in parallel; gateway strictly after (its ROUTES point at
+# apps by name, so a new route must not go live before its app).
 
 name: deploy modal
 
@@ -31,9 +27,7 @@ on:
         default: false
 
 jobs:
-  # Turn the boolean inputs into a JSON list for the matrix — the matrix
-  # context isn't available in a job-level `if`, so per-app skipping has
-  # to happen by building the matrix dynamically.
+  # Matrix context isn't usable in a job-level `if`, so build the list here.
   plan:
     runs-on: ubuntu-latest
     outputs:
@@ -68,9 +62,7 @@ jobs:
     if: needs.plan.outputs.apps != '[]'
     runs-on: ubuntu-latest
     strategy:
-      # One broken app must not cancel the others mid-deploy; the shared
-      # last-deploy tag stays put on any failure, so the next run retries
-      # whatever didn't make it.
+      # Don't cancel siblings; the un-moved last-deploy tag retries failures.
       fail-fast: false
       matrix:
         app: ${{ fromJSON(needs.plan.outputs.apps) }}
@@ -89,7 +81,6 @@ jobs:
 
   deploy-gateway:
     needs: [plan, deploy-models]
-    # Run when the gateway changed AND no model deploy failed.
     # deploy-models may be skipped (gateway-only change) — that's fine.
     if: ${{ !cancelled() && inputs.gateway && needs.deploy-models.result != 'failure' }}
     runs-on: ubuntu-latest

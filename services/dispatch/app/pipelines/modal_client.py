@@ -250,17 +250,14 @@ async def _submit_and_poll(
 def _record_inference_obs(
     model: str, result: dict[str, Any], call_wall_s: float
 ) -> None:
-    """Turn the `_obs` block a Modal container attached to its response
-    into histogram observations. This is the only place inference
-    metrics get recorded — containers are ephemeral and never scraped.
-    """
+    """Record the `_obs` block a Modal container attached to its response —
+    the only place inference metrics get recorded (containers aren't scraped)."""
 
     obs = result.pop("_obs", None)
     if not isinstance(obs, dict):
         return
 
-    # Label by the gateway model name — it matches pipeline_name, so the
-    # whole Pipeline Detail dashboard slices on one label namespace.
+    # Gateway model name == pipeline_name: one label namespace in Grafana.
     config_label = model
     gpu = obs.get("gpu", "unknown")
     total_s = float(obs.get("total_s", 0.0))
@@ -281,9 +278,7 @@ def _record_inference_obs(
             inference_cold_start_duration_seconds.labels(
                 config=config_label, phase=phase
             ).observe(float(seconds))
-            # snapshot_load happened at snapshot *creation*, not during
-            # this call — only post-restore phases count toward this
-            # request's wall time and billing.
+            # snapshot_load happened at snapshot creation, not in this call.
             if phase != "snapshot_load":
                 cold_in_call_s += float(seconds)
 
@@ -294,9 +289,7 @@ def _record_inference_obs(
     overhead = max(call_wall_s - total_s - cold_in_call_s, 0.0)
     modal_overhead_seconds.labels(config=config_label).observe(overhead)
 
-    # Billed-seconds estimate: the work itself, plus (on a cold start)
-    # this container session's spin-up and its eventual idle scaledown
-    # tail. Modal's own container.running metric is the precise source.
+    # Estimate: work + (on cold start) spin-up + idle scaledown tail.
     billed_s = total_s + cold_in_call_s
     if cold:
         billed_s += float(obs.get("scaledown_window_s", 0.0))
@@ -313,9 +306,8 @@ def _record_inference_obs(
 async def _invoke_gateway(model: str, payload: dict[str, Any]) -> dict[str, Any]:
     from services.common.logging.config import context_pipeline_id
 
-    # trace_headers(): the container resumes the pipeline's Sentry trace
-    # so its phases land in the same waterfall. pipeline_id rides along
-    # as the container-side request id / Sentry tag.
+    # Sentry headers let the container resume the pipeline's trace;
+    # pipeline_id doubles as the container-side request id.
     enriched = {**payload, "model": model, **trace_headers()}
     pipeline_id = context_pipeline_id.get()
     if pipeline_id:
