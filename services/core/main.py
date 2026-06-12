@@ -38,12 +38,30 @@ log.info(f"starting core service, build tag: {build_tag}")
 if config.SENTRY_DSN:
     import sentry_sdk
 
+    def _traces_sampler(ctx):
+        scope = ctx.get("asgi_scope")
+        if scope is not None:
+            if scope.get("path") in ("/metrics", "/health"):
+                return 0.0
+            # Core roots the pipeline trace — never inherit the browser's
+            # 10% pageload verdict, or 90% of pipelines go untraced.
+            return 1.0
+        parent = ctx.get("parent_sampled")
+        if parent is not None:
+            return parent
+        return 1.0
+
+    def _drop_unrouted_transactions(event, hint):
+        # Unmatched paths keep raw-URL names ("http://*/api/.env") — scanner bots.
+        return event if (event.get("transaction") or "").startswith("/") else None
+
     sentry_sdk.init(
         dsn=config.SENTRY_DSN,
         environment=config.ENV,
         send_default_pii=True,
         enable_logs=True,
-        traces_sample_rate=1.0,
+        traces_sampler=_traces_sampler,
+        before_send_transaction=_drop_unrouted_transactions,
         profile_session_sample_rate=1.0,
         profile_lifecycle="trace",
         _experiments={

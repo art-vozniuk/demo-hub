@@ -52,6 +52,19 @@ then configure the Modal integration with push URL `https://artemv.tech/otel`
 and header `OTEL_HEADER_Authorization: Basic <base64 otel:password>` — full
 steps in docs/DEPLOY.md.
 
+## Sentry trace sampling policy
+
+- **core decides**: API requests are always traced — the browser SDK's 10%
+  pageload verdict in the incoming `sentry-trace` header is deliberately
+  ignored (otherwise 90% of pipelines would go untraced). `/metrics` and
+  `/health` are never sampled; transactions for unmatched routes
+  (`http://*/api/.env` scanner bots) are dropped before send.
+- **Modal apps** trace only the `generate()` transaction resumed from the
+  payload; gateway submit/poll HTTP requests are never sampled (dispatch
+  polls every few seconds — pure quota noise).
+- **dispatch/compute** inherit the upstream decision; their `:9100` metrics
+  servers are plain prometheus_client and produce no transactions.
+
 ## Persisting metrics across restarts
 
 - Prometheus: 7 day retention, 1 GB cap (configurable via the command
