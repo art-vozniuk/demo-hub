@@ -18,7 +18,9 @@ def submit(
 ) -> dict[str, Any]:
     model = payload.get("model")
     route = routes.get(model) if isinstance(model, str) else None
-    request_id = uuid.uuid4().hex[:8]
+    # pipeline_id (injected by dispatch) doubles as the request id so
+    # gateway logs grep together with dispatch + container logs.
+    request_id = str(payload.get("pipeline_id") or uuid.uuid4().hex[:8])
     if route is None:
         log.warning(f"[{request_id}] gateway: unknown model {model!r}")
         return {"error": f"unknown model: {model!r}"}
@@ -26,6 +28,8 @@ def submit(
     app_name, class_name = route
     try:
         cls = modal.Cls.from_name(app_name, class_name)
+        # payload carries the Sentry trace headers through to the model
+        # app untouched — the container resumes the pipeline's trace.
         call = cls().generate.spawn(dict(payload))
     except Exception as e:
         log.error(f"[{request_id}] gateway spawn failed ({model}): {e}")

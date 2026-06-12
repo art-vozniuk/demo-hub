@@ -18,9 +18,9 @@ class RabbitMQPublisher:
         self,
         routing_key: str,
         message: Dict[str, Any],
-        trace_id: str,
-        pipeline_id: str | None = None,
     ) -> None:
+        from services.common.observability.metrics import rabbitmq_publish_total
+
         if not self.connection.channel:
             raise RuntimeError("Channel not initialized")
 
@@ -30,14 +30,19 @@ class RabbitMQPublisher:
 
         log.info(f"Publishing message to {routing_key}")
 
-        await exchange.publish(
-            Message(
-                body=body,
-                delivery_mode=DeliveryMode.PERSISTENT,
-                content_type="application/json",
-            ),
-            routing_key=routing_key,
-            timeout=self.config.publish_confirm_timeout,
-        )
+        try:
+            await exchange.publish(
+                Message(
+                    body=body,
+                    delivery_mode=DeliveryMode.PERSISTENT,
+                    content_type="application/json",
+                ),
+                routing_key=routing_key,
+                timeout=self.config.publish_confirm_timeout,
+            )
+        except Exception:
+            rabbitmq_publish_total.labels(routing_key=routing_key, status="error").inc()
+            raise
 
+        rabbitmq_publish_total.labels(routing_key=routing_key, status="ok").inc()
         log.info(f"Message published to {routing_key}")

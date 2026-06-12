@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from services.common import constants
 from services.common.config.settings import settings as config_settings
 
 
@@ -16,10 +17,11 @@ class Config(BaseSettings):
     # hung Modal-gateway fast and retry it.
     MODAL_REQUEST_TIMEOUT_SECONDS: int = 30
     # End-to-end pipeline deadline: how long _submit_and_poll will keep
-    # polling before giving up. Sized for the slowest pipeline (TRELLIS
-    # image-to-3D: ~3 min warm, plus cold restore overhead).
-    MODAL_PIPELINE_DEADLINE_SECONDS: int = 600
-    MODAL_POLL_INTERVAL_SECONDS: float = 2.0
+    # polling before giving up. Default comes from the shared constants
+    # module — it must stay equal to the Modal function timeout and the
+    # top histogram bucket, so override with care.
+    MODAL_PIPELINE_DEADLINE_SECONDS: int = constants.MODAL_PIPELINE_DEADLINE_SECONDS
+    MODAL_POLL_INTERVAL_SECONDS: float = constants.MODAL_POLL_INTERVAL_SECONDS
 
     # Transient HTTP errors against Modal-gateway are retried in-place
     # inside _post_to_modal — that way a single 502 doesn't unwind the

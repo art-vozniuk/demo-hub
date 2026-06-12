@@ -348,11 +348,13 @@ dependencies = [
     { name = "aio-pika" },
     { name = "aioboto3" },
     { name = "httpx" },
+    { name = "prometheus-client" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "redis" },
     { name = "ruff" },
+    { name = "sentry-sdk" },
 ]
 
 [package.metadata]
@@ -360,11 +362,13 @@ requires-dist = [
     { name = "aio-pika", specifier = ">=9.5.7" },
     { name = "aioboto3", specifier = ">=15.1.0" },
     { name = "httpx", specifier = ">=0.27.0" },
+    { name = "prometheus-client", specifier = ">=0.20.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.8.0" },
     { name = "redis", extras = ["asyncio"], specifier = ">=5.0.0" },
     { name = "ruff", specifier = ">=0.13.2" },
+    { name = "sentry-sdk", specifier = ">=2.42.0" },
 ]
 
 [[package]]
@@ -804,6 +808,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f3/bd/959f3cf9917f4cb5f5c637907bfd508ed4760054596e081ed63d2f0b4625/postgrest-2.22.3.tar.gz", hash = "sha256:6050b5bff968a3710e7e0b6b2dd909a5e270d170f15cf098aabe0c0579537af6", size = 13680, upload-time = "2025-10-28T20:42:17.914Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/78/d4/31565f55ad0e0f34c691645d33401c5a204d337b59af28b4320a5f2f0c2e/postgrest-2.22.3-py3-none-any.whl", hash = "sha256:d580a5b15b0855e2925da4426568487b98b79b393819c02e780e4a311bdaab50", size = 21579, upload-time = "2025-10-28T20:42:16.644Z" },
+]
+
+[[package]]
+name = "prometheus-client"
+version = "0.25.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1b/fb/d9aa83ffe43ce1f19e557c0971d04b90561b0cfd50762aafb01968285553/prometheus_client-0.25.0.tar.gz", hash = "sha256:5e373b75c31afb3c86f1a52fa1ad470c9aace18082d39ec0d2f918d11cc9ba28", size = 86035, upload-time = "2026-04-09T19:53:42.359Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8d/9b/d4b1e644385499c8346fa9b622a3f030dce14cd6ef8a1871c221a17a67e7/prometheus_client-0.25.0-py3-none-any.whl", hash = "sha256:d5aec89e349a6ec230805d0df882f3807f74fd6c1a2fa86864e3c2279059fed1", size = 64154, upload-time = "2026-04-09T19:53:41.324Z" },
 ]
 
 [[package]]

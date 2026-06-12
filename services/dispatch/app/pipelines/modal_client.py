@@ -22,11 +22,20 @@ from typing import Any
 
 import httpx
 
+from services.common.constants import GPU_HOURLY_USD
 from services.common.observability.metrics import (
+    estimated_gpu_cost_usd_total,
+    estimated_gpu_seconds_total,
+    inference_batch_size,
+    inference_cold_start_duration_seconds,
+    inference_phase_duration_seconds,
+    inference_requests_total,
     modal_call_duration_seconds,
     modal_call_requests_total,
     modal_call_retries_total,
+    modal_overhead_seconds,
 )
+from services.common.observability.tracing import trace_headers
 from services.dispatch.app.config import config
 
 log = logging.getLogger(__name__)
@@ -238,17 +247,94 @@ async def _submit_and_poll(
         await asyncio.sleep(config.MODAL_POLL_INTERVAL_SECONDS)
 
 
+def _record_inference_obs(
+    model: str, result: dict[str, Any], call_wall_s: float
+) -> None:
+    """Turn the `_obs` block a Modal container attached to its response
+    into histogram observations. This is the only place inference
+    metrics get recorded — containers are ephemeral and never scraped.
+    """
+
+    obs = result.pop("_obs", None)
+    if not isinstance(obs, dict):
+        return
+
+    # Label by the gateway model name — it matches pipeline_name, so the
+    # whole Pipeline Detail dashboard slices on one label namespace.
+    config_label = model
+    gpu = obs.get("gpu", "unknown")
+    total_s = float(obs.get("total_s", 0.0))
+    cold = obs.get("cold") or None
+
+    inference_requests_total.labels(
+        config=config_label, cold="true" if cold else "false"
+    ).inc()
+
+    for phase, seconds in (obs.get("timings") or {}).items():
+        inference_phase_duration_seconds.labels(
+            config=config_label, phase=phase
+        ).observe(float(seconds))
+
+    cold_in_call_s = 0.0
+    if cold:
+        for phase, seconds in cold.items():
+            inference_cold_start_duration_seconds.labels(
+                config=config_label, phase=phase
+            ).observe(float(seconds))
+            # snapshot_load happened at snapshot *creation*, not during
+            # this call — only post-restore phases count toward this
+            # request's wall time and billing.
+            if phase != "snapshot_load":
+                cold_in_call_s += float(seconds)
+
+    batch = obs.get("batch_size")
+    if batch:
+        inference_batch_size.labels(config=config_label).observe(int(batch))
+
+    overhead = max(call_wall_s - total_s - cold_in_call_s, 0.0)
+    modal_overhead_seconds.labels(config=config_label).observe(overhead)
+
+    # Billed-seconds estimate: the work itself, plus (on a cold start)
+    # this container session's spin-up and its eventual idle scaledown
+    # tail. Modal's own container.running metric is the precise source.
+    billed_s = total_s + cold_in_call_s
+    if cold:
+        billed_s += float(obs.get("scaledown_window_s", 0.0))
+    estimated_gpu_seconds_total.labels(config=config_label, gpu=gpu).inc(billed_s)
+    rate = GPU_HOURLY_USD.get(gpu)
+    if rate is not None:
+        estimated_gpu_cost_usd_total.labels(config=config_label, gpu=gpu).inc(
+            billed_s * rate / 3600.0
+        )
+
+
 # Every pipeline goes through the shared Modal web gateway; the target app +
 # class is chosen server-side by payload["model"] (see gateway ROUTES).
 async def _invoke_gateway(model: str, payload: dict[str, Any]) -> dict[str, Any]:
-    return await _submit_and_poll(
+    from services.common.logging.config import context_pipeline_id
+
+    # trace_headers(): the container resumes the pipeline's Sentry trace
+    # so its phases land in the same waterfall. pipeline_id rides along
+    # as the container-side request id / Sentry tag.
+    enriched = {**payload, "model": model, **trace_headers()}
+    pipeline_id = context_pipeline_id.get()
+    if pipeline_id:
+        enriched.setdefault("pipeline_id", pipeline_id)
+
+    t0 = time.monotonic()
+    result = await _submit_and_poll(
         label=model,
         submit_url=config.MODAL_GATEWAY_SUBMIT_URL,
         poll_url=config.MODAL_GATEWAY_POLL_URL,
         submit_url_label="MODAL_GATEWAY_SUBMIT_URL",
         poll_url_label="MODAL_GATEWAY_POLL_URL",
-        payload={**payload, "model": model},
+        payload=enriched,
     )
+    try:
+        _record_inference_obs(model, result, time.monotonic() - t0)
+    except Exception:
+        log.warning("failed to record inference observability block", exc_info=True)
+    return result
 
 
 async def invoke_generative_editing(payload: dict[str, Any]) -> dict[str, Any]:

@@ -17,6 +17,7 @@ from services.core.app.generative.router import router as generative_router
 from services.core.app.wallet.router import router as wallet_router
 from services.core.app.editor_scenes.router import router as editor_scenes_router
 from services.common.middleware.exception import ExceptionMiddleware
+from services.common.middleware.metrics import HTTPMetricsMiddleware
 from services.common.database.middleware import DatabaseMiddleware
 from services.core.app.dependencies import (
     init_rabbitmq,
@@ -118,6 +119,7 @@ app.add_middleware(
 )
 
 app.add_middleware(ExceptionMiddleware)
+app.add_middleware(HTTPMetricsMiddleware)
 app.add_middleware(DatabaseMiddleware)
 
 

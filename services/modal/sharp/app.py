@@ -12,11 +12,12 @@ import io
 import os
 import time
 import urllib.request
-import uuid
 from typing import Any
 
 import modal
 
+from common.constants import MODAL_FUNCTION_TIMEOUT_SECONDS
+from common.instrument import InferenceRunner
 from common.lib import (
     MODEL_DIR,
     bake_exif_orientation,
@@ -25,9 +26,11 @@ from common.lib import (
     make_app,
     upload_to_s3,
 )
-from common.metrics import InferenceMetrics
 from common.sentry import init_sentry
 
+
+GPU_NAME = "A10G"
+SCALEDOWN_WINDOW_S = 10
 
 CHECKPOINT_URL = "https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh.pt"
 CHECKPOINT_LOCAL_PATH = f"{MODEL_DIR}/sharp_2572gikvuh.pt"
@@ -53,7 +56,6 @@ sharp_image = (
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
         "boto3==1.35.92",
-        "prometheus-client==0.20.0",
         "sentry-sdk>=2.42.0",
         # ml-sharp is GitHub-only; pin to a commit once Apple ships a release.
         "git+https://github.com/apple/ml-sharp.git",
@@ -62,7 +64,13 @@ sharp_image = (
     # common.sharp_utils explicitly. (sharp_utils lives under common/
     # rather than sharp/ to avoid clashing with the ml-sharp pip
     # package's own `sharp` namespace.)
-    .add_local_python_source("common.lib", "common.sharp_utils", "common.metrics", "common.sentry")
+    .add_local_python_source(
+        "common.lib",
+        "common.sharp_utils",
+        "common.instrument",
+        "common.constants",
+        "common.sentry",
+    )
 )
 
 
@@ -140,14 +148,13 @@ def preload_weights() -> str:
 
 @app.cls(
     image=sharp_image,
-    gpu="A10G",
+    gpu=GPU_NAME,
     volumes={MODEL_DIR: volume},
-    scaledown_window=10,
-    timeout=600,
+    scaledown_window=SCALEDOWN_WINDOW_S,
+    timeout=MODAL_FUNCTION_TIMEOUT_SECONDS,
     enable_memory_snapshot=True,
     secrets=[
         modal.Secret.from_name("supabase-s3"),
-        modal.Secret.from_name("pushgateway"),
         modal.Secret.from_name("sentry"),
     ],
     #min_containers=1,
@@ -159,9 +166,10 @@ class SharpInference:
         """Snapshot hook: load weights into CPU RAM once; cold starts restore from RAM."""
 
         log.info("snapshot-load: load_to_cpu() begin (CPU-only container)")
-        t0 = time.perf_counter()
+        t_snap = time.perf_counter()
 
         ckpt_path = _ensure_checkpoint()
+        t0 = time.perf_counter()
         # mmap + assign: weights stay file-backed instead of bloating the
         # memory snapshot — restore reads MB, not GB.
         state_dict = torch.load(
@@ -175,9 +183,10 @@ class SharpInference:
         self.predictor.load_state_dict(state_dict, assign=True)
         self.predictor.eval()
         init_ms = (time.perf_counter() - t1) * 1000
+        self._snapshot_load_s = time.perf_counter() - t_snap
         log.info(
             f"snapshot-load: create_predictor + load_state_dict done "
-            f"in {init_ms:.0f}ms"
+            f"in {init_ms:.0f}ms (snapshot total {self._snapshot_load_s:.1f}s)"
         )
 
     @modal.enter(snap=False)
@@ -192,90 +201,70 @@ class SharpInference:
         log.info(f"post-restore: predictor.to(cuda) done in {to_cuda_s * 1000:.0f}ms")
 
         # Built here (snap=False) so each container gets its own identity.
-        self.m = InferenceMetrics("sharp", "A10G")
-        self.m.cold_start("to_cuda", to_cuda_s)
-        self.m.push()
-
-    @modal.exit()
-    async def cleanup(self) -> None:
-        # Rough real-time cost proxy; Modal billing is source of truth for $.
-        self.m.push_uptime()
+        self.runner = InferenceRunner(
+            config="sharp",
+            gpu=GPU_NAME,
+            scaledown_window_s=SCALEDOWN_WINDOW_S,
+            log=log,
+            cold={
+                "snapshot_load": getattr(self, "_snapshot_load_s", 0.0),
+                "to_cuda": to_cuda_s,
+            },
+        )
 
     @modal.method()
     def generate(self, payload: dict[str, Any]) -> dict[str, Any]:
         image_bucket = payload["image_bucket"]
         image_key = payload["image_key"]
-        request_id = uuid.uuid4().hex[:8]
-        log.info(f"[{request_id}] inference: start; key={image_key}")
-        t0 = time.perf_counter()
 
-        t_dl = time.perf_counter()
-        with self.m.phase("download"):
-            raw = download_from_s3(image_bucket, image_key)
-            raw = bake_exif_orientation(raw)
-        log.info(
-            f"[{request_id}] s3 download + EXIF bake done in "
-            f"{(time.perf_counter() - t_dl) * 1000:.0f}ms ({len(raw)} bytes)"
-        )
+        with self.runner.start(payload) as run:
+            log.info(f"[{run.request_id}] inference: start; key={image_key}")
 
-        pil = Image.open(io.BytesIO(raw)).convert("RGB")
-        arr = np.array(pil)
-        height, width = arr.shape[:2]
-        # No EXIF f_px on most web uploads; default to ~62° FOV (phone main lens).
-        f_px = float(width) * 0.9
-        log.info(
-            f"[{request_id}] input: {width}x{height}, f_px={f_px:.1f}"
-        )
+            with run.phase("download"):
+                raw = download_from_s3(image_bucket, image_key)
+                raw = bake_exif_orientation(raw)
 
-        t_inf = time.perf_counter()
-        with self.m.phase("gpu"):
-            gaussians = self._run_inference(arr, f_px)
-        inference_ms = (time.perf_counter() - t_inf) * 1000
-        log.info(
-            f"[{request_id}] inference: predict_image done in "
-            f"{inference_ms:.0f}ms"
-        )
-
-        t_pack = time.perf_counter()
-        splat_bytes, gaussian_count, pos_np, alpha_np = gaussians_to_splat_bytes(
-            gaussians
-        )
-        camera_eye, camera_fwd = auto_frame_camera(pos_np, alpha_np)
-        log.info(
-            f"[{request_id}] gaussians→splat + auto-frame done in "
-            f"{(time.perf_counter() - t_pack) * 1000:.0f}ms; "
-            f"splat_size={len(splat_bytes) / (1024 * 1024):.1f} MB "
-            f"({gaussian_count} gaussians)"
-        )
-
-        t_up = time.perf_counter()
-        with self.m.phase("upload"):
-            result_url = upload_to_s3(
-                data_bytes=splat_bytes,
-                bucket=image_bucket,
-                folder="sharp_results",
-                extension="splat",
+            pil = Image.open(io.BytesIO(raw)).convert("RGB")
+            arr = np.array(pil)
+            height, width = arr.shape[:2]
+            # No EXIF f_px on most web uploads; default to ~62° FOV (phone main lens).
+            f_px = float(width) * 0.9
+            log.info(
+                f"[{run.request_id}] input: {width}x{height}, f_px={f_px:.1f}"
             )
-        log.info(
-            f"[{request_id}] upload: s3 put done in "
-            f"{(time.perf_counter() - t_up) * 1000:.0f}ms; url={result_url}"
-        )
 
-        total_ms = (time.perf_counter() - t0) * 1000
-        log.info(
-            f"[{request_id}] inference: done in {total_ms:.0f}ms "
-            f"(inference={inference_ms:.0f}ms)"
-        )
+            with run.phase("gpu"):
+                gaussians = self._run_inference(arr, f_px)
 
-        self.m.batch(1)
-        self.m.push()
-        return {
-            "result_url": result_url,
-            "splat_size_bytes": len(splat_bytes),
-            "gaussian_count": gaussian_count,
-            "camera_eye": camera_eye,
-            "camera_fwd": camera_fwd,
-        }
+            with run.phase("pack"):
+                splat_bytes, gaussian_count, pos_np, alpha_np = (
+                    gaussians_to_splat_bytes(gaussians)
+                )
+                camera_eye, camera_fwd = auto_frame_camera(pos_np, alpha_np)
+            log.info(
+                f"[{run.request_id}] splat_size="
+                f"{len(splat_bytes) / (1024 * 1024):.1f} MB "
+                f"({gaussian_count} gaussians)"
+            )
+
+            with run.phase("upload"):
+                result_url = upload_to_s3(
+                    data_bytes=splat_bytes,
+                    bucket=image_bucket,
+                    folder="sharp_results",
+                    extension="splat",
+                )
+
+            run.batch(1)
+            return run.finish(
+                {
+                    "result_url": result_url,
+                    "splat_size_bytes": len(splat_bytes),
+                    "gaussian_count": gaussian_count,
+                    "camera_eye": camera_eye,
+                    "camera_fwd": camera_fwd,
+                }
+            )
 
     def _run_inference(self, image: "np.ndarray", f_px: float) -> Any:
         """Inlined copy of sharp.cli.predict.predict_image — that lives under

@@ -8,11 +8,12 @@ from __future__ import annotations
 import io
 import os
 import time
-import uuid
 from typing import Any
 
 import modal
 
+from common.constants import MODAL_FUNCTION_TIMEOUT_SECONDS
+from common.instrument import InferenceRunner
 from common.lib import (
     MODEL_DIR,
     bake_exif_orientation,
@@ -21,12 +22,14 @@ from common.lib import (
     make_app,
     upload_to_s3,
 )
-from common.metrics import InferenceMetrics
 from common.sentry import init_sentry
 
 
 MODEL_REPO = "black-forest-labs/FLUX.2-klein-4B"
 MODEL_LOCAL_DIR = f"{MODEL_DIR}/flux2-klein-4b"
+
+GPU_NAME = "A10G"
+SCALEDOWN_WINDOW_S = 2
 
 
 log = configure_logging("flux")
@@ -49,7 +52,6 @@ flux_image = (
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
         "boto3==1.35.92",
-        "prometheus-client==0.20.0",
         "sentry-sdk>=2.42.0",
     )
     .env(
@@ -59,8 +61,10 @@ flux_image = (
             "TRANSFORMERS_OFFLINE": "0",
         }
     )
-    # Modal no longer auto-mounts sibling files; ship common.lib explicitly.
-    .add_local_python_source("common.lib", "common.metrics", "common.sentry")
+    # Modal no longer auto-mounts sibling files; ship common.* explicitly.
+    .add_local_python_source(
+        "common.lib", "common.instrument", "common.constants", "common.sentry"
+    )
 )
 
 
@@ -115,14 +119,13 @@ def preload_weights() -> str:
 
 @app.cls(
     image=flux_image,
-    gpu="A10G",
+    gpu=GPU_NAME,
     volumes={MODEL_DIR: volume},
-    scaledown_window=2,
-    timeout=600,
+    scaledown_window=SCALEDOWN_WINDOW_S,
+    timeout=MODAL_FUNCTION_TIMEOUT_SECONDS,
     enable_memory_snapshot=True,
     secrets=[
         modal.Secret.from_name("supabase-s3"),
-        modal.Secret.from_name("pushgateway"),
         modal.Secret.from_name("sentry"),
     ],
     #min_containers=1,
@@ -146,10 +149,12 @@ class FluxInference:
             MODEL_LOCAL_DIR,
             torch_dtype=torch.bfloat16,
         )
-        from_pretrained_ms = (time.perf_counter() - t0) * 1000
+        # Snapshotted along with the weights — every restored container
+        # reports how expensive its snapshot was to build.
+        self._snapshot_load_s = time.perf_counter() - t0
         log.info(
             f"snapshot-load: from_pretrained({MODEL_LOCAL_DIR}) "
-            f"finished in {from_pretrained_ms:.0f}ms; "
+            f"finished in {self._snapshot_load_s * 1000:.0f}ms; "
             "Modal will snapshot RAM after this returns"
         )
 
@@ -168,9 +173,16 @@ class FluxInference:
         t0 = time.perf_counter()
         self.pipe.to("cuda")
         to_cuda_s = time.perf_counter() - t0
-        self.m = InferenceMetrics("flux", "A10G")
-        self.m.cold_start("to_cuda", to_cuda_s)
-        self.m.push()
+        self.runner = InferenceRunner(
+            config="flux",
+            gpu=GPU_NAME,
+            scaledown_window_s=SCALEDOWN_WINDOW_S,
+            log=log,
+            cold={
+                "snapshot_load": getattr(self, "_snapshot_load_s", 0.0),
+                "to_cuda": to_cuda_s,
+            },
+        )
         log.info(
             f"post-restore: pipe.to(cuda) finished in {to_cuda_s * 1000:.0f}ms; "
             "ready to serve"
@@ -184,92 +196,63 @@ class FluxInference:
         guidance_scale = float(payload.get("guidance_scale", 1.0))
         num_inference_steps = int(payload.get("num_inference_steps", 4))
         max_side = int(payload.get("max_side", 1024))
-        request_id = uuid.uuid4().hex[:8]
-        log.info(
-            f"[{request_id}] inference: start; prompt_len={len(prompt)} "
-            f"steps={num_inference_steps} guidance={guidance_scale} "
-            f"max_side={max_side}"
-        )
-        t0 = time.perf_counter()
 
-        t_dl = time.perf_counter()
-        with self.m.phase("download"):
-            raw = download_from_s3(image_bucket, image_key)
-            raw = bake_exif_orientation(raw)
-        log.info(
-            f"[{request_id}] s3 download + EXIF bake done in "
-            f"{(time.perf_counter() - t_dl) * 1000:.0f}ms ({len(raw)} bytes)"
-        )
-
-        init = Image.open(io.BytesIO(raw)).convert("RGB")
-        log.info(
-            f"[{request_id}] inference: decoded input "
-            f"{init.width}x{init.height}, {len(raw)} bytes"
-        )
-
-        # Cap the longest side. Klein 4B itself fits comfortably on A10G,
-        # but very large inputs blow up the encoder activations.
-        w, h = init.size
-        scale = max_side / max(w, h)
-        if scale < 1.0:
-            new_w = int(round(w * scale))
-            new_h = int(round(h * scale))
+        with self.runner.start(payload) as run:
             log.info(
-                f"[{request_id}] inference: resizing "
-                f"{w}x{h} -> {new_w}x{new_h} (max_side={max_side})"
+                f"[{run.request_id}] inference: start; prompt_len={len(prompt)} "
+                f"steps={num_inference_steps} guidance={guidance_scale} "
+                f"max_side={max_side}"
             )
-            init = init.resize((new_w, new_h), Image.LANCZOS)
 
-        t_inf = time.perf_counter()
-        log.info(
-            f"[{request_id}] inference: pipe(...) call begin; "
-            f"prompt={prompt[:80]!r}{'...' if len(prompt) > 80 else ''}"
-        )
-        with self.m.phase("gpu"):
-            out = self.pipe(
-                image=init,
-                prompt=prompt,
-                guidance_scale=guidance_scale,
-                num_inference_steps=num_inference_steps,
+            with run.phase("download"):
+                raw = download_from_s3(image_bucket, image_key)
+                raw = bake_exif_orientation(raw)
+
+            init = Image.open(io.BytesIO(raw)).convert("RGB")
+            log.info(
+                f"[{run.request_id}] inference: decoded input "
+                f"{init.width}x{init.height}, {len(raw)} bytes"
             )
-        inference_ms = (time.perf_counter() - t_inf) * 1000
-        log.info(
-            f"[{request_id}] inference: pipe(...) returned in "
-            f"{inference_ms:.0f}ms"
-        )
 
-        result_image: "Image.Image" = out.images[0]
-        buf = io.BytesIO()
-        result_image.save(buf, format="PNG")
-        png_bytes = buf.getvalue()
+            # Cap the longest side. Klein 4B itself fits comfortably on A10G,
+            # but very large inputs blow up the encoder activations.
+            w, h = init.size
+            scale = max_side / max(w, h)
+            if scale < 1.0:
+                new_w = int(round(w * scale))
+                new_h = int(round(h * scale))
+                log.info(
+                    f"[{run.request_id}] inference: resizing "
+                    f"{w}x{h} -> {new_w}x{new_h} (max_side={max_side})"
+                )
+                init = init.resize((new_w, new_h), Image.LANCZOS)
 
-        t_up = time.perf_counter()
-        with self.m.phase("upload"):
-            result_url = upload_to_s3(
-                data_bytes=png_bytes,
-                bucket=image_bucket,
-                folder="generative_results",
-                extension="png",
+            with run.phase("gpu"):
+                out = self.pipe(
+                    image=init,
+                    prompt=prompt,
+                    guidance_scale=guidance_scale,
+                    num_inference_steps=num_inference_steps,
+                )
+
+            result_image: "Image.Image" = out.images[0]
+            buf = io.BytesIO()
+            result_image.save(buf, format="PNG")
+            png_bytes = buf.getvalue()
+
+            with run.phase("upload"):
+                result_url = upload_to_s3(
+                    data_bytes=png_bytes,
+                    bucket=image_bucket,
+                    folder="generative_results",
+                    extension="png",
+                )
+
+            run.batch(1)
+            return run.finish(
+                {
+                    "result_url": result_url,
+                    "width": result_image.width,
+                    "height": result_image.height,
+                }
             )
-        upload_ms = (time.perf_counter() - t_up) * 1000
-
-        self.m.batch(1)
-        total_ms = (time.perf_counter() - t0) * 1000
-        log.info(
-            f"[{request_id}] inference: done; output "
-            f"{result_image.width}x{result_image.height} "
-            f"png_size={len(png_bytes)} bytes "
-            f"inference_ms={inference_ms:.0f} upload_ms={upload_ms:.0f} "
-            f"total_ms={total_ms:.0f} url={result_url}"
-        )
-
-        self.m.push()
-        return {
-            "result_url": result_url,
-            "width": result_image.width,
-            "height": result_image.height,
-        }
-
-    @modal.exit()
-    async def cleanup(self) -> None:
-        self.m.push_uptime()

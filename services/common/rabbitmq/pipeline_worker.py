@@ -14,10 +14,12 @@ import os
 import socket
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Protocol
 
 from services.common.domain.enums import PipelineStatus
-from services.common.logging.config import context_pipeline_id, context_trace_id
+from services.common.logging.config import context_pipeline_id
+from services.common.observability.tracing import continue_trace_from
 from services.common.rabbitmq.connection import RabbitMQConnection
 from services.common.rabbitmq.consumer import RabbitMQConsumer
 from services.common.rabbitmq.publisher import RabbitMQPublisher
@@ -88,7 +90,6 @@ class PipelineWorker:
 
     async def _publish_update(
         self,
-        trace_id: str,
         pipeline_id: str,
         status: PipelineStatus,
         result: dict | None = None,
@@ -100,15 +101,28 @@ class PipelineWorker:
         await self._publisher.publish(
             routing_key=rabbitmq_config.routing_update,
             message={
-                "trace_id": trace_id,
                 "pipeline_id": pipeline_id,
                 "status": status.value,
                 "result": result,
                 "message": message,
             },
-            trace_id=trace_id,
-            pipeline_id=pipeline_id,
         )
+
+    @staticmethod
+    def _queue_wait_seconds(message: Mapping[str, Any]) -> float | None:
+        """Time the job sat in RabbitMQ. Core and workers run on the same
+        host, so wall-clock comparison is safe."""
+
+        enqueued_at = message.get("enqueued_at")
+        if not enqueued_at:
+            return None
+        try:
+            enqueued = datetime.fromisoformat(enqueued_at)
+            if enqueued.tzinfo is None:
+                enqueued = enqueued.replace(tzinfo=timezone.utc)
+            return max((datetime.now(timezone.utc) - enqueued).total_seconds(), 0.0)
+        except ValueError:
+            return None
 
     async def _process(self, message: dict[str, Any]) -> None:
         # Imported lazily so the metric registration doesn't happen for
@@ -117,61 +131,71 @@ class PipelineWorker:
         from services.common.observability.metrics import (
             pipeline_duration_seconds,
             pipeline_failures_total,
+            queue_wait_seconds,
         )
 
         t0 = time.perf_counter()
 
-        trace_id = message["trace_id"]
         pipeline_id = message["pipeline_id"]
         pipeline_name = message["pipeline_name"]
         pipeline_input = message["input"]
 
-        context_trace_id.set(str(trace_id))
         context_pipeline_id.set(str(pipeline_id))
 
-        self._log.info(f"Processing pipeline: {pipeline_name}")
+        wait_s = self._queue_wait_seconds(message)
+        if wait_s is not None:
+            queue_wait_seconds.labels(pipeline_name=pipeline_name).observe(wait_s)
 
-        try:
-            await self._publish_update(trace_id, pipeline_id, PipelineStatus.RUNNING)
+        self._log.info(
+            f"Processing pipeline: {pipeline_name}"
+            + (f" (queued {wait_s * 1000:.0f}ms)" if wait_s is not None else "")
+        )
 
-            service = self._create_service(
-                pipeline_id, pipeline_name, pipeline_input, self._s3
-            )
-            result = await service.run()
+        with continue_trace_from(
+            message,
+            op="queue.task",
+            name=f"pipeline.{pipeline_name}",
+            tags={"pipeline_id": str(pipeline_id), "pipeline_name": pipeline_name},
+        ):
+            try:
+                await self._publish_update(pipeline_id, PipelineStatus.RUNNING)
 
-            await self._publish_update(
-                trace_id,
-                pipeline_id,
-                PipelineStatus.COMPLETED,
-                result=result,
-                message="success",
-            )
+                service = self._create_service(
+                    pipeline_id, pipeline_name, pipeline_input, self._s3
+                )
+                result = await service.run()
 
-            self._record_success(pipeline_name, service.last_inference_ms)
-            duration_s = time.perf_counter() - t0
-            pipeline_duration_seconds.labels(pipeline_name=pipeline_name).observe(
-                duration_s
-            )
-            self._log.info(
-                f"Pipeline completed: {pipeline_name} pipeline_id={pipeline_id} "
-                f"total={duration_s * 1000:.1f}ms heartbeat={service.last_inference_ms:.1f}ms"
-            )
+                await self._publish_update(
+                    pipeline_id,
+                    PipelineStatus.COMPLETED,
+                    result=result,
+                    message="success",
+                )
 
-        except Exception as e:
-            error_message = str(e)
-            pipeline_failures_total.labels(
-                pipeline_name=pipeline_name, error_type=type(e).__name__
-            ).inc()
-            self._log.error(
-                f"Pipeline failed: {error_message} pipeline_id={pipeline_id}",
-                exc_info=True,
-            )
-            await self._publish_update(
-                trace_id,
-                pipeline_id,
-                PipelineStatus.FAILED,
-                message=error_message,
-            )
+                self._record_success(pipeline_name, service.last_inference_ms)
+                duration_s = time.perf_counter() - t0
+                pipeline_duration_seconds.labels(pipeline_name=pipeline_name).observe(
+                    duration_s
+                )
+                self._log.info(
+                    f"Pipeline completed: {pipeline_name} pipeline_id={pipeline_id} "
+                    f"total={duration_s * 1000:.1f}ms heartbeat={service.last_inference_ms:.1f}ms"
+                )
+
+            except Exception as e:
+                error_message = str(e)
+                pipeline_failures_total.labels(
+                    pipeline_name=pipeline_name, error_type=type(e).__name__
+                ).inc()
+                self._log.error(
+                    f"Pipeline failed: {error_message} pipeline_id={pipeline_id}",
+                    exc_info=True,
+                )
+                await self._publish_update(
+                    pipeline_id,
+                    PipelineStatus.FAILED,
+                    message=error_message,
+                )
 
     async def start(self) -> None:
         self._log.info(

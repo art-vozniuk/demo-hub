@@ -1,10 +1,11 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from services.common.auth.models import User
 from services.common.database import DbSession
+from services.common.observability.tracing import trace_headers
 from services.common.rabbitmq import RabbitMQPublisher, RabbitMQConnection
 from services.common.redis.rate_limit import rate_limit
 from services.core.app.config import config
@@ -117,19 +118,16 @@ async def _process_pipeline(
     resolved_input = await resolve_pipeline_input(db, pipeline_name, pipeline.input)
 
     message = {
-        "trace_id": str(trace_id),
         "pipeline_id": str(pipeline_id),
         "pipeline_name": pipeline_name,
         "input": resolved_input,
-        "enqueued_at": datetime.utcnow().isoformat(),
+        "enqueued_at": datetime.now(timezone.utc).isoformat(),
+        # Sentry trace context: the dispatch worker resumes this trace so
+        # one pipeline shows up as one waterfall (API → queue → Modal).
+        **trace_headers(),
     }
 
-    await publisher.publish(
-        routing_key=routing_key,
-        message=message,
-        trace_id=str(trace_id),
-        pipeline_id=str(pipeline_id),
-    )
+    await publisher.publish(routing_key=routing_key, message=message)
 
     return pipeline_id
 
@@ -144,10 +142,10 @@ async def queue_pipelines(
     db: DbSession,
     user: User = Depends(_get_user_dep()),
 ) -> QueuePipelinesResponse:
-    from services.common.logging.config import context_trace_id
-
+    # trace_id is a client-generated batch id (one frontend submit may
+    # queue several pipelines). Stored on the row for grouping; NOT used
+    # for tracing — Sentry owns correlation now.
     trace_id = request.trace_id
-    context_trace_id.set(str(trace_id))
 
     log.info(f"Received queue request with {len(request.jobs)} jobs")
 

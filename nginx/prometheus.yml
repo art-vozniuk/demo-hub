@@ -4,10 +4,31 @@ global:
   external_labels:
     deployment: demo-hub
 
-# Self-scrape, plus our two app services and the gateway that Modal
-# containers push to. Pushgateway aggregates ephemeral metrics from
-# Modal containers (which can't be scraped directly) and exposes them
-# as a Prometheus-compatible /metrics for Prometheus to pull.
+# Modal's OpenTelemetry integration pushes workspace metrics
+# (modal.container.running, modal.gpu.*, modal.input_events.* — tagged
+# app_name/function_name/environment_name) straight into Prometheus's
+# native OTLP receiver. nginx fronts it at /otel/ with basic auth and
+# proxies to /api/v1/otlp/. Requires --web.enable-otlp-receiver on the
+# prometheus command line (docker-compose.yml).
+otlp:
+  # Keep these resource attributes as real labels — they're how the
+  # Modal System dashboard slices by app and environment.
+  promote_resource_attributes:
+    - app_name
+    - function_name
+    - environment_name
+    - workspace_name
+    - gpu_type
+
+storage:
+  tsdb:
+    # Pushed OTLP samples can arrive late relative to the scrape
+    # timeline; allow a window of out-of-order appends.
+    out_of_order_time_window: 30m
+
+# Self-scrape plus our three long-lived services. Modal containers are
+# never scraped: their per-request timings come back inside generate()
+# responses and dispatch records them (services/common/observability).
 scrape_configs:
   - job_name: prometheus
     static_configs:
@@ -27,8 +48,3 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["compute:9100"]
-
-  - job_name: pushgateway
-    honor_labels: true
-    static_configs:
-      - targets: ["pushgateway:9091"]

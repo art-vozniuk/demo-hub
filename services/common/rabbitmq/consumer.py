@@ -7,7 +7,7 @@ from aio_pika.abc import AbstractIncomingMessage
 from .connection import RabbitMQConnection
 from .config import RabbitMQConfig
 
-from services.common.logging.config import context_trace_id, context_pipeline_id
+from services.common.logging.config import context_pipeline_id
 
 log = logging.getLogger(__name__)
 
@@ -40,9 +40,7 @@ class RabbitMQConsumer:
         async def process_message(message: AbstractIncomingMessage) -> None:
             try:
                 body = json.loads(message.body.decode())
-                trace_id = body.get("trace_id", "unknown")
                 pipeline_id = body.get("pipeline_id", "unknown")
-                context_trace_id.set(trace_id)
                 context_pipeline_id.set(pipeline_id)
             except Exception as e:
                 log.error(f"Failed to parse message from {queue_name}: {e}")

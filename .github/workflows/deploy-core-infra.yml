@@ -174,12 +174,13 @@ jobs:
             CERTBOT_DOMAINS=${CERTBOT_DOMAINS}
             EOF
 
-            # docker-compose.yml bind-mounts nginx/pushgateway.htpasswd into
-            # nginx. Ensure it exists as a FILE before `up`, or Docker creates
-            # a directory at that path. Empty => /pushgateway/ 403 (metrics
-            # blocked, site still up) until the real credential is set:
-            #   htpasswd -B nginx/pushgateway.htpasswd modal
-            [ -f nginx/pushgateway.htpasswd ] || touch nginx/pushgateway.htpasswd
+            # docker-compose.yml bind-mounts nginx/otel.htpasswd into nginx
+            # (basic-auth for Modal's OTLP metric pushes). Ensure it exists as
+            # a FILE before `up`, or Docker creates a directory at that path.
+            # Empty => /otel/ 403 (Modal metrics blocked, site still up) until
+            # the real credential is set:
+            #   htpasswd -B -c nginx/otel.htpasswd otel
+            [ -f nginx/otel.htpasswd ] || touch nginx/otel.htpasswd
 
             # Download renderer data files from GitHub Releases to serve statically.
             # Skips download if the file already matches the current release.

@@ -3,9 +3,9 @@
 How the production stack and the Modal GPU apps get deployed, and how to run a
 full local dev loop against an isolated Modal `dev` environment.
 
-- **Backend** (`core`, `dispatch`, `compute`, `web`, `nginx`, `pushgateway`,
-  `prometheus`, `grafana`) runs on the VDS (`artemv.tech`) from
-  `docker-compose.yml` using `ghcr.io/art-vozniuk/*` images.
+- **Backend** (`core`, `dispatch`, `compute`, `web`, `nginx`, `prometheus`,
+  `grafana`) runs on the VDS (`artemv.tech`) from `docker-compose.yml` using
+  `ghcr.io/art-vozniuk/*` images.
 - **Modal GPU apps** run serverless on Modal: `flux` (legacy — serves the live
   demo), `sharp`, `trellis`, `flux_t2i`, plus `flux_opt` (experimental,
   gateway-routed) and `gateway` (single web entry point).
@@ -28,11 +28,12 @@ apps, secrets, and volumes:
   default (pass `environment_name=` only for cross-env). So the gateway in `dev`
   routes to the `flux_opt` app in `dev`, and the gateway in `main` would route to
   `flux_opt` in `main` — no cross-talk.
-- The secret **`pushgateway`** has the same name in both envs but a different
-  value:
-  - `dev`  → `PUSHGATEWAY_URL=https://<ngrok>/pushgateway` (no token; the local
-    nginx `/pushgateway/` has no basic-auth)
-  - `main` → `PUSHGATEWAY_URL=https://artemv.tech/pushgateway` **+** `PUSHGATEWAY_TOKEN=<plaintext>`
+- There is **no metrics secret**: containers return their per-request timings
+  inside generate() responses (dispatch records them into Prometheus), and
+  Modal's workspace-level **OpenTelemetry integration** pushes system metrics
+  (containers, GPU/CPU/mem, input events) for *all* environments to the prod
+  Prometheus — see section C below. Dev runs show up there under
+  `environment_name="dev"`.
 
 ---
 
@@ -94,7 +95,6 @@ modal secret create supabase-s3 \
   S3_ACCESS_KEY_ID=... S3_ACCESS_KEY_SECRET=... \
   S3_ENDPOINT=... S3_REGION=... S3_PUBLIC_BUCKETS_ENDPOINT=... --env main
 modal secret create huggingface HF_TOKEN=... --env main
-# pushgateway secret: see section C below
 ```
 
 The `flux-models` volume already exists in `main` (prod flux uses it); `flux_opt`
@@ -110,11 +110,12 @@ make -C services/modal deploy-prod-flux-opt   # optional, experimental
 
 ### B. Backend + observability stack — bring it up together
 
-The production `nginx.conf` proxies `/pushgateway/` and `/grafana/` to the
-`pushgateway` and `grafana` containers. **nginx resolves upstream hostnames at
-startup**, so those containers must already exist on `app_network` when nginx
-starts — otherwise nginx (which fronts the whole site) fails to boot. They're in
-nginx's `depends_on`, but the config and the services must roll out **together**:
+The production `nginx.conf` proxies `/otel/` (→ Prometheus's OTLP receiver) and
+`/grafana/` to the `prometheus` and `grafana` containers. **nginx resolves
+upstream hostnames at startup**, so those containers must already exist on
+`app_network` when nginx starts — otherwise nginx (which fronts the whole site)
+fails to boot. They're in nginx's `depends_on`, but the config and the services
+must roll out **together**:
 
 ```bash
 # on the VDS, in the demo-hub checkout
@@ -122,41 +123,48 @@ docker compose -f docker-compose.yml up -d --remove-orphans
 docker compose -f docker-compose.yml up -d --force-recreate nginx
 ```
 
-The existing `deploy core infra` workflow already does exactly this (one
-`docker compose up -d` brings up pushgateway/grafana in the same pass, then
-force-recreates nginx). Do **not** recreate nginx alone before the new services
-exist.
+The existing `deploy core infra` workflow already does exactly this. Do **not**
+recreate nginx alone before the new services exist.
 
-### C. Pushgateway basic-auth (htpasswd)
+### C. Modal OpenTelemetry integration (real system metrics)
 
-`/pushgateway/` in prod is protected by basic-auth (user `modal`) against
-`/etc/nginx/pushgateway.htpasswd`, which `docker-compose.yml` **host-mounts** so
-it survives nginx recreation on every deploy:
+Modal's workspace-level [OTel integration](https://modal.com/docs/guide/otel-integration)
+pushes `modal.container.running`, `modal.gpu.*`, `modal.cpu/memory.*` and
+`modal.input_events.*` (tagged `app_name` / `function_name` /
+`environment_name`) into our Prometheus, which ingests OTLP natively
+(`--web.enable-otlp-receiver`). nginx fronts the receiver at
+`https://artemv.tech/otel/` with basic auth; logs pushes are swallowed with 204
+(we only want metrics). These feed the **Modal System** Grafana dashboard,
+including the real-cost panels (container uptime × GPU rate).
 
-    - ./nginx/pushgateway.htpasswd:/etc/nginx/pushgateway.htpasswd:ro
+1. Create the basic-auth file **once** on the VDS, inside the `demo-hub`
+   checkout (user `otel`, pick a strong password):
 
-Create it **once** on the VDS, inside the `demo-hub` checkout, with the plaintext
-token as the password:
+   ```bash
+   htpasswd -B -c nginx/otel.htpasswd otel
+   ```
 
-```bash
-htpasswd -B -c nginx/pushgateway.htpasswd modal
-```
+   The deploy `touch`es an empty file first when it's missing, so the
+   bind-mount can never become a directory by accident. **Until a real
+   credential is set, `/otel/` returns 403** — Modal pushes are rejected and
+   the Modal System dashboard stays empty, **but the site stays up**. The file
+   is gitignored (`*.htpasswd`) — never commit it.
 
-The deploy `touch`es an empty file first when it's missing, so the bind-mount can
-never become a directory by accident. **Until a real credential is set,
-`/pushgateway/` returns 403** — Modal metric pushes are rejected and the
-inference panels stay empty, **but the site stays up** (nginx only reads the file
-when a request hits `/pushgateway/`, not at boot). The file is gitignored
-(`*.htpasswd`) — never commit it.
+2. In the Modal dashboard → workspace **Settings → Metrics / OpenTelemetry**,
+   configure:
+   - **Push URL:** `https://artemv.tech/otel`
+   - **Secret:** one header key
+     `OTEL_HEADER_Authorization` = `Basic <base64 of "otel:<password>">`
+     (`printf 'otel:<password>' | base64`)
 
-The same plaintext is the `PUSHGATEWAY_TOKEN` the Modal apps send (basic-auth
-user is fixed to `modal` in `flux_opt/app.py:_push`). Create the `main` secret:
+   Use the integration's **test** button — Prometheus should start showing
+   `modal_*` series (Grafana → Explore → metric browser). The integration is
+   configured per **workspace** (one endpoint for all environments); panels
+   filter by `environment_name`.
 
-```bash
-modal secret create pushgateway \
-  PUSHGATEWAY_URL=https://artemv.tech/pushgateway \
-  PUSHGATEWAY_TOKEN=<same-plaintext> --env main --force
-```
+3. If the metric names that arrive differ from the panels' best-guess names
+   (OTLP→Prometheus translation can append `_total`/unit suffixes), adjust
+   `nginx/grafana/dashboards/modal_system.json` once against the live names.
 
 ### D. Post-deploy checklist
 
@@ -168,27 +176,35 @@ curl -fsS https://artemv.tech/health            # -> healthy
   `generative_editing*` → `MODAL_GENERATIVE_*` → `demo-hub-flux` path. This is the
   prod path that must keep working; `MODAL_GATEWAY_*` is unset in prod and is not
   needed (the frontend never calls `flux_opt`).
-- Open `https://artemv.tech/grafana/` — the RED panels should populate from real
-  pipeline traffic.
+- Open `https://artemv.tech/grafana/` — **Platform Overview** and **Pipeline
+  Detail** should populate from that one run (panels are built to show single
+  runs, not just averages under load), and the run should appear as one full
+  trace in Sentry (search by its `pipeline_id` tag).
 
 ---
 
 ## Dev environment (env = `dev`) runbook
 
 Goal: drive `flux_opt` on Modal from the **local** compose stack and see metrics
-in local Grafana — fully isolated from prod.
+in local Grafana — fully isolated from prod. No tunnel needed: containers
+return their timings inside generate() responses, and the local dispatch
+records them into the local Prometheus.
 
 ```
 laptop docker-compose.local.yml          Modal (env=dev)
 ┌───────────────────────────────┐
 │ dispatch ─ MODAL_GATEWAY_* ───────────▶ gateway (modal serve, ephemeral)
-│                               │              │ from_name
-│                               │              ▼
-│ pushgateway ◀── ngrok ◀──────────────── flux_opt (modal deploy)
-│   ▲                           │         pushes metrics
-│   └─ prometheus ─ grafana :3000│
+│   │                           │              │ from_name
+│   │ records timings from      │              ▼
+│   │ generate() responses      │         flux_opt (modal deploy)
+│   ▼                           │
+│ prometheus ─ grafana :3000    │
 └───────────────────────────────┘
 ```
+
+(Modal *system* metrics — GPU util, container counts — go to the **prod**
+Prometheus via the workspace-level OTel integration regardless of environment;
+filter the Modal System dashboard by `environment_name="dev"`.)
 
 1. **Create the dev environment + secrets** (interactive; run it yourself):
 
@@ -197,20 +213,14 @@ laptop docker-compose.local.yml          Modal (env=dev)
    ```
 
    This runs `modal environment create dev` and helps create the dev
-   `pushgateway` / `supabase-s3` / `huggingface` secrets. (`scripts/setup-modal-dev.sh`.)
+   `supabase-s3` / `huggingface` secrets. (`scripts/setup-modal-dev.sh`.)
 
-2. **Start the local stack and an ngrok tunnel to its nginx:**
+2. **Start the local stack:**
 
    ```bash
    bash scripts/setup-local-env.sh            # one-time .env.docker files
    docker compose -f docker-compose.local.yml up --build -d
-   ngrok http 8080                            # tunnels to local nginx -> /pushgateway/
    ```
-
-   Set the dev `pushgateway` secret to `https://<ngrok-id>.ngrok-free.app/pushgateway`
-   (no token). Free ngrok URLs change per session — re-run the secret create (or
-   use a reserved ngrok domain); new Modal containers pick it up on the next cold
-   start, no redeploy needed.
 
 3. **Point Modal at `dev` for the rest:**
 
@@ -257,9 +267,13 @@ laptop docker-compose.local.yml          Modal (env=dev)
 
 7. **Run a `flux_opt_a10g` generation** through the local stack and watch it land:
 
-   - metrics → Grafana at `http://localhost:3000` (or `/grafana/` via nginx:8080)
-   - the gateway terminal shows the spawn → `flux_opt` container; `flux_opt` pushes
-     I/O / pipe / cold-start phases to the local pushgateway via ngrok.
+   - pipeline metrics → local Grafana at `http://localhost:3000` (or `/grafana/`
+     via nginx:8080) — Pipeline Detail shows the run's stage breakdown;
+   - the gateway terminal shows the spawn → `flux_opt` container; phase timings
+     come back inside the generate() response (the `_obs` block) and dispatch
+     records them — no tunnel, no pushgateway;
+   - the full waterfall (API → queue → dispatch → container phases) appears as
+     one trace in Sentry, tagged with the `pipeline_id`.
 
 ---
 

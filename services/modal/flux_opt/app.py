@@ -1,7 +1,9 @@
 """Optimised FLUX.2-klein image-conditioned editing (A10G + H100).
 
 Endpoint-less: invoked by name through the gateway. Dynamic batching on
-H100, async S3 + parallel per-batch I/O, per-phase metrics via InferenceMetrics.
+H100, async S3 + parallel per-batch I/O. Per-phase timings ride back to
+dispatch in each item's `_obs` block (common.instrument), amortized over
+the batch.
 """
 
 from __future__ import annotations
@@ -10,20 +12,23 @@ import asyncio
 import io
 import os
 import time
-import uuid
 from typing import Any
 from uuid import uuid4
 
 import modal
 
+from common.constants import MODAL_FUNCTION_TIMEOUT_SECONDS
+from common.instrument import InferenceRunner
 from common.lib import (
     MODEL_DIR,
     bake_exif_orientation,
     configure_logging,
     make_app,
 )
-from common.metrics import InferenceMetrics
 from common.sentry import init_sentry
+
+
+SCALEDOWN_WINDOW_S = 30
 
 
 MODEL_REPO = "black-forest-labs/FLUX.2-klein-4B"
@@ -50,7 +55,6 @@ flux_image = (
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
         "aioboto3==13.2.0",
-        "prometheus-client==0.20.0",
         "sentry-sdk>=2.42.0",
     )
     .env(
@@ -60,7 +64,9 @@ flux_image = (
             "TRANSFORMERS_OFFLINE": "0",
         }
     )
-    .add_local_python_source("common.lib", "common.metrics", "common.sentry")
+    .add_local_python_source(
+        "common.lib", "common.instrument", "common.constants", "common.sentry"
+    )
 )
 
 
@@ -116,17 +122,11 @@ class _FluxOptBase:
     @modal.enter(snap=False)
     async def move_to_gpu(self) -> None:
         init_sentry(self.CONFIG)
-        # Built here (snap=False) so each container gets its own identity.
-        self.m = InferenceMetrics(self.CONFIG, self.GPU_NAME)
-        self.m.cold_start(
-            "snapshot_load_cpu", getattr(self, "_snapshot_load_cpu_s", 0.0)
-        )
 
         t0 = time.perf_counter()
-        log.info(f"[{self.m.container_id}] post-restore: move_to_gpu() begin")
+        log.info("post-restore: move_to_gpu() begin")
         self.pipe.to("cuda")
         gpu_dt = time.perf_counter() - t0
-        self.m.cold_start("to_cuda", gpu_dt)
 
         t1 = time.perf_counter()
         self._s3_session = aioboto3.Session()
@@ -139,10 +139,20 @@ class _FluxOptBase:
         )
         self.s3 = await self._s3_ctx.__aenter__()
         s3_dt = time.perf_counter() - t1
-        self.m.cold_start("s3_session_open", s3_dt)
-        self.m.push()
+        # Built here (snap=False) so each container gets its own identity.
+        self.runner = InferenceRunner(
+            config=self.CONFIG,
+            gpu=self.GPU_NAME,
+            scaledown_window_s=SCALEDOWN_WINDOW_S,
+            log=log,
+            cold={
+                "snapshot_load": getattr(self, "_snapshot_load_cpu_s", 0.0),
+                "to_cuda": gpu_dt,
+                "s3_session_open": s3_dt,
+            },
+        )
         log.info(
-            f"[{self.m.container_id}] post-restore: ready "
+            f"[{self.runner.container_id}] post-restore: ready "
             f"(to_cuda={gpu_dt * 1000:.0f}ms, s3_open={s3_dt * 1000:.0f}ms)"
         )
 
@@ -151,99 +161,104 @@ class _FluxOptBase:
         try:
             await self._s3_ctx.__aexit__(None, None, None)
         except Exception as e:
-            log.warning(f"[{self.m.container_id}] s3 client close failed: {e}")
-        # Rough real-time cost proxy; Modal billing is source of truth for $.
-        self.m.push_uptime()
+            log.warning(f"s3 client close failed: {e}")
 
     async def _generate_batch(
         self, items: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        batch_id = uuid.uuid4().hex[:6]
-        log.info(
-            f"[{self.m.container_id}/{batch_id}] generate: "
-            f"items={len(items)} config={self.CONFIG}"
-        )
-        self.m.batch(len(items))
-
-        t_dl = time.perf_counter()
-
-        async def _download(it: dict[str, Any]) -> bytes:
-            resp = await self.s3.get_object(
-                Bucket=it["image_bucket"], Key=it["image_key"]
+        # One run per batch; phase timings get amortized per item below so
+        # dispatch-side per-request metrics stay comparable across batch
+        # sizes. The trace continues from the first item's headers.
+        with self.runner.start(items[0]) as run:
+            log.info(
+                f"[{run.request_id}] generate: items={len(items)} "
+                f"config={self.CONFIG}"
             )
-            return await resp["Body"].read()
+            run.batch(len(items))
 
-        raws = await asyncio.gather(*[_download(it) for it in items])
-        self.m.observe("download", time.perf_counter() - t_dl)
+            async def _download(it: dict[str, Any]) -> bytes:
+                resp = await self.s3.get_object(
+                    Bucket=it["image_bucket"], Key=it["image_key"]
+                )
+                return await resp["Body"].read()
 
-        t_prep = time.perf_counter()
+            with run.phase("download"):
+                raws = await asyncio.gather(*[_download(it) for it in items])
 
-        def _prep(raw: bytes, max_side: int) -> Image.Image:
-            oriented = bake_exif_orientation(raw)
-            img = Image.open(io.BytesIO(oriented)).convert("RGB")
-            w, h = img.size
-            s = max_side / max(w, h)
-            return (
-                img.resize((int(w * s), int(h * s)), Image.LANCZOS) if s < 1 else img
-            )
+            def _prep(raw: bytes, max_side: int) -> Image.Image:
+                oriented = bake_exif_orientation(raw)
+                img = Image.open(io.BytesIO(oriented)).convert("RGB")
+                w, h = img.size
+                s = max_side / max(w, h)
+                return (
+                    img.resize((int(w * s), int(h * s)), Image.LANCZOS)
+                    if s < 1
+                    else img
+                )
 
-        inputs = await asyncio.gather(*[
-            asyncio.to_thread(_prep, raw, it.get("max_side", 1024))
-            for raw, it in zip(raws, items)
-        ])
-        self.m.observe("decode", time.perf_counter() - t_prep)
+            with run.phase("decode"):
+                inputs = await asyncio.gather(*[
+                    asyncio.to_thread(_prep, raw, it.get("max_side", 1024))
+                    for raw, it in zip(raws, items)
+                ])
 
-        # diffusers takes one scalar per batch; max() so nobody loses steps
-        steps = max(int(it.get("num_inference_steps") or 4) for it in items)
-        t_pipe = time.perf_counter()
-        out = self.pipe(
-            image=inputs,
-            prompt=[it["prompt"] for it in items],
-            guidance_scale=items[0].get("guidance_scale", 1.0),
-            num_inference_steps=steps,
-        )
-        pipe_dt = time.perf_counter() - t_pipe
-        self.m.observe("gpu", pipe_dt)
-        log.info(
-            f"[{self.m.container_id}/{batch_id}] gpu pipe: {pipe_dt * 1000:.0f}ms "
-            f"({len(items)} images)"
-        )
+            # diffusers takes one scalar per batch; max() so nobody loses steps
+            steps = max(int(it.get("num_inference_steps") or 4) for it in items)
+            with run.phase("gpu"):
+                out = self.pipe(
+                    image=inputs,
+                    prompt=[it["prompt"] for it in items],
+                    guidance_scale=items[0].get("guidance_scale", 1.0),
+                    num_inference_steps=steps,
+                )
 
-        t_up = time.perf_counter()
+            async def _encode_upload(img: Image.Image, it: dict[str, Any]) -> str:
+                def _encode(im: Image.Image) -> bytes:
+                    buf = io.BytesIO()
+                    im.save(buf, format="PNG")
+                    return buf.getvalue()
 
-        async def _encode_upload(img: Image.Image, it: dict[str, Any]) -> str:
-            def _encode(im: Image.Image) -> bytes:
-                buf = io.BytesIO()
-                im.save(buf, format="PNG")
-                return buf.getvalue()
+                png = await asyncio.to_thread(_encode, img)
+                key = f"generative_results/{uuid4().hex}.png"
+                await self.s3.put_object(
+                    Bucket=it["image_bucket"], Key=key, Body=png
+                )
+                return f"{os.environ['S3_PUBLIC_BUCKETS_ENDPOINT']}/{it['image_bucket']}/{key}"
 
-            png = await asyncio.to_thread(_encode, img)
-            key = f"generative_results/{uuid4().hex}.png"
-            await self.s3.put_object(Bucket=it["image_bucket"], Key=key, Body=png)
-            return f"{os.environ['S3_PUBLIC_BUCKETS_ENDPOINT']}/{it['image_bucket']}/{key}"
+            with run.phase("encode_upload"):
+                urls = await asyncio.gather(*[
+                    _encode_upload(img, it) for img, it in zip(out.images, items)
+                ])
 
-        urls = await asyncio.gather(*[
-            _encode_upload(img, it) for img, it in zip(out.images, items)
-        ])
-        self.m.observe("encode_upload", time.perf_counter() - t_up)
-        self.m.push()
+            results = [
+                {"result_url": u, "width": img.width, "height": img.height}
+                for u, img in zip(urls, out.images)
+            ]
+            shared_obs = run.finish({})["_obs"]
 
-        return [
-            {"result_url": u, "width": img.width, "height": img.height}
-            for u, img in zip(urls, out.images)
-        ]
+        # Amortize batch-level timings across items: each spawn resolves to
+        # one item's dict, so every item carries its share; cold-start info
+        # rides on the first item only (dispatch counts it once).
+        n = len(items)
+        for i, result in enumerate(results):
+            obs = dict(shared_obs)
+            obs["timings"] = {k: v / n for k, v in shared_obs["timings"].items()}
+            obs["total_s"] = shared_obs["total_s"] / n
+            if i > 0:
+                obs.pop("cold", None)
+            result["_obs"] = obs
+        return results
 
 
 @app.cls(
     image=flux_image,
     gpu="A10G",
     volumes={MODEL_DIR: volume},
-    scaledown_window=30,
-    timeout=600,
+    scaledown_window=SCALEDOWN_WINDOW_S,
+    timeout=MODAL_FUNCTION_TIMEOUT_SECONDS,
     enable_memory_snapshot=True,
     secrets=[
         modal.Secret.from_name("supabase-s3"),
-        modal.Secret.from_name("pushgateway"),
         modal.Secret.from_name("sentry"),
     ],
 )
@@ -262,12 +277,11 @@ class FluxOptA10G(_FluxOptBase):
     image=flux_image,
     gpu="H100",
     volumes={MODEL_DIR: volume},
-    scaledown_window=30,
-    timeout=600,
+    scaledown_window=SCALEDOWN_WINDOW_S,
+    timeout=MODAL_FUNCTION_TIMEOUT_SECONDS,
     enable_memory_snapshot=True,
     secrets=[
         modal.Secret.from_name("supabase-s3"),
-        modal.Secret.from_name("pushgateway"),
         modal.Secret.from_name("sentry"),
     ],
 )

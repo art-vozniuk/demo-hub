@@ -107,17 +107,6 @@ services:
     networks:
       - app_network
 
-  pushgateway:
-    image: prom/pushgateway:v1.10.0
-    command:
-      - "--web.listen-address=:9091"
-      - "--persistence.file=/data/pushgateway"
-      - "--persistence.interval=1m"
-    volumes:
-      - pushgateway_data_local:/data
-    networks:
-      - app_network
-
   prometheus:
     image: prom/prometheus:v3.2.1
     command:
@@ -126,11 +115,10 @@ services:
       - "--storage.tsdb.retention.time=7d"
       - "--storage.tsdb.retention.size=512MB"
       - "--web.enable-lifecycle"
+      - "--web.enable-otlp-receiver"
     volumes:
       - ./nginx/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data_local:/prometheus
-    depends_on:
-      - pushgateway
     networks:
       - app_network
 
@@ -191,8 +179,6 @@ volumes:
     name: meme-fusion-local-rabbitmq
   face_swap_models_local:
     name: meme-fusion-local-face-swap-models
-  pushgateway_data_local:
-    name: meme-fusion-local-pushgateway
   prometheus_data_local:
     name: meme-fusion-local-prometheus
   grafana_data_local:

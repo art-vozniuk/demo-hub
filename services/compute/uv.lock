@@ -399,6 +399,7 @@ dependencies = [
     { name = "pyjwt", extra = ["crypto"] },
     { name = "redis" },
     { name = "ruff" },
+    { name = "sentry-sdk" },
 ]
 
 [package.metadata]
@@ -412,6 +413,7 @@ requires-dist = [
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.8.0" },
     { name = "redis", extras = ["asyncio"], specifier = ">=5.0.0" },
     { name = "ruff", specifier = ">=0.13.2" },
+    { name = "sentry-sdk", specifier = ">=2.42.0" },
 ]
 
 [[package]]

@@ -29,23 +29,10 @@ else
     modal environment create "${ENV_NAME}" || echo "    (create failed — it may already exist)"
 fi
 
-# ---- pushgateway secret (dev) ----------------------------------------------
-# In dev, Modal containers push metrics to your LOCAL pushgateway through an
-# ngrok tunnel to the local nginx (port 8080), whose /pushgateway/ location has
-# NO basic-auth (nginx/local.conf). So the dev secret carries only
-# PUSHGATEWAY_URL — no token (unlike main).
-echo ""
-echo "==> dev 'pushgateway' secret (-> local pushgateway via ngrok)"
-echo "    Start the tunnel first, in another shell:  ngrok http 8080"
-read -rp "    Paste the ngrok https URL (e.g. https://ab12.ngrok-free.app), blank to skip: " NGROK_URL
-if [ -n "${NGROK_URL}" ]; then
-    NGROK_URL="${NGROK_URL%/}"
-    modal secret create pushgateway "PUSHGATEWAY_URL=${NGROK_URL}/pushgateway" --env "${ENV_NAME}" --force
-    echo "    set dev 'pushgateway' = ${NGROK_URL}/pushgateway"
-else
-    echo "    skipped. Create later with:"
-    echo "      modal secret create pushgateway PUSHGATEWAY_URL=https://<ngrok>/pushgateway --env ${ENV_NAME} --force"
-fi
+# NOTE: no metrics secret needed. Containers return their timings inside
+# generate() responses (dispatch records them), and Modal's workspace-level
+# OpenTelemetry integration pushes system metrics straight to the prod
+# Prometheus — dev runs are visible there under environment_name="dev".
 
 # ---- supabase-s3 + huggingface secrets (dev) -------------------------------
 # These mirror the values already used in main. The script doesn't know them,
@@ -76,7 +63,8 @@ cat <<EOF
   #   MODAL_GATEWAY_SUBMIT_URL=...
   #   MODAL_GATEWAY_POLL_URL=...
   # then restart the local stack and run a flux_opt_a10g generation.
-  # Metrics land in Grafana at http://localhost:3000.
+  # Pipeline metrics land in the local Grafana at http://localhost:3000
+  # (recorded by dispatch from the timings Modal returns — no tunnel).
 
 Done.
 EOF

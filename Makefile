@@ -148,14 +148,8 @@ lint-fix:
 run-dev:
 	docker compose -f docker-compose.local.yml up --build
 
-ngrok-dev:
-	bash scripts/ngrok-dev.sh
-
-run-dev-modal: ngrok-dev run-dev
-
 stop-dev:
 	docker compose -f docker-compose.local.yml down
-	-pkill -x ngrok
 
 deploy-core:
 	docker compose -f docker-compose.local.yml up --build core --detach
@@ -170,4 +164,4 @@ deploy-services:
 	docker compose -f docker-compose.local.yml up --build web core compute dispatch --detach
 
 deploy-prom:
-	docker compose -f docker-compose.local.yml up --build pushgateway grafana prometheus --detach
+	docker compose -f docker-compose.local.yml up --build grafana prometheus --detach

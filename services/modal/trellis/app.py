@@ -1,8 +1,8 @@
 """Modal app: TRELLIS.2 single-image → textured GLB mesh on GPU.
 
-Endpoint-less: invoked by name through the gateway. Per-phase metrics
-via InferenceMetrics. Deploy / preload via
-services/modal/trellis/{deploy,preload}.py.
+Endpoint-less: invoked by name through the gateway. Per-phase timings
+ride back to dispatch in the response `_obs` block (common.instrument).
+Deploy / preload via services/modal/trellis/{deploy,preload}.py.
 """
 
 from __future__ import annotations
@@ -11,11 +11,12 @@ import io
 import os
 import tempfile
 import time
-import uuid
 from typing import Any
 
 import modal
 
+from common.constants import MODAL_FUNCTION_TIMEOUT_SECONDS
+from common.instrument import InferenceRunner
 from common.lib import (
     MODEL_DIR,
     bake_exif_orientation,
@@ -24,8 +25,11 @@ from common.lib import (
     make_app,
     upload_to_s3,
 )
-from common.metrics import InferenceMetrics
 from common.sentry import init_sentry
+
+
+GPU_NAME = "L40S"
+SCALEDOWN_WINDOW_S = 10
 
 
 MODEL_REPO = "microsoft/TRELLIS.2-4B"
@@ -113,7 +117,6 @@ trellis_image = (
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
         "boto3==1.35.92",
-        "prometheus-client==0.20.0",
         "sentry-sdk>=2.42.0",
         extra_options="--extra-index-url https://download.pytorch.org/whl/cu124",
     )
@@ -154,7 +157,9 @@ trellis_image = (
         "pip install git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8",
         gpu="A10G",
     )
-    .add_local_python_source("common.lib", "common.metrics", "common.sentry")
+    .add_local_python_source(
+        "common.lib", "common.instrument", "common.constants", "common.sentry"
+    )
 )
 
 
@@ -360,10 +365,10 @@ def preload_weights() -> str:
 # A10G (24GB) fits TRELLIS.2 at current settings; bump to L40S on OOM.
 @app.cls(
     image=trellis_image,
-    gpu="L40S",
+    gpu=GPU_NAME,
     volumes={MODEL_DIR: volume},
-    scaledown_window=10,
-    timeout=600,
+    scaledown_window=SCALEDOWN_WINDOW_S,
+    timeout=MODAL_FUNCTION_TIMEOUT_SECONDS,
     retries=modal.Retries(max_retries=0),
     # GPU snapshot keeps the GPU attached during snap=True, which is
     # required because flex_gemm/triton init driver state on import.
@@ -371,7 +376,6 @@ def preload_weights() -> str:
     experimental_options={"enable_gpu_snapshot": True},
     secrets=[
         modal.Secret.from_name("supabase-s3"),
-        modal.Secret.from_name("pushgateway"),
         modal.Secret.from_name("sentry"),
         # Belt-and-suspenders for HF deps the preload missed.
         modal.Secret.from_name("huggingface", required_keys=[]),
@@ -425,14 +429,14 @@ class TrellisInference:
     def post_restore(self) -> None:
         init_sentry("trellis")
         # Built here (snap=False) so each container gets its own identity.
-        self.m = InferenceMetrics("trellis", "L40S")
-        self.m.cold_start("to_cuda", getattr(self, "_to_cuda_s", 0.0))
-        self.m.push()
-        log.info(f"[{self.m.container_id}] post-restore: ready")
-
-    @modal.exit()
-    async def cleanup(self) -> None:
-        self.m.push_uptime()
+        self.runner = InferenceRunner(
+            config="trellis",
+            gpu=GPU_NAME,
+            scaledown_window_s=SCALEDOWN_WINDOW_S,
+            log=log,
+            cold={"to_cuda": getattr(self, "_to_cuda_s", 0.0)},
+        )
+        log.info(f"[{self.runner.container_id}] post-restore: ready")
 
     @modal.method()
     def generate(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -444,99 +448,83 @@ class TrellisInference:
         image_bucket = payload["image_bucket"]
         image_key = payload["image_key"]
         steps = payload.get("steps")
-        request_id = uuid.uuid4().hex[:8]
 
         steps = steps if steps in ALLOWED_SAMPLER_STEPS else DEFAULT_SAMPLER_STEPS
-        log.info(f"[{request_id}] inference: start; key={image_key}; steps={steps}")
-        t0 = time.perf_counter()
-        self.m.batch(1)
 
-        t_dl = time.perf_counter()
-        with self.m.phase("download"):
-            raw = download_from_s3(image_bucket, image_key)
-            raw = bake_exif_orientation(raw)
-        log.info(
-            f"[{request_id}] s3 download + EXIF bake done in "
-            f"{(time.perf_counter() - t_dl) * 1000:.0f}ms ({len(raw)} bytes)"
-        )
-
-        image = Image.open(io.BytesIO(raw)).convert("RGB")
-        log.info(
-            f"[{request_id}] inference: decoded input "
-            f"{image.width}x{image.height}, {len(raw)} bytes"
-        )
-
-        t_inf = time.perf_counter()
-        # All three samplers default from pipeline.json (steps=12); kwargs
-        # here override per-request.
-        steps_override = {"steps": steps}
-        with self.m.phase("gpu"):
-            mesh = self.pipe.run(
-                image,
-                sparse_structure_sampler_params=steps_override,
-                shape_slat_sampler_params=steps_override,
-                tex_slat_sampler_params=steps_override,
-            )[0]
-            # nvdiffrast hard limit on face count.
-            mesh.simplify(16777216)
-        inference_ms = (time.perf_counter() - t_inf) * 1000
-        log.info(
-            f"[{request_id}] inference: pipe.run(...) returned in {inference_ms:.0f}ms"
-        )
-
-        t_exp = time.perf_counter()
-        with self.m.phase("upload"):
-            glb = o_voxel.postprocess.to_glb(
-                vertices=mesh.vertices,
-                faces=mesh.faces,
-                attr_volume=mesh.attrs,
-                coords=mesh.coords,
-                attr_layout=mesh.layout,
-                voxel_size=mesh.voxel_size,
-                aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
-                decimation_target=1000000,
-                texture_size=TEXTURE_RESOLUTION,
-                remesh=True,
-                remesh_band=1,
-                remesh_project=0,
-                verbose=False,
-            )
-
-            with tempfile.TemporaryDirectory() as tmp:
-                out_path = os.path.join(tmp, "out.glb")
-                # PNG textures — EXT_texture_webp falls back to grey on viewers
-                # that don't implement the extension.
-                glb.export(out_path)
-                with open(out_path, "rb") as f:
-                    glb_bytes = f.read()
-
-            # Drop pivot to feet so the editor gizmo lands at the base, not the
-            # bbox centre. Runs on serialized bytes via trimesh round-trip.
-            glb_bytes = _drop_pivot_to_feet(glb_bytes, request_id)
-            export_ms = (time.perf_counter() - t_exp) * 1000
+        with self.runner.start(payload) as run:
             log.info(
-                f"[{request_id}] export: to_glb done in {export_ms:.0f}ms; "
-                f"glb_size={len(glb_bytes) / (1024 * 1024):.1f} MB"
+                f"[{run.request_id}] inference: start; key={image_key}; steps={steps}"
+            )
+            run.batch(1)
+
+            with run.phase("download"):
+                raw = download_from_s3(image_bucket, image_key)
+                raw = bake_exif_orientation(raw)
+
+            image = Image.open(io.BytesIO(raw)).convert("RGB")
+            log.info(
+                f"[{run.request_id}] inference: decoded input "
+                f"{image.width}x{image.height}, {len(raw)} bytes"
             )
 
-            t_up = time.perf_counter()
-            result_url = upload_to_s3(
-                data_bytes=glb_bytes,
-                bucket=image_bucket,
-                folder="trellis_results",
-                extension="glb",
+            # All three samplers default from pipeline.json (steps=12); kwargs
+            # here override per-request.
+            steps_override = {"steps": steps}
+            with run.phase("gpu"):
+                mesh = self.pipe.run(
+                    image,
+                    sparse_structure_sampler_params=steps_override,
+                    shape_slat_sampler_params=steps_override,
+                    tex_slat_sampler_params=steps_override,
+                )[0]
+                # nvdiffrast hard limit on face count.
+                mesh.simplify(16777216)
+
+            with run.phase("export"):
+                glb = o_voxel.postprocess.to_glb(
+                    vertices=mesh.vertices,
+                    faces=mesh.faces,
+                    attr_volume=mesh.attrs,
+                    coords=mesh.coords,
+                    attr_layout=mesh.layout,
+                    voxel_size=mesh.voxel_size,
+                    aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+                    decimation_target=1000000,
+                    texture_size=TEXTURE_RESOLUTION,
+                    remesh=True,
+                    remesh_band=1,
+                    remesh_project=0,
+                    verbose=False,
+                )
+
+                with tempfile.TemporaryDirectory() as tmp:
+                    out_path = os.path.join(tmp, "out.glb")
+                    # PNG textures — EXT_texture_webp falls back to grey on
+                    # viewers that don't implement the extension.
+                    glb.export(out_path)
+                    with open(out_path, "rb") as f:
+                        glb_bytes = f.read()
+
+                # Drop pivot to feet so the editor gizmo lands at the base,
+                # not the bbox centre. Runs on serialized bytes via trimesh
+                # round-trip.
+                glb_bytes = _drop_pivot_to_feet(glb_bytes, run.request_id)
+            log.info(
+                f"[{run.request_id}] export: glb_size="
+                f"{len(glb_bytes) / (1024 * 1024):.1f} MB"
             )
-            upload_ms = (time.perf_counter() - t_up) * 1000
 
-        total_ms = (time.perf_counter() - t0) * 1000
-        log.info(
-            f"[{request_id}] inference: done in {total_ms:.0f}ms "
-            f"(inference={inference_ms:.0f}ms export={export_ms:.0f}ms "
-            f"upload={upload_ms:.0f}ms); url={result_url}"
-        )
+            with run.phase("upload"):
+                result_url = upload_to_s3(
+                    data_bytes=glb_bytes,
+                    bucket=image_bucket,
+                    folder="trellis_results",
+                    extension="glb",
+                )
 
-        self.m.push()
-        return {
-            "result_url": result_url,
-            "glb_size_bytes": len(glb_bytes),
-        }
+            return run.finish(
+                {
+                    "result_url": result_url,
+                    "glb_size_bytes": len(glb_bytes),
+                }
+            )

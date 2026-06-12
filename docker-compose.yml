@@ -88,19 +88,6 @@ services:
       - app_network
     restart: unless-stopped
 
-  pushgateway:
-    image: prom/pushgateway:v1.10.0
-    container_name: pushgateway
-    command:
-      - "--web.listen-address=:9091"
-      - "--persistence.file=/data/pushgateway"
-      - "--persistence.interval=1m"
-    volumes:
-      - pushgateway_data:/data
-    networks:
-      - app_network
-    restart: unless-stopped
-
   prometheus:
     image: prom/prometheus:v3.2.1
     container_name: prometheus
@@ -110,11 +97,12 @@ services:
       - "--storage.tsdb.retention.time=7d"
       - "--storage.tsdb.retention.size=1GB"
       - "--web.enable-lifecycle"
+      # Native OTLP ingest — Modal's OpenTelemetry integration pushes
+      # workspace metrics here through nginx /otel/ (basic-auth).
+      - "--web.enable-otlp-receiver"
     volumes:
       - ./nginx/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
-    depends_on:
-      - pushgateway
     networks:
       - app_network
     restart: unless-stopped
@@ -164,19 +152,20 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/user_conf.d/default.conf:ro
       - ./nginx/local.conf:/etc/nginx/user_conf.d/local.conf:ro
-      # Basic-auth file for /pushgateway/. Host-mounted so it survives nginx
-      # recreation on every deploy. Create it once on the VDS (docs/DEPLOY.md):
-      #   htpasswd -B -c nginx/pushgateway.htpasswd modal
-      - ./nginx/pushgateway.htpasswd:/etc/nginx/pushgateway.htpasswd:ro
+      # Basic-auth file for /otel/ (Modal OTLP metric pushes). Host-mounted
+      # so it survives nginx recreation on every deploy. Create it once on
+      # the VDS (docs/DEPLOY.md):
+      #   htpasswd -B -c nginx/otel.htpasswd otel
+      - ./nginx/otel.htpasswd:/etc/nginx/otel.htpasswd:ro
       - nginx_secrets:/etc/letsencrypt
       - nginx_webroot:/var/www/letsencrypt
       - ./renderer-data:/var/www/renderer_data:ro
     depends_on:
       - web
       - core
-      # nginx.conf proxies /pushgateway/ and /grafana/ to these hostnames;
+      # nginx.conf proxies /otel/ and /grafana/ to these hostnames;
       # nginx resolves upstreams at startup, so they must exist first.
-      - pushgateway
+      - prometheus
       - grafana
     networks:
       - app_network
@@ -188,8 +177,6 @@ volumes:
     name: nginx-secrets
   nginx_webroot:
     name: nginx-webroot
-  pushgateway_data:
-    name: pushgateway-data
   prometheus_data:
     name: prometheus-data
   grafana_data:

@@ -1,7 +1,7 @@
 """FLUX.1 [schnell] text-to-image on L40S.
 
-Endpoint-less: invoked by name through the gateway. Per-phase metrics
-via InferenceMetrics.
+Endpoint-less: invoked by name through the gateway. Per-phase timings
+ride back to dispatch in the response `_obs` block (common.instrument).
 """
 
 from __future__ import annotations
@@ -14,17 +14,22 @@ from typing import Any
 
 import modal
 
+from common.constants import MODAL_FUNCTION_TIMEOUT_SECONDS
+from common.instrument import InferenceRunner
 from common.lib import (
     MODEL_DIR,
     configure_logging,
     make_app,
 )
-from common.metrics import InferenceMetrics
 from common.sentry import init_sentry
 
 
 MODEL_REPO = "black-forest-labs/FLUX.1-schnell"
 MODEL_LOCAL_DIR = f"{MODEL_DIR}/flux1-schnell"
+
+# schnell bfloat16 weights are ~24GB — A10G's 22GB OOMs on .to("cuda").
+GPU_NAME = "L40S"
+SCALEDOWN_WINDOW_S = 2
 
 
 log = configure_logging("flux_t2i")
@@ -47,7 +52,6 @@ flux_image = (
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
         "boto3==1.35.92",
-        "prometheus-client==0.20.0",
         "sentry-sdk>=2.42.0",
     )
     .env(
@@ -57,7 +61,9 @@ flux_image = (
             "TRANSFORMERS_OFFLINE": "0",
         }
     )
-    .add_local_python_source("common.lib", "common.metrics", "common.sentry")
+    .add_local_python_source(
+        "common.lib", "common.instrument", "common.constants", "common.sentry"
+    )
 )
 
 
@@ -105,15 +111,13 @@ def preload_weights() -> str:
 
 @app.cls(
     image=flux_image,
-    # schnell bfloat16 weights are ~24GB — A10G's 22GB OOMs on .to("cuda").
-    gpu="L40S",
+    gpu=GPU_NAME,
     volumes={MODEL_DIR: volume},
-    scaledown_window=2,
-    timeout=600,
+    scaledown_window=SCALEDOWN_WINDOW_S,
+    timeout=MODAL_FUNCTION_TIMEOUT_SECONDS,
     enable_memory_snapshot=True,
     secrets=[
         modal.Secret.from_name("supabase-s3"),
-        modal.Secret.from_name("pushgateway"),
         modal.Secret.from_name("sentry"),
     ],
 )
@@ -127,8 +131,10 @@ class FluxT2IInference:
             MODEL_LOCAL_DIR,
             torch_dtype=torch.bfloat16,
         )
-        load_ms = (time.perf_counter() - t0) * 1000
-        log.info(f"snapshot-load: from_pretrained in {load_ms:.0f}ms")
+        self._snapshot_load_s = time.perf_counter() - t0
+        log.info(
+            f"snapshot-load: from_pretrained in {self._snapshot_load_s * 1000:.0f}ms"
+        )
 
     @modal.enter(snap=False)
     def move_to_gpu(self) -> None:
@@ -139,17 +145,19 @@ class FluxT2IInference:
         log.info(f"post-restore: pipe.to(cuda) in {gpu_dt * 1000:.0f}ms")
 
         # Built here (snap=False) so each container gets its own identity.
-        self.m = InferenceMetrics("generative_t2i", "L40S")
-        self.m.cold_start("to_cuda", gpu_dt)
-        self.m.push()
-
-    @modal.exit()
-    async def cleanup(self) -> None:
-        self.m.push_uptime()
+        self.runner = InferenceRunner(
+            config="generative_t2i",
+            gpu=GPU_NAME,
+            scaledown_window_s=SCALEDOWN_WINDOW_S,
+            log=log,
+            cold={
+                "snapshot_load": getattr(self, "_snapshot_load_s", 0.0),
+                "to_cuda": gpu_dt,
+            },
+        )
 
     @modal.method()
     def generate(self, payload: dict[str, Any]) -> dict[str, Any]:
-        request_id = uuid.uuid4().hex[:8]
         prompt = payload["prompt"]
         output_bucket = payload["output_bucket"]
         seed = payload.get("seed")
@@ -158,74 +166,64 @@ class FluxT2IInference:
         width = payload.get("width") or 1024
         height = payload.get("height") or 1024
 
-        log.info(
-            f"[{request_id}] inference: start; prompt_len={len(prompt)} "
-            f"steps={num_inference_steps} guidance={guidance_scale} seed={seed}"
-        )
-        t0 = time.perf_counter()
-        self.m.batch(1)
-
-        generator = None
-        if seed is not None:
-            generator = torch.Generator(device="cuda").manual_seed(int(seed))
-
-        t_inf = time.perf_counter()
-        log.info(
-            f"[{request_id}] inference: pipe(...) call begin; "
-            f"prompt={prompt[:80]!r}{'...' if len(prompt) > 80 else ''}"
-        )
-        with self.m.phase("gpu"):
-            out = self.pipe(
-                prompt=prompt,
-                guidance_scale=guidance_scale,
-                num_inference_steps=num_inference_steps,
-                width=width,
-                height=height,
-                generator=generator,
+        with self.runner.start(payload) as run:
+            log.info(
+                f"[{run.request_id}] inference: start; prompt_len={len(prompt)} "
+                f"steps={num_inference_steps} guidance={guidance_scale} seed={seed}"
             )
-        inference_ms = (time.perf_counter() - t_inf) * 1000
-        log.info(
-            f"[{request_id}] inference: pipe(...) returned in {inference_ms:.0f}ms"
-        )
+            run.batch(1)
 
-        # Inlined upload — Sharp consumes bucket+key, so we build the key locally
-        # instead of parsing it back out of common.lib.upload_to_s3's URL.
-        import boto3
-        from botocore.config import Config as BotoConfig
+            generator = None
+            if seed is not None:
+                generator = torch.Generator(device="cuda").manual_seed(int(seed))
 
-        image_key = f"generative_t2i_results/{uuid.uuid4().hex}.png"
-        t_up = time.perf_counter()
-        with self.m.phase("upload"):
-            result_image = out.images[0]
-            buf = io.BytesIO()
-            result_image.save(buf, format="PNG")
-            png_bytes = buf.getvalue()
-            boto3.client(
-                "s3",
-                aws_access_key_id=os.environ["S3_ACCESS_KEY_ID"],
-                aws_secret_access_key=os.environ["S3_ACCESS_KEY_SECRET"],
-                endpoint_url=os.environ["S3_ENDPOINT"],
-                region_name=os.environ["S3_REGION"],
-                config=BotoConfig(retries={"max_attempts": 5, "mode": "adaptive"}),
-            ).put_object(Bucket=output_bucket, Key=image_key, Body=png_bytes)
-        result_url = f"{os.environ['S3_PUBLIC_BUCKETS_ENDPOINT']}/{output_bucket}/{image_key}"
-        upload_ms = (time.perf_counter() - t_up) * 1000
+            with run.phase("gpu"):
+                out = self.pipe(
+                    prompt=prompt,
+                    guidance_scale=guidance_scale,
+                    num_inference_steps=num_inference_steps,
+                    width=width,
+                    height=height,
+                    generator=generator,
+                )
 
-        total_ms = (time.perf_counter() - t0) * 1000
-        log.info(
-            f"[{request_id}] inference: done; output "
-            f"{result_image.width}x{result_image.height} "
-            f"png_size={len(png_bytes)} bytes "
-            f"inference_ms={inference_ms:.0f} upload_ms={upload_ms:.0f} "
-            f"total_ms={total_ms:.0f} url={result_url}"
-        )
+            # Inlined upload — Sharp consumes bucket+key, so we build the key
+            # locally instead of parsing it back out of upload_to_s3's URL.
+            import boto3
+            from botocore.config import Config as BotoConfig
 
-        self.m.push()
-        return {
-            "result_url": result_url,
-            "image_bucket": output_bucket,
-            "image_key": image_key,
-            "width": result_image.width,
-            "height": result_image.height,
-            "seed": seed,
-        }
+            image_key = f"generative_t2i_results/{uuid.uuid4().hex}.png"
+            with run.phase("upload"):
+                result_image = out.images[0]
+                buf = io.BytesIO()
+                result_image.save(buf, format="PNG")
+                png_bytes = buf.getvalue()
+                boto3.client(
+                    "s3",
+                    aws_access_key_id=os.environ["S3_ACCESS_KEY_ID"],
+                    aws_secret_access_key=os.environ["S3_ACCESS_KEY_SECRET"],
+                    endpoint_url=os.environ["S3_ENDPOINT"],
+                    region_name=os.environ["S3_REGION"],
+                    config=BotoConfig(
+                        retries={"max_attempts": 5, "mode": "adaptive"}
+                    ),
+                ).put_object(Bucket=output_bucket, Key=image_key, Body=png_bytes)
+            result_url = (
+                f"{os.environ['S3_PUBLIC_BUCKETS_ENDPOINT']}/{output_bucket}/{image_key}"
+            )
+            log.info(
+                f"[{run.request_id}] output "
+                f"{result_image.width}x{result_image.height} "
+                f"png_size={len(png_bytes)} bytes url={result_url}"
+            )
+
+            return run.finish(
+                {
+                    "result_url": result_url,
+                    "image_bucket": output_bucket,
+                    "image_key": image_key,
+                    "width": result_image.width,
+                    "height": result_image.height,
+                    "seed": seed,
+                }
+            )
