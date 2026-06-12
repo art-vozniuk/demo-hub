@@ -112,10 +112,15 @@ services:
     container_name: grafana
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # No default: the deploy workflow passes GRAFANA_ADMIN_PASSWORD from
+      # a repo secret. NOTE: Grafana persists the admin password in its DB
+      # on first init — changing the secret later needs
+      #   docker exec grafana grafana cli admin reset-admin-password <new>
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set}
       GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+      # Anonymous access is OFF: dashboards expose internal metrics
+      # (routes, error types, cost) — login required.
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
       # Served under /grafana/ by nginx — Grafana must know its subpath.
       GF_SERVER_ROOT_URL: "https://artemv.tech/grafana/"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"

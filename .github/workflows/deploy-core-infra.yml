@@ -146,6 +146,7 @@ jobs:
         env:
           RABBITMQ_USER: ${{ secrets.RABBITMQ_USER }}
           RABBITMQ_PASSWORD: ${{ secrets.RABBITMQ_PASSWORD }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
           CERTBOT_EMAIL: ${{ secrets.CERTBOT_EMAIL }}
           CERTBOT_DOMAINS: ${{ secrets.CERTBOT_DOMAINS }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
@@ -163,7 +164,7 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: RABBITMQ_USER,RABBITMQ_PASSWORD,CERTBOT_EMAIL,CERTBOT_DOMAINS,GHCR_TOKEN,GH_ACTOR,GH_REPO,CHANGED_CORE,CHANGED_WEB,CHANGED_COMPUTE,CHANGED_DISPATCH
+          envs: RABBITMQ_USER,RABBITMQ_PASSWORD,GRAFANA_ADMIN_PASSWORD,CERTBOT_EMAIL,CERTBOT_DOMAINS,GHCR_TOKEN,GH_ACTOR,GH_REPO,CHANGED_CORE,CHANGED_WEB,CHANGED_COMPUTE,CHANGED_DISPATCH
           script: |
             set -euo pipefail
 
@@ -196,6 +197,7 @@ jobs:
             # Export variables used by docker-compose.yml
             export RABBITMQ_USER="${RABBITMQ_USER}"
             export RABBITMQ_PASSWORD="${RABBITMQ_PASSWORD}"
+            export GRAFANA_ADMIN_PASSWORD="${GRAFANA_ADMIN_PASSWORD}"
 
             echo "Logging in to GHCR..."
             echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GH_ACTOR}" --password-stdin
