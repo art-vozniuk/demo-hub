@@ -73,9 +73,11 @@ jobs:
           echo "compute=$has_compute"   >> $GITHUB_OUTPUT
           echo "dispatch=$has_dispatch" >> $GITHUB_OUTPUT
 
-          # Modal apps: per-app dir, or services/modal/common/ (ships into all).
+          # Modal apps: per-app dir, services/modal/common/ (ships into
+          # all), or the modal deploy workflow itself (same rationale as
+          # the build-<svc>.yml detection above).
           mc=false
-          echo "$changed" | grep -qE '^services/modal/common/' && mc=true
+          echo "$changed" | grep -qE '^services/modal/common/|^\.github/workflows/deploy-modal\.yml$' && mc=true
           for a in flux flux_opt sharp trellis flux_t2i gateway; do
             v=$mc
             echo "$changed" | grep -qE "^services/modal/$a/" && v=true
@@ -236,9 +238,9 @@ jobs:
 
             echo "Deployment completed successfully!"
 
-  # Deploy changed Modal apps to the `main` environment. Endpoint-less model
-  # apps first, gateway LAST — each migrated app drops its 2 web endpoints, so
-  # the 8-web-function free-tier cap is never exceeded mid-deploy.
+  # Deploy changed Modal apps to the `main` environment. Lives in its own
+  # reusable workflow (deploy-modal.yml): model apps fan out in parallel,
+  # gateway strictly after them (its ROUTES point at apps by name).
   deploy-modal:
     needs: [check-changes]
     if: |
@@ -248,35 +250,15 @@ jobs:
       needs.check-changes.outputs.modal_trellis == 'true' ||
       needs.check-changes.outputs.modal_flux_t2i == 'true' ||
       needs.check-changes.outputs.modal_gateway == 'true'
-    runs-on: ubuntu-latest
-    env:
-      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
-      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
-      MODAL_ENVIRONMENT: main
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: pip install 'modal>=1.4.2'
-      - name: deploy flux
-        if: needs.check-changes.outputs.modal_flux == 'true'
-        run: python services/modal/flux/deploy.py
-      - name: deploy flux_opt
-        if: needs.check-changes.outputs.modal_flux_opt == 'true'
-        run: python services/modal/flux_opt/deploy.py
-      - name: deploy sharp
-        if: needs.check-changes.outputs.modal_sharp == 'true'
-        run: python services/modal/sharp/deploy.py
-      - name: deploy trellis
-        if: needs.check-changes.outputs.modal_trellis == 'true'
-        run: python services/modal/trellis/deploy.py
-      - name: deploy flux_t2i
-        if: needs.check-changes.outputs.modal_flux_t2i == 'true'
-        run: python services/modal/flux_t2i/deploy.py
-      - name: deploy gateway
-        if: needs.check-changes.outputs.modal_gateway == 'true'
-        run: python services/modal/gateway/deploy.py
+    uses: ./.github/workflows/deploy-modal.yml
+    secrets: inherit
+    with:
+      flux: ${{ needs.check-changes.outputs.modal_flux == 'true' }}
+      flux_opt: ${{ needs.check-changes.outputs.modal_flux_opt == 'true' }}
+      sharp: ${{ needs.check-changes.outputs.modal_sharp == 'true' }}
+      trellis: ${{ needs.check-changes.outputs.modal_trellis == 'true' }}
+      flux_t2i: ${{ needs.check-changes.outputs.modal_flux_t2i == 'true' }}
+      gateway: ${{ needs.check-changes.outputs.modal_gateway == 'true' }}
 
   # Advance the marker only after BOTH the VDS deploy and the Modal deploy
   # succeed — else a failed Modal deploy would be skipped on the next run.
