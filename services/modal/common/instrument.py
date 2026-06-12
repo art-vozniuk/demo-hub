@@ -84,14 +84,23 @@ class InferenceRun:
                     )
                     self._stretched = True
                 if spawned_at:
-                    # Mirrors Modal's "Startup" column (+ queue wait); clocks
-                    # of two Modal hosts, NTP — skew is typically ms.
+                    # Mirrors Modal's "Startup" column (+ ~1s spawn queue,
+                    # which their column excludes); NTP skew typically ms.
                     self.retro_span(
                         "modal.startup",
                         spawned_at,
-                        cold_wall[0] if cold_wall else self._body_start_wall,
+                        self._body_start_wall,
                         op="modal.startup",
                     )
+                    if cold_wall:
+                        # Modal's own work before our code runs: spawn queue,
+                        # GPU scheduling, image load, memory-snapshot restore.
+                        self.retro_span(
+                            "modal.scheduling_restore",
+                            spawned_at,
+                            cold_wall[0],
+                            op="modal.scheduling_restore",
+                        )
                 if cold_wall:
                     start, end = cold_wall
                     self.retro_span("cold.to_cuda", start, end, op="cold.to_cuda")
