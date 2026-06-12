@@ -19,6 +19,7 @@ import logging
 import time
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Any, Iterator, Mapping
 
 SENTRY_TRACE_KEY = "sentry_trace"
@@ -66,6 +67,45 @@ class InferenceRun:
         self._batch_size: int | None = None
         self._finished = False
         self._transaction = _start_transaction(payload, runner.config)
+        # On the container's first request, stretch the transaction back to
+        # the post-restore hook and span the measured GPU weight transfer.
+        cold_wall = runner.consume_cold_wall()
+        if self._transaction is not None:
+            try:
+                if cold_wall:
+                    start, end = cold_wall
+                    self._transaction.start_timestamp = datetime.fromtimestamp(
+                        start, timezone.utc
+                    )
+                    self.retro_span("cold.to_cuda", start, end, op="cold.to_cuda")
+                self._transaction.set_tag("cold", "true" if cold_wall else "false")
+            except Exception:
+                pass
+
+    def tag(self, key: str, value: Any) -> None:
+        """Tag the active Sentry transaction (no-op without one)."""
+
+        if self._transaction is not None:
+            try:
+                self._transaction.set_tag(key, str(value))
+            except Exception:
+                pass
+
+    def retro_span(
+        self, name: str, start_ts: float, end_ts: float, op: str | None = None
+    ) -> None:
+        """Span from wall-clock POSIX timestamps measured by hand — Sentry
+        only, deliberately NOT added to `_obs` timings (no double count)."""
+
+        if self._transaction is None or end_ts <= start_ts:
+            return
+        try:
+            child = self._transaction.start_child(
+                op=op or f"phase.{name}", name=name, start_timestamp=start_ts
+            )
+            child.finish(end_timestamp=end_ts)
+        except Exception:
+            pass
 
     def __enter__(self) -> "InferenceRun":
         return self
@@ -144,6 +184,7 @@ class InferenceRunner:
         scaledown_window_s: float,
         log: logging.Logger | None = None,
         cold: Mapping[str, float] | None = None,
+        cold_wall: tuple[float, float] | None = None,
     ) -> None:
         self.config = config
         self.gpu = gpu
@@ -153,10 +194,17 @@ class InferenceRunner:
         self._cold: dict[str, float] | None = (
             {k: float(v) for k, v in cold.items() if v} if cold else None
         )
+        # Wall-clock (start, end) of the measured cold-start work in the
+        # @enter hook; consumed by the first run's Sentry transaction.
+        self._cold_wall = cold_wall
 
     def consume_cold(self) -> dict[str, float] | None:
         cold, self._cold = self._cold, None
         return cold
+
+    def consume_cold_wall(self) -> tuple[float, float] | None:
+        wall, self._cold_wall = self._cold_wall, None
+        return wall
 
     def start(self, payload: Mapping[str, Any]) -> InferenceRun:
         return InferenceRun(self, payload)

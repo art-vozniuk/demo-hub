@@ -5,6 +5,7 @@ Deploy / preload via services/modal/flux/{deploy,preload}.py.
 
 from __future__ import annotations
 
+import inspect
 import io
 import os
 import time
@@ -128,7 +129,7 @@ def preload_weights() -> str:
         modal.Secret.from_name("supabase-s3"),
         modal.Secret.from_name("sentry"),
     ],
-    #min_containers=1,
+    # min_containers=1,
 )
 @modal.concurrent(max_inputs=1)
 class FluxInference:
@@ -170,9 +171,14 @@ class FluxInference:
             "post-restore: move_to_gpu() begin; runs after each container "
             "start, with the GPU now attached"
         )
+        wall0 = time.time()
         t0 = time.perf_counter()
         self.pipe.to("cuda")
         to_cuda_s = time.perf_counter() - t0
+        # Per-step timing needs diffusers' step callback; probe once.
+        self._supports_step_cb = (
+            "callback_on_step_end" in inspect.signature(self.pipe.__call__).parameters
+        )
         self.runner = InferenceRunner(
             config="flux",
             gpu=GPU_NAME,
@@ -182,6 +188,7 @@ class FluxInference:
                 "snapshot_load": getattr(self, "_snapshot_load_s", 0.0),
                 "to_cuda": to_cuda_s,
             },
+            cold_wall=(wall0, wall0 + to_cuda_s),
         )
         log.info(
             f"post-restore: pipe.to(cuda) finished in {to_cuda_s * 1000:.0f}ms; "
@@ -206,39 +213,68 @@ class FluxInference:
 
             with run.phase("download"):
                 raw = download_from_s3(image_bucket, image_key)
+
+            with run.phase("preprocess"):
                 raw = bake_exif_orientation(raw)
-
-            init = Image.open(io.BytesIO(raw)).convert("RGB")
-            log.info(
-                f"[{run.request_id}] inference: decoded input "
-                f"{init.width}x{init.height}, {len(raw)} bytes"
-            )
-
-            # Cap the longest side. Klein 4B itself fits comfortably on A10G,
-            # but very large inputs blow up the encoder activations.
-            w, h = init.size
-            scale = max_side / max(w, h)
-            if scale < 1.0:
-                new_w = int(round(w * scale))
-                new_h = int(round(h * scale))
+                init = Image.open(io.BytesIO(raw)).convert("RGB")
                 log.info(
-                    f"[{run.request_id}] inference: resizing "
-                    f"{w}x{h} -> {new_w}x{new_h} (max_side={max_side})"
+                    f"[{run.request_id}] inference: decoded input "
+                    f"{init.width}x{init.height}, {len(raw)} bytes"
                 )
-                init = init.resize((new_w, new_h), Image.LANCZOS)
+                # Cap the longest side. Klein 4B itself fits comfortably on
+                # A10G, but very large inputs blow up encoder activations.
+                w, h = init.size
+                scale = max_side / max(w, h)
+                if scale < 1.0:
+                    new_w = int(round(w * scale))
+                    new_h = int(round(h * scale))
+                    log.info(
+                        f"[{run.request_id}] inference: resizing "
+                        f"{w}x{h} -> {new_w}x{new_h} (max_side={max_side})"
+                    )
+                    init = init.resize((new_w, new_h), Image.LANCZOS)
+
+            step_ends: list[float] = []
+            extra: dict[str, Any] = {}
+            if self._supports_step_cb:
+
+                def _on_step_end(pipe, step, timestep, callback_kwargs):
+                    step_ends.append(time.time())
+                    return callback_kwargs
+
+                extra["callback_on_step_end"] = _on_step_end
 
             with run.phase("gpu"):
+                gpu_t0 = time.time()
                 out = self.pipe(
                     image=init,
                     prompt=prompt,
                     guidance_scale=guidance_scale,
                     num_inference_steps=num_inference_steps,
+                    **extra,
                 )
+                gpu_t1 = time.time()
 
-            result_image: "Image.Image" = out.images[0]
-            buf = io.BytesIO()
-            result_image.save(buf, format="PNG")
-            png_bytes = buf.getvalue()
+            # Sentry-only breakdown of the opaque pipe() call: text-encode
+            # is inseparable from step 1 (the callback fires at step ends).
+            if step_ends:
+                run.retro_span("gpu.encode_step1", gpu_t0, step_ends[0])
+                if len(step_ends) > 1:
+                    run.retro_span("gpu.denoise_steps", step_ends[0], step_ends[-1])
+                    per_step_ms = (
+                        (step_ends[-1] - step_ends[0]) / (len(step_ends) - 1) * 1000
+                    )
+                    run.tag("gpu.ms_per_step", int(round(per_step_ms)))
+                run.retro_span("gpu.vae_decode", step_ends[-1], gpu_t1)
+            run.tag("steps", num_inference_steps)
+            run.tag("guidance", guidance_scale)
+            run.tag("resolution", f"{init.width}x{init.height}")
+
+            with run.phase("postprocess"):
+                result_image: "Image.Image" = out.images[0]
+                buf = io.BytesIO()
+                result_image.save(buf, format="PNG")
+                png_bytes = buf.getvalue()
 
             with run.phase("upload"):
                 result_url = upload_to_s3(
