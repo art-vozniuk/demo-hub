@@ -70,6 +70,7 @@ class InferenceRun:
         # On the container's first request, stretch the transaction back to
         # the post-restore hook and span the measured GPU weight transfer.
         cold_wall = runner.consume_cold_wall()
+        self._stretched = False
         if self._transaction is not None:
             try:
                 if cold_wall:
@@ -77,6 +78,7 @@ class InferenceRun:
                     self._transaction.start_timestamp = datetime.fromtimestamp(
                         start, timezone.utc
                     )
+                    self._stretched = True
                     self.retro_span("cold.to_cuda", start, end, op="cold.to_cuda")
                 self._transaction.set_tag("cold", "true" if cold_wall else "false")
             except Exception:
@@ -112,6 +114,14 @@ class InferenceRun:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         if self._transaction is not None:
+            # A stretched (cold) transaction needs an explicit wall-clock
+            # end: the SDK otherwise derives it from the original monotonic
+            # start, pulling the end backwards past its own child spans.
+            if self._stretched and exc is None:
+                try:
+                    self._transaction.finish(end_timestamp=time.time())
+                except Exception:
+                    pass
             self._transaction.__exit__(exc_type, exc, tb)
         if exc is not None and not self._finished:
             self._log.error(
