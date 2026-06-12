@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict
 from uuid import UUID
@@ -7,6 +8,7 @@ from services.common.rabbitmq import RabbitMQConsumer
 from services.common.rabbitmq.config import rabbitmq_config
 from services.common.domain.enums import PipelineStatus
 from services.common.database.core import async_session_maker
+from services.common.observability.tracing import continue_trace_from, retro_span
 from . import service
 from ..wallet import service as wallet_service
 
@@ -33,6 +35,21 @@ def _observe_e2e(pipeline, status: PipelineStatus) -> None:
     ).observe(max(elapsed, 0.0))
 
 
+def _retro_queue_wait(message: Dict[str, Any]) -> None:
+    enqueued_at = message.get("enqueued_at")
+    if not enqueued_at:
+        return
+    try:
+        enqueued = datetime.fromisoformat(enqueued_at)
+    except ValueError:
+        return
+    if enqueued.tzinfo is None:
+        enqueued = enqueued.replace(tzinfo=timezone.utc)
+    retro_span(
+        "queue.wait", "rabbitmq pipelines.update", enqueued.timestamp(), time.time()
+    )
+
+
 async def handle_pipeline_update(message: Dict[str, Any]) -> None:
     pipeline_id = UUID(message["pipeline_id"])
     status = PipelineStatus(message["status"])
@@ -42,22 +59,29 @@ async def handle_pipeline_update(message: Dict[str, Any]) -> None:
     context_pipeline_id.set(str(pipeline_id))
 
     log.info(f"Received pipeline update: status={status}")
-    async with async_session_maker() as db:
-        pipeline = await service.update_pipeline_status(
-            db=db,
-            pipeline_id=pipeline_id,
-            status=status,
-            result=result,
-            message=error_message,
-        )
+    with continue_trace_from(
+        message,
+        op="queue.task",
+        name="pipeline.update",
+        tags={"pipeline_id": str(pipeline_id), "pipeline_status": status.value},
+    ):
+        _retro_queue_wait(message)
+        async with async_session_maker() as db:
+            pipeline = await service.update_pipeline_status(
+                db=db,
+                pipeline_id=pipeline_id,
+                status=status,
+                result=result,
+                message=error_message,
+            )
 
-        if pipeline is not None and status in _TERMINAL:
-            _observe_e2e(pipeline, status)
+            if pipeline is not None and status in _TERMINAL:
+                _observe_e2e(pipeline, status)
 
-        # Refund on terminal failure; idempotent if message redelivers.
-        if status == PipelineStatus.FAILED:
-            await wallet_service.refund(db, pipeline_id)
-            await db.commit()
+            # Refund on terminal failure; idempotent if message redelivers.
+            if status == PipelineStatus.FAILED:
+                await wallet_service.refund(db, pipeline_id)
+                await db.commit()
 
 
 async def start_pipeline_update_consumer(consumer: RabbitMQConsumer) -> None:

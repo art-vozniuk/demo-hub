@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from services.common.auth.models import User
 from services.common.database import DbSession
-from services.common.observability.tracing import trace_headers
+from services.common.observability.tracing import span, trace_headers
 from services.common.rabbitmq import RabbitMQPublisher, RabbitMQConnection
 from services.common.redis.rate_limit import rate_limit
 from services.core.app.config import config
@@ -126,7 +126,8 @@ async def _process_pipeline(
         **trace_headers(),
     }
 
-    await publisher.publish(routing_key=routing_key, message=message)
+    with span("queue.publish", routing_key):
+        await publisher.publish(routing_key=routing_key, message=message)
 
     return pipeline_id
 
@@ -194,10 +195,38 @@ async def get_pipeline_status(
     db: DbSession,
 ) -> PipelineStatusResponse:
     pipelines = await service.get_pipelines_by_ids(db, request.pipeline_ids)
+    _observe_status_delivery(pipelines)
 
     return PipelineStatusResponse(
         pipelines=[PipelineStatusItem.model_validate(p) for p in pipelines]
     )
+
+
+def _observe_status_delivery(pipelines) -> None:
+    """Terminal status in DB → client fetched it: frontend poll-interval
+    sanity check. The window guards against gallery re-reads of old rows."""
+
+    from services.common.observability.metrics import status_delivery_lag_seconds
+
+    now = datetime.now(timezone.utc)
+    for p in pipelines:
+        status_val = getattr(p.status, "value", p.status)
+        if status_val not in ("COMPLETED", "FAILED"):
+            continue
+        updated_at = getattr(p, "updated_at", None)
+        if updated_at is None:
+            continue
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        lag = (now - updated_at).total_seconds()
+        if 0 <= lag < 300:
+            status_delivery_lag_seconds.labels(pipeline_name=p.pipeline_name).observe(
+                lag
+            )
+            log.info(
+                f"terminal status delivered to client {lag * 1000:.0f}ms "
+                f"after completion [pipeline_id={p.id}]"
+            )
 
 
 @router.get(

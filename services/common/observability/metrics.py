@@ -149,3 +149,11 @@ pipeline_e2e_seconds = Histogram(
     ["pipeline_name", "status"],
     buckets=E2E_BUCKETS,
 )
+
+status_delivery_lag_seconds = Histogram(
+    "demo_hub_status_delivery_lag_seconds",
+    "Terminal status in DB → client fetched it via /status (frontend "
+    "poll-interval sanity check).",
+    ["pipeline_name"],
+    buckets=QUEUE_WAIT_BUCKETS,
+)

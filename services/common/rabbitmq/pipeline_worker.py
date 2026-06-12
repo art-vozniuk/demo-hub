@@ -19,7 +19,12 @@ from typing import Any, Callable, Mapping, Protocol
 
 from services.common.domain.enums import PipelineStatus
 from services.common.logging.config import context_pipeline_id
-from services.common.observability.tracing import continue_trace_from
+from services.common.observability.tracing import (
+    continue_trace_from,
+    retro_span,
+    span,
+    trace_headers,
+)
 from services.common.rabbitmq.connection import RabbitMQConnection
 from services.common.rabbitmq.consumer import RabbitMQConsumer
 from services.common.rabbitmq.publisher import RabbitMQPublisher
@@ -98,15 +103,19 @@ class PipelineWorker:
         if self._publisher is None:
             raise RuntimeError("Publisher not initialized")
 
-        await self._publisher.publish(
-            routing_key=rabbitmq_config.routing_update,
-            message={
-                "pipeline_id": pipeline_id,
-                "status": status.value,
-                "result": result,
-                "message": message,
-            },
-        )
+        with span("queue.publish", rabbitmq_config.routing_update):
+            await self._publisher.publish(
+                routing_key=rabbitmq_config.routing_update,
+                message={
+                    "pipeline_id": pipeline_id,
+                    "status": status.value,
+                    "result": result,
+                    "message": message,
+                    "enqueued_at": datetime.now(timezone.utc).isoformat(),
+                    # core's update consumer resumes the pipeline trace.
+                    **trace_headers(),
+                },
+            )
 
     @staticmethod
     def _queue_wait_seconds(message: Mapping[str, Any]) -> float | None:
@@ -134,6 +143,7 @@ class PipelineWorker:
         )
 
         t0 = time.perf_counter()
+        t_recv = time.time()
 
         pipeline_id = message["pipeline_id"]
         pipeline_name = message["pipeline_name"]
@@ -156,6 +166,13 @@ class PipelineWorker:
             name=f"pipeline.{pipeline_name}",
             tags={"pipeline_id": str(pipeline_id), "pipeline_name": pipeline_name},
         ):
+            if wait_s is not None:
+                retro_span(
+                    "queue.wait",
+                    f"rabbitmq {self._queue_name}",
+                    t_recv - wait_s,
+                    t_recv,
+                )
             try:
                 await self._publish_update(pipeline_id, PipelineStatus.RUNNING)
 

@@ -35,7 +35,7 @@ from services.common.observability.metrics import (
     modal_call_retries_total,
     modal_overhead_seconds,
 )
-from services.common.observability.tracing import trace_headers
+from services.common.observability.tracing import span, trace_headers
 from services.dispatch.app.config import config
 
 log = logging.getLogger(__name__)
@@ -204,7 +204,8 @@ async def _submit_and_poll(
 ) -> dict[str, Any]:
     """POST to /submit, then /poll on a fixed cadence until done."""
 
-    submit_resp = await _post_to_modal(submit_url_label, submit_url, payload)
+    with span("modal.submit", label):
+        submit_resp = await _post_to_modal(submit_url_label, submit_url, payload)
     if "error" in submit_resp:
         raise ModalInferenceError(
             f"Modal {label} submit failed: {submit_resp['error']}"
@@ -219,32 +220,35 @@ async def _submit_and_poll(
     log.info(f"[{request_id}] {label} submit ok; polling call_id={call_id}")
     deadline = time.monotonic() + config.MODAL_PIPELINE_DEADLINE_SECONDS
     poll_count = 0
-    while True:
-        if time.monotonic() > deadline:
-            raise ModalInferenceError(
-                f"Modal {label} poll timed out after "
-                f"{config.MODAL_PIPELINE_DEADLINE_SECONDS}s; call_id={call_id}"
-            )
+    with span("modal.poll", label) as poll_span:
+        while True:
+            if time.monotonic() > deadline:
+                raise ModalInferenceError(
+                    f"Modal {label} poll timed out after "
+                    f"{config.MODAL_PIPELINE_DEADLINE_SECONDS}s; call_id={call_id}"
+                )
 
-        poll_resp = await _post_to_modal(
-            poll_url_label,
-            poll_url,
-            {"call_id": call_id},
-        )
-        poll_count += 1
-        status = poll_resp.get("status")
-        if status == "done":
-            log.info(
-                f"[{request_id}] {label} done after {poll_count} polls; "
-                f"call_id={call_id}"
+            poll_resp = await _post_to_modal(
+                poll_url_label,
+                poll_url,
+                {"call_id": call_id},
             )
-            return poll_resp["result"]
-        if status in ("failed", "expired", "error"):
-            raise ModalInferenceError(
-                f"Modal {label} poll status={status}; call_id={call_id} "
-                f"error={poll_resp.get('error')}"
-            )
-        await asyncio.sleep(config.MODAL_POLL_INTERVAL_SECONDS)
+            poll_count += 1
+            status = poll_resp.get("status")
+            if status == "done":
+                log.info(
+                    f"[{request_id}] {label} done after {poll_count} polls; "
+                    f"call_id={call_id}"
+                )
+                if poll_span is not None:
+                    poll_span.set_data("polls", poll_count)
+                return poll_resp["result"]
+            if status in ("failed", "expired", "error"):
+                raise ModalInferenceError(
+                    f"Modal {label} poll status={status}; call_id={call_id} "
+                    f"error={poll_resp.get('error')}"
+                )
+            await asyncio.sleep(config.MODAL_POLL_INTERVAL_SECONDS)
 
 
 def _record_inference_obs(

@@ -52,8 +52,24 @@ def continue_trace_from(
 
 
 @contextmanager
-def span(op: str, description: str | None = None) -> Iterator[None]:
+def span(op: str, description: str | None = None) -> Iterator[Any]:
     """A child span on whatever transaction is ambient (no-op without one)."""
 
-    with sentry_sdk.start_span(op=op, name=description or op):
-        yield
+    with sentry_sdk.start_span(op=op, name=description or op) as s:
+        yield s
+
+
+def retro_span(op: str, name: str, start_ts: float, end_ts: float) -> None:
+    """Backdated child span from wall-clock POSIX timestamps — for work
+    that finished before we could open a live span (e.g. queue wait)."""
+
+    if end_ts <= start_ts:
+        return
+    try:
+        parent = sentry_sdk.get_current_span()
+        if parent is None:
+            return
+        child = parent.start_child(op=op, name=name, start_timestamp=start_ts)
+        child.finish(end_timestamp=end_ts)
+    except Exception:
+        pass
