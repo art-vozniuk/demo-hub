@@ -41,7 +41,9 @@ if config.SENTRY_DSN:
     def _traces_sampler(ctx):
         scope = ctx.get("asgi_scope")
         if scope is not None:
-            if scope.get("path") in ("/metrics", "/health"):
+            # /status is the frontend's 1/sec poll — it buries every
+            # pipeline trace under dozens of noise transactions.
+            if scope.get("path") in ("/metrics", "/health", "/api/v1/pipelines/status"):
                 return 0.0
             # Core roots the pipeline trace — never inherit the browser's
             # 10% pageload verdict, or 90% of pipelines go untraced.
