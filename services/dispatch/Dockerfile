@@ -31,4 +31,4 @@ ARG BUILD_TAG=unknown
 ENV BUILD_TAG=${BUILD_TAG}
 
 WORKDIR /app/services/dispatch
-CMD sh -c 'if [ -f /app/.env ]; then export $(cat /app/.env | xargs); fi && python main.py'
+CMD sh -c 'if [ -f /app/.env ]; then export $(grep -vE "^[[:space:]]*#" /app/.env | xargs); fi && python main.py'

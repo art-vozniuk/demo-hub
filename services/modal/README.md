@@ -1,5 +1,10 @@
 # Modal — serverless GPU inference
 
+> **Environments, CI/CD, and the dev runbook are in [docs/DEPLOY.md](../../docs/DEPLOY.md).**
+> Prod (`main`) deploys via `.github/workflows/deploy-modal.yml`; dev uses
+> `make -C services/modal <target>`. That doc also explains the 8-web-function
+> cap and why the gateway isn't deployed to `main`.
+
 Two independent Modal apps live in this directory, one per demo. They
 share the same GPU + memory-snapshot pattern but use separate volumes,
 endpoints, and proxy-auth tokens.

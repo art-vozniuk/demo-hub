@@ -33,6 +33,10 @@ services:
   core:
     image: ghcr.io/art-vozniuk/core:latest
     container_name: core
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -48,6 +52,7 @@ services:
       RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
       REDIS_URL: redis://redis:6379
       RABBITMQ_PREFETCH: "10"
+      COMPUTE_METRICS_PORT: "9100"
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -63,12 +68,63 @@ services:
     environment:
       RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
       REDIS_URL: redis://redis:6379
-      RABBITMQ_PREFETCH: "20"
+      # Bumped from 20: dispatch is pure async I/O (no model in
+      # process). At prefetch=20 the worker's max_concurrent_tasks
+      # slots above 20 sit idle — RabbitMQ never delivers enough to
+      # use them.
+      RABBITMQ_PREFETCH: "256"
+      WORKER_MAX_CONCURRENT_TASKS: "256"
+      DISPATCH_METRICS_PORT: "9100"
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     depends_on:
       rabbitmq:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks:
+      - app_network
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    container_name: prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--storage.tsdb.retention.size=1GB"
+      - "--web.enable-lifecycle"
+      # OTLP ingest for Modal's OTel integration (via nginx /otel/).
+      - "--web.enable-otlp-receiver"
+    volumes:
+      - ./nginx/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - app_network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      # From a repo secret; Grafana persists it on first init (later changes
+      # need `grafana cli admin reset-admin-password`).
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      # Served under /grafana/ by nginx — Grafana must know its subpath.
+      GF_SERVER_ROOT_URL: "https://artemv.tech/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    volumes:
+      - ./nginx/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./nginx/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
     networks:
       - app_network
     restart: unless-stopped
@@ -96,12 +152,17 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/user_conf.d/default.conf:ro
       - ./nginx/local.conf:/etc/nginx/user_conf.d/local.conf:ro
+      # Basic-auth for /otel/; created once on the VDS (docs/DEPLOY.md).
+      - ./nginx/otel.htpasswd:/etc/nginx/otel.htpasswd:ro
       - nginx_secrets:/etc/letsencrypt
       - nginx_webroot:/var/www/letsencrypt
       - ./renderer-data:/var/www/renderer_data:ro
     depends_on:
       - web
       - core
+      # nginx resolves /otel/ and /grafana/ upstreams at startup.
+      - prometheus
+      - grafana
     networks:
       - app_network
 
@@ -112,6 +173,10 @@ volumes:
     name: nginx-secrets
   nginx_webroot:
     name: nginx-webroot
+  prometheus_data:
+    name: prometheus-data
+  grafana_data:
+    name: grafana-data
 
 networks:
   app_network:

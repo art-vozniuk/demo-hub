@@ -1,0 +1,177 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "text",
+      "title": "",
+      "gridPos": {"h": 4, "w": 24, "x": 0, "y": 0},
+      "id": 99,
+      "options": {"mode": "markdown", "content": "**Real workspace metrics pushed by Modal's OpenTelemetry integration** (Modal dashboard → workspace Settings → Metrics: push URL `https://artemv.tech/otel`, auth header from `nginx/otel.htpasswd` — see docs/DEPLOY.md). Covers prod *and* dev runs — filter with the `environment` variable.\n\n⚠️ Metric names below assume Prometheus's default OTLP translation (`modal.container.running` → `modal_container_running`, counters get `_total`). After the first push, verify against `https://artemv.tech/grafana/` → Explore → metric browser `modal_`, and adjust panels if Modal's exporter names differ."}
+    },
+    {
+      "type": "timeseries",
+      "title": "Running containers",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 4},
+      "id": 1,
+      "targets": [{"expr": "sum by (app_name) (modal_container_running{environment_name=~\"$environment\", app_name=~\"$app\"})", "legendFormat": "{{app_name}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 30, "stacking": {"mode": "normal"}}}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "GPU compute utilization",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 4},
+      "id": 2,
+      "targets": [{"expr": "avg by (app_name) (modal_gpu_compute_utilization{environment_name=~\"$environment\", app_name=~\"$app\"})", "legendFormat": "{{app_name}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percent"}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "GPU memory usage",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 11},
+      "id": 3,
+      "targets": [{"expr": "max by (app_name) (modal_gpu_memory_usage{environment_name=~\"$environment\", app_name=~\"$app\"})", "legendFormat": "{{app_name}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU cores in use",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 11},
+      "id": 4,
+      "targets": [{"expr": "sum by (app_name) (modal_cpu_utilization{environment_name=~\"$environment\", app_name=~\"$app\"})", "legendFormat": "{{app_name}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "Container memory usage",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 11},
+      "id": 5,
+      "targets": [{"expr": "max by (app_name) (modal_memory_usage{environment_name=~\"$environment\", app_name=~\"$app\"})", "legendFormat": "{{app_name}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []}
+    },
+
+    {"type": "row", "title": "Inputs (Modal's own view of your calls)", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 18}, "id": 100},
+    {
+      "type": "timeseries",
+      "title": "Input success ratio",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 19},
+      "id": 6,
+      "targets": [{"expr": "sum by (app_name) (increase(modal_input_events_successes_total{environment_name=~\"$environment\", app_name=~\"$app\"}[$__rate_interval])) / clamp_min(sum by (app_name) (increase(modal_input_events_total_inputs_total{environment_name=~\"$environment\", app_name=~\"$app\"}[$__rate_interval])), 1)", "legendFormat": "{{app_name}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "max": 1}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "Cold start time (Modal-reported)",
+      "description": "modal.input_events.coldstart_time_us — Modal's own measurement, cross-check for our to_cuda timings.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 19},
+      "id": 7,
+      "targets": [{"expr": "avg by (app_name) (modal_input_events_coldstart_time_us{environment_name=~\"$environment\", app_name=~\"$app\"}) / 1e6", "legendFormat": "{{app_name}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "Input queue time (Modal-side queueing)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 19},
+      "id": 8,
+      "targets": [{"expr": "avg by (app_name) (modal_input_events_input_queue_time_us{environment_name=~\"$environment\", app_name=~\"$app\"}) / 1e6", "legendFormat": "{{app_name}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "Pending / running inputs",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 26},
+      "id": 9,
+      "targets": [
+        {"expr": "sum by (app_name) (modal_function_pending_inputs{environment_name=~\"$environment\", app_name=~\"$app\"})", "legendFormat": "pending {{app_name}}", "refId": "A"},
+        {"expr": "sum by (app_name) (modal_function_running_inputs{environment_name=~\"$environment\", app_name=~\"$app\"})", "legendFormat": "running {{app_name}}", "refId": "B"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "Container terminations",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 26},
+      "id": 10,
+      "targets": [{"expr": "sum by (app_name) (increase(modal_container_terminations_total{environment_name=~\"$environment\", app_name=~\"$app\"}[$__rate_interval]))", "legendFormat": "{{app_name}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "fillOpacity": 60}}, "overrides": []}
+    },
+
+    {"type": "row", "title": "Cost (from real container uptime)", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 32}, "id": 101},
+    {
+      "type": "stat",
+      "title": "Billed container-hours (range)",
+      "description": "Integral of modal.container.running over the selected range — this is what Modal actually bills (per-second container uptime).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 33},
+      "id": 11,
+      "targets": [{"expr": "sum(avg_over_time(modal_container_running{environment_name=~\"$environment\", app_name=~\"$app\"}[$__range])) * $__range_s / 3600", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "graphMode": "none"},
+      "fieldConfig": {"defaults": {"unit": "h", "decimals": 2, "noValue": "0"}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "Container-hours by app over time",
+      "description": "Multiply by the app's GPU rate (constants.GPU_HOURLY_USD: A10G $1.10, L40S $1.95, H100 $3.95) for $. Compare with Cost/Capacity's estimate — divergence means idle containers we're not accounting for.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 18, "x": 6, "y": 33},
+      "id": 12,
+      "targets": [{"expr": "sum by (app_name) (avg_over_time(modal_container_running{environment_name=~\"$environment\", app_name=~\"$app\"}[$__rate_interval]))", "legendFormat": "{{app_name}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "fillOpacity": 30, "stacking": {"mode": "normal"}}}, "overrides": []}
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": ["modal"],
+  "templating": {"list": [
+    {
+      "type": "query",
+      "name": "environment",
+      "label": "modal environment",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "query": {"query": "label_values(modal_container_running, environment_name)", "refId": "StandardVariableQuery"},
+      "definition": "label_values(modal_container_running, environment_name)",
+      "includeAll": true,
+      "multi": true,
+      "refresh": 2,
+      "sort": 1,
+      "current": {"selected": true, "text": ["All"], "value": ["$__all"]},
+      "options": [],
+      "regex": "",
+      "hide": 0
+    },
+    {
+      "type": "query",
+      "name": "app",
+      "label": "modal app",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "query": {"query": "label_values(modal_container_running, app_name)", "refId": "StandardVariableQuery"},
+      "definition": "label_values(modal_container_running, app_name)",
+      "includeAll": true,
+      "multi": true,
+      "refresh": 2,
+      "sort": 1,
+      "current": {"selected": true, "text": ["All"], "value": ["$__all"]},
+      "options": [],
+      "regex": "",
+      "hide": 0
+    }
+  ]},
+  "time": {"from": "now-24h", "to": "now"},
+  "timezone": "browser",
+  "title": "Modal System (real)",
+  "uid": "modal-system",
+  "version": 1
+}

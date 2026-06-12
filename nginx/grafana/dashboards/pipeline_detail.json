@@ -1,0 +1,154 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Where the time goes (avg per run, stacked)",
+      "description": "Per-run decomposition of a pipeline: RabbitMQ queue wait → Modal overhead (scheduling + poll quantization) → cold start (to_cuda) → container phases (download/gpu/upload...). With a single run in the interval the bars show exactly that run.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 0},
+      "id": 1,
+      "targets": [
+        {"expr": "sum(increase(demo_hub_queue_wait_seconds_sum{pipeline_name=~\"$pipeline\"}[$__rate_interval])) / clamp_min(sum(increase(demo_hub_queue_wait_seconds_count{pipeline_name=~\"$pipeline\"}[$__rate_interval])), 1)", "legendFormat": "queue wait", "refId": "A"},
+        {"expr": "sum(increase(demo_hub_modal_overhead_seconds_sum{config=~\"$pipeline\"}[$__rate_interval])) / clamp_min(sum(increase(demo_hub_modal_overhead_seconds_count{config=~\"$pipeline\"}[$__rate_interval])), 1)", "legendFormat": "modal overhead", "refId": "B"},
+        {"expr": "sum(increase(demo_hub_inference_cold_start_duration_seconds_sum{config=~\"$pipeline\",phase!=\"snapshot_load\"}[$__rate_interval])) / clamp_min(sum(increase(demo_hub_inference_requests_total{config=~\"$pipeline\"}[$__rate_interval])), 1)", "legendFormat": "cold start (amortized)", "refId": "C"},
+        {"expr": "sum by (phase) (increase(demo_hub_inference_phase_duration_seconds_sum{config=~\"$pipeline\"}[$__rate_interval])) / on() group_left() clamp_min(sum(increase(demo_hub_inference_requests_total{config=~\"$pipeline\"}[$__rate_interval])), 1)", "legendFormat": "{{phase}}", "refId": "D"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"drawStyle": "bars", "fillOpacity": 70, "stacking": {"mode": "normal"}}}, "overrides": []}
+    },
+
+    {"type": "row", "title": "Cold starts", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 10}, "id": 100},
+    {
+      "type": "stat",
+      "title": "Cold share (range)",
+      "description": "Fraction of inference calls that landed on a freshly started container.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 4, "x": 0, "y": 11},
+      "id": 2,
+      "targets": [{"expr": "sum(increase(demo_hub_inference_requests_total{config=~\"$pipeline\",cold=\"true\"}[$__range])) / clamp_min(sum(increase(demo_hub_inference_requests_total{config=~\"$pipeline\"}[$__range])), 1)", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "graphMode": "none"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "noValue": "no runs", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.3}, {"color": "red", "value": 0.7}]}}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "Cold vs warm runs",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 8, "x": 4, "y": 11},
+      "id": 3,
+      "targets": [{"expr": "sum by (cold) (increase(demo_hub_inference_requests_total{config=~\"$pipeline\"}[$__rate_interval]))", "legendFormat": "cold={{cold}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "fillOpacity": 60, "stacking": {"mode": "normal"}}}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "Cold-start phase durations (avg per cold start)",
+      "description": "to_cuda = weights RAM→GPU after snapshot restore. snapshot_load = how long the snapshot itself took to build (reported by restored containers; not part of request latency).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 11},
+      "id": 4,
+      "targets": [{"expr": "sum by (phase) (increase(demo_hub_inference_cold_start_duration_seconds_sum{config=~\"$pipeline\"}[$__rate_interval])) / sum by (phase) (increase(demo_hub_inference_cold_start_duration_seconds_count{config=~\"$pipeline\"}[$__rate_interval]))", "legendFormat": "{{phase}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"drawStyle": "points", "pointSize": 8}}, "overrides": []}
+    },
+
+    {"type": "row", "title": "Container phases", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 17}, "id": 101},
+    {
+      "type": "timeseries",
+      "title": "Phase duration (avg per run)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 18},
+      "id": 5,
+      "targets": [{"expr": "sum by (phase) (increase(demo_hub_inference_phase_duration_seconds_sum{config=~\"$pipeline\"}[$__rate_interval])) / sum by (phase) (increase(demo_hub_inference_phase_duration_seconds_count{config=~\"$pipeline\"}[$__rate_interval]))", "legendFormat": "{{phase}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"drawStyle": "points", "pointSize": 8}}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "Phase duration p95 (needs sustained load)",
+      "description": "Quantiles only resolve with enough samples in the window — at dev traffic use the avg panel on the left.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 18},
+      "id": 6,
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, phase) (rate(demo_hub_inference_phase_duration_seconds_bucket{config=~\"$pipeline\"}[$__rate_interval])))", "legendFormat": "p95 {{phase}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+
+    {"type": "row", "title": "Modal HTTP edge (dispatch → gateway)", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 25}, "id": 102},
+    {
+      "type": "timeseries",
+      "title": "Modal calls by status",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 26},
+      "id": 7,
+      "targets": [{"expr": "sum by (endpoint, status) (increase(demo_hub_modal_call_requests_total[$__rate_interval]))", "legendFormat": "{{endpoint}} / {{status}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "fillOpacity": 60}}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "Modal call duration (avg / p95)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 26},
+      "id": 8,
+      "targets": [
+        {"expr": "sum by (endpoint) (increase(demo_hub_modal_call_duration_seconds_sum[$__rate_interval])) / sum by (endpoint) (increase(demo_hub_modal_call_duration_seconds_count[$__rate_interval]))", "legendFormat": "avg {{endpoint}}", "refId": "A"},
+        {"expr": "histogram_quantile(0.95, sum by (le, endpoint) (rate(demo_hub_modal_call_duration_seconds_bucket[$__rate_interval])))", "legendFormat": "p95 {{endpoint}}", "refId": "B"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "Retries by reason",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 26},
+      "id": 9,
+      "targets": [{"expr": "sum by (endpoint, reason) (increase(demo_hub_modal_call_retries_total[$__rate_interval]))", "legendFormat": "{{endpoint}} / {{reason}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "fillOpacity": 60}}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "Batch size (avg at GPU dispatch)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 33},
+      "id": 10,
+      "targets": [{"expr": "sum(increase(demo_hub_inference_batch_size_sum{config=~\"$pipeline\"}[$__rate_interval])) / clamp_min(sum(increase(demo_hub_inference_batch_size_count{config=~\"$pipeline\"}[$__rate_interval])), 1)", "legendFormat": "avg batch", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "points", "pointSize": 8}}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "Dispatch pipeline wall-time (avg per run)",
+      "description": "Whole submit+poll loop as seen by the dispatch worker.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 33},
+      "id": 11,
+      "targets": [{"expr": "sum by (pipeline_name) (increase(demo_hub_pipeline_duration_seconds_sum{pipeline_name=~\"$pipeline\"}[$__rate_interval])) / sum by (pipeline_name) (increase(demo_hub_pipeline_duration_seconds_count{pipeline_name=~\"$pipeline\"}[$__rate_interval]))", "legendFormat": "{{pipeline_name}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"drawStyle": "points", "pointSize": 8}}, "overrides": []}
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["pipelines"],
+  "templating": {"list": [
+    {
+      "type": "query",
+      "name": "pipeline",
+      "label": "application / pipeline",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "query": {"query": "label_values(demo_hub_pipeline_duration_seconds_count, pipeline_name)", "refId": "StandardVariableQuery"},
+      "definition": "label_values(demo_hub_pipeline_duration_seconds_count, pipeline_name)",
+      "includeAll": true,
+      "multi": true,
+      "refresh": 2,
+      "sort": 1,
+      "current": {"selected": true, "text": ["All"], "value": ["$__all"]},
+      "options": [],
+      "regex": "",
+      "hide": 0
+    }
+  ]},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "Pipeline Detail",
+  "uid": "pipeline-detail",
+  "version": 1
+}

@@ -10,10 +10,29 @@ sys.path and chdirs into it, so `modal deploy flux/app.py` and the
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+
+def _load_env_file() -> None:
+    """Load services/modal/.env if present (absent in CI → default `main`);
+    never overrides an already-set var, so shell/CI win."""
+
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.is_file():
+        return
+    for raw in env_path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+
+
+_load_env_file()
 
 
 def _run_streaming(cmd: list[str]) -> str:
@@ -81,8 +100,61 @@ def preload(app_path: str) -> None:
     print("Volume populated successfully.")
 
 
+def deploy_app(app_path: str, app_name: str) -> None:
+    """Deploy an app that exposes NO web endpoints — its classes are
+    invoked cross-app by the gateway (modal.Cls.from_name), so there are
+    no endpoint URLs to extract; just deploy."""
+
+    print(f"Deploying {app_path}...")
+    _run_streaming(["modal", "deploy", app_path])
+    print(f"Deployed {app_name}.")
+
+
 def destroy(app_name: str, volume_name: str) -> None:
     """Stop a deployed app. Volume + secrets are preserved."""
 
     subprocess.run(["modal", "app", "stop", app_name], check=False)
     print(f"Stopped {app_name}. Volume '{volume_name}' and secrets are preserved.")
+
+
+def deploy_multi_endpoint(
+    app_path: str,
+    endpoint_file: str,
+    app_name: str,
+    endpoints: list[tuple[str, str]],
+) -> dict[str, str]:
+    """Deploy an app that exposes more than one submit/poll endpoint pair
+    (e.g. flux_opt: A10G + H100 variants in the same app). `endpoints`
+    is [(function_name, env_var_name), ...]. URLs get written to
+    endpoint_file as `function_name=URL` lines and the env-var
+    assignments are printed for copy-paste."""
+
+    print(f"Deploying {app_path}...")
+    out = _run_streaming(["modal", "deploy", app_path])
+
+    urls: dict[str, str] = {}
+    for fn_name, env_name in endpoints:
+        pattern = rf"https://[^\s]+--{re.escape(app_name)}-{re.escape(fn_name)}\.modal\.run"
+        match = re.search(pattern, out)
+        if not match:
+            print(
+                f"Failed to extract {fn_name} URL from modal output.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        urls[fn_name] = match.group(0)
+
+    Path(endpoint_file).write_text(
+        "\n".join(f"{k}={v}" for k, v in urls.items()) + "\n"
+    )
+
+    print()
+    print(f"Deployed {app_name}.")
+    for fn, url in urls.items():
+        print(f"  {fn:18s}: {url}")
+    print()
+    print("Set on the dispatch worker:")
+    for fn_name, env_name in endpoints:
+        print(f"  {env_name}={urls[fn_name]}")
+
+    return urls

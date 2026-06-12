@@ -14,10 +14,17 @@ import os
 import socket
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Protocol
 
 from services.common.domain.enums import PipelineStatus
-from services.common.logging.config import context_pipeline_id, context_trace_id
+from services.common.logging.config import context_pipeline_id
+from services.common.observability.tracing import (
+    continue_trace_from,
+    retro_span,
+    span,
+    trace_headers,
+)
 from services.common.rabbitmq.connection import RabbitMQConnection
 from services.common.rabbitmq.consumer import RabbitMQConsumer
 from services.common.rabbitmq.publisher import RabbitMQPublisher
@@ -25,6 +32,13 @@ from services.common.rabbitmq.config import rabbitmq_config
 from services.common.redis import close_redis_client
 from services.common.redis import heartbeat as _hb
 from services.common.s3.client import S3Client
+
+
+# Default ceiling on concurrent in-flight tasks per worker. Dispatch
+# (pure async I/O, no model in process) can take 256 easily on an 8GB
+# VPS; compute (face_swap on local CPU with the GAN loaded) should not.
+# Each worker overrides through WORKER_MAX_CONCURRENT_TASKS in its env.
+_DEFAULT_MAX_CONCURRENT_TASKS = int(os.getenv("WORKER_MAX_CONCURRENT_TASKS", "50"))
 
 
 class _ServiceLike(Protocol):
@@ -49,8 +63,10 @@ class PipelineWorker:
         queue_name: str,
         pipeline_templates: Mapping[str, _PipelineTemplateLike],
         create_service: CreateService,
-        max_concurrent_tasks: int = 50,
+        max_concurrent_tasks: int | None = None,
     ) -> None:
+        if max_concurrent_tasks is None:
+            max_concurrent_tasks = _DEFAULT_MAX_CONCURRENT_TASKS
         self._pool_name = pool_name
         self._queue_name = queue_name
         self._templates = pipeline_templates
@@ -79,7 +95,6 @@ class PipelineWorker:
 
     async def _publish_update(
         self,
-        trace_id: str,
         pipeline_id: str,
         status: PipelineStatus,
         result: dict | None = None,
@@ -88,67 +103,115 @@ class PipelineWorker:
         if self._publisher is None:
             raise RuntimeError("Publisher not initialized")
 
-        await self._publisher.publish(
-            routing_key=rabbitmq_config.routing_update,
-            message={
-                "trace_id": trace_id,
-                "pipeline_id": pipeline_id,
-                "status": status.value,
-                "result": result,
-                "message": message,
-            },
-            trace_id=trace_id,
-            pipeline_id=pipeline_id,
-        )
+        with span("queue.publish", rabbitmq_config.routing_update):
+            await self._publisher.publish(
+                routing_key=rabbitmq_config.routing_update,
+                message={
+                    "pipeline_id": pipeline_id,
+                    "status": status.value,
+                    "result": result,
+                    "message": message,
+                    "enqueued_at": datetime.now(timezone.utc).isoformat(),
+                    # core's update consumer resumes the pipeline trace.
+                    **trace_headers(),
+                },
+            )
+
+    @staticmethod
+    def _queue_wait_seconds(message: Mapping[str, Any]) -> float | None:
+        """Time the job sat in RabbitMQ (same host as core — wall clock ok)."""
+
+        enqueued_at = message.get("enqueued_at")
+        if not enqueued_at:
+            return None
+        try:
+            enqueued = datetime.fromisoformat(enqueued_at)
+            if enqueued.tzinfo is None:
+                enqueued = enqueued.replace(tzinfo=timezone.utc)
+            return max((datetime.now(timezone.utc) - enqueued).total_seconds(), 0.0)
+        except ValueError:
+            return None
 
     async def _process(self, message: dict[str, Any]) -> None:
-        t0 = time.perf_counter()
+        # Imported lazily so the metric registration doesn't happen for
+        # processes that don't import this module (e.g. unit tests that
+        # only exercise routing).
+        from services.common.observability.metrics import (
+            pipeline_duration_seconds,
+            pipeline_failures_total,
+            queue_wait_seconds,
+        )
 
-        trace_id = message["trace_id"]
+        t0 = time.perf_counter()
+        t_recv = time.time()
+
         pipeline_id = message["pipeline_id"]
         pipeline_name = message["pipeline_name"]
         pipeline_input = message["input"]
 
-        context_trace_id.set(str(trace_id))
         context_pipeline_id.set(str(pipeline_id))
 
-        self._log.info(f"Processing pipeline: {pipeline_name}")
+        wait_s = self._queue_wait_seconds(message)
+        if wait_s is not None:
+            queue_wait_seconds.labels(pipeline_name=pipeline_name).observe(wait_s)
 
-        try:
-            await self._publish_update(trace_id, pipeline_id, PipelineStatus.RUNNING)
+        self._log.info(
+            f"Processing pipeline: {pipeline_name}"
+            + (f" (queued {wait_s * 1000:.0f}ms)" if wait_s is not None else "")
+        )
 
-            service = self._create_service(
-                pipeline_id, pipeline_name, pipeline_input, self._s3
-            )
-            result = await service.run()
+        with continue_trace_from(
+            message,
+            op="queue.task",
+            name=f"pipeline.{pipeline_name}",
+            tags={"pipeline_id": str(pipeline_id), "pipeline_name": pipeline_name},
+        ):
+            if wait_s is not None:
+                retro_span(
+                    "queue.wait",
+                    f"rabbitmq {self._queue_name}",
+                    t_recv - wait_s,
+                    t_recv,
+                )
+            try:
+                await self._publish_update(pipeline_id, PipelineStatus.RUNNING)
 
-            await self._publish_update(
-                trace_id,
-                pipeline_id,
-                PipelineStatus.COMPLETED,
-                result=result,
-                message="success",
-            )
+                service = self._create_service(
+                    pipeline_id, pipeline_name, pipeline_input, self._s3
+                )
+                result = await service.run()
 
-            self._record_success(pipeline_name, service.last_inference_ms)
-            duration_ms = (time.perf_counter() - t0) * 1000.0
-            self._log.info(
-                f"Pipeline completed: {pipeline_name} pipeline_id={pipeline_id} "
-                f"total={duration_ms:.1f}ms heartbeat={service.last_inference_ms:.1f}ms"
-            )
+                await self._publish_update(
+                    pipeline_id,
+                    PipelineStatus.COMPLETED,
+                    result=result,
+                    message="success",
+                )
 
-        except Exception as e:
-            error_message = str(e)
-            self._log.error(
-                f"Pipeline failed: {error_message} pipeline_id={pipeline_id}",
-                exc_info=True,
-            )
-            await self._publish_update(
-                trace_id,
-                pipeline_id,
-                PipelineStatus.FAILED,
-                message=error_message,
-            )
+                self._record_success(pipeline_name, service.last_inference_ms)
+                duration_s = time.perf_counter() - t0
+                pipeline_duration_seconds.labels(pipeline_name=pipeline_name).observe(
+                    duration_s
+                )
+                self._log.info(
+                    f"Pipeline completed: {pipeline_name} pipeline_id={pipeline_id} "
+                    f"total={duration_s * 1000:.1f}ms heartbeat={service.last_inference_ms:.1f}ms"
+                )
+
+            except Exception as e:
+                error_message = str(e)
+                pipeline_failures_total.labels(
+                    pipeline_name=pipeline_name, error_type=type(e).__name__
+                ).inc()
+                self._log.error(
+                    f"Pipeline failed: {error_message} pipeline_id={pipeline_id}",
+                    exc_info=True,
+                )
+                await self._publish_update(
+                    pipeline_id,
+                    PipelineStatus.FAILED,
+                    message=error_message,
+                )
 
     async def start(self) -> None:
         self._log.info(

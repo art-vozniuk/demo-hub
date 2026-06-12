@@ -17,6 +17,7 @@ from services.core.app.generative.router import router as generative_router
 from services.core.app.wallet.router import router as wallet_router
 from services.core.app.editor_scenes.router import router as editor_scenes_router
 from services.common.middleware.exception import ExceptionMiddleware
+from services.common.middleware.metrics import HTTPMetricsMiddleware
 from services.common.database.middleware import DatabaseMiddleware
 from services.core.app.dependencies import (
     init_rabbitmq,
@@ -37,14 +38,34 @@ log.info(f"starting core service, build tag: {build_tag}")
 if config.SENTRY_DSN:
     import sentry_sdk
 
+    def _traces_sampler(ctx):
+        scope = ctx.get("asgi_scope")
+        if scope is not None:
+            # /status is the frontend's 1/sec poll — it buries every
+            # pipeline trace under dozens of noise transactions.
+            if scope.get("path") in ("/metrics", "/health", "/api/v1/pipelines/status"):
+                return 0.0
+            # Core roots the pipeline trace — never inherit the browser's
+            # 10% pageload verdict, or 90% of pipelines go untraced.
+            return 1.0
+        parent = ctx.get("parent_sampled")
+        if parent is not None:
+            return parent
+        return 1.0
+
+    def _drop_unrouted_transactions(event, hint):
+        # Unmatched paths keep raw-URL names ("http://*/api/.env") — scanner bots.
+        return event if (event.get("transaction") or "").startswith("/") else None
+
     sentry_sdk.init(
         dsn=config.SENTRY_DSN,
         environment=config.ENV,
         send_default_pii=True,
         enable_logs=True,
-        traces_sample_rate=1.0,
-        profile_session_sample_rate=1.0,
-        profile_lifecycle="trace",
+        traces_sampler=_traces_sampler,
+        before_send_transaction=_drop_unrouted_transactions,
+        # No profiling: free plan rejects profile chunks and the SDK's
+        # rate-limit backoff then silently drops transactions for ~60s.
         _experiments={
             "attach_logger_name": True,
         },
@@ -60,11 +81,19 @@ async def lifespan(app: FastAPI):
     await init_rabbitmq()
 
     consumer = await get_rabbitmq_consumer()
-    asyncio.create_task(start_pipeline_update_consumer(consumer))
+    # Hold a strong reference so the task can't be garbage-collected
+    # mid-flight — bare `asyncio.create_task(...)` returns an object
+    # that the loop only weakrefs.
+    app.state.background_tasks = {
+        asyncio.create_task(start_pipeline_update_consumer(consumer)),
+    }
 
     yield
 
     log.info("Shutting down core service")
+    for task in app.state.background_tasks:
+        task.cancel()
+    await asyncio.gather(*app.state.background_tasks, return_exceptions=True)
     await shutdown_rabbitmq()
     await shutdown_redis()
 
@@ -84,6 +113,23 @@ async def health_check():
     return {"status": "ok"}
 
 
+@app.get("/metrics")
+async def metrics():
+    """Prometheus scrape target. Same shape as any other Prometheus
+    text-exposition endpoint — registered against the default registry
+    so any service code that imports services.common.observability.metrics
+    contributes."""
+
+    from fastapi import Response
+    from services.common.observability import collect_text, CONTENT_TYPE_LATEST
+
+    # Import for side effects: registers the canonical metric set on
+    # the default registry, even if no code has touched them yet.
+    import services.common.observability.metrics  # noqa: F401
+
+    return Response(content=collect_text(), media_type=CONTENT_TYPE_LATEST)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.cors_origins,
@@ -93,6 +139,7 @@ app.add_middleware(
 )
 
 app.add_middleware(ExceptionMiddleware)
+app.add_middleware(HTTPMetricsMiddleware)
 app.add_middleware(DatabaseMiddleware)
 
 

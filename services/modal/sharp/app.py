@@ -2,9 +2,7 @@
 
 predict → pack Gaussians3D into 32-byte splat blob → auto-frame → S3
 upload, all on the GPU container; dispatch only forwards the result.
-Two HTTP endpoints to dodge Modal's ~60s sync gateway cap:
-  POST /submit {image_b64, f_px, image_bucket} → {call_id, request_id}
-  POST /poll   {call_id}                       → {status: ..., ...}
+Endpoint-less: invoked by name through the gateway.
 Deploy / preload via services/modal/sharp/{deploy,preload}.py.
 """
 
@@ -14,21 +12,25 @@ import io
 import os
 import time
 import urllib.request
-import uuid
 from typing import Any
 
 import modal
 
+from common.constants import MODAL_FUNCTION_TIMEOUT_SECONDS
+from common.instrument import InferenceRunner
 from common.lib import (
     MODEL_DIR,
     bake_exif_orientation,
     configure_logging,
     download_from_s3,
     make_app,
-    poll_function_call,
     upload_to_s3,
 )
+from common.sentry import init_sentry
 
+
+GPU_NAME = "A10G"
+SCALEDOWN_WINDOW_S = 10
 
 CHECKPOINT_URL = "https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh.pt"
 CHECKPOINT_LOCAL_PATH = f"{MODEL_DIR}/sharp_2572gikvuh.pt"
@@ -54,6 +56,7 @@ sharp_image = (
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
         "boto3==1.35.92",
+        "sentry-sdk>=2.42.0",
         # ml-sharp is GitHub-only; pin to a commit once Apple ships a release.
         "git+https://github.com/apple/ml-sharp.git",
     )
@@ -61,22 +64,13 @@ sharp_image = (
     # common.sharp_utils explicitly. (sharp_utils lives under common/
     # rather than sharp/ to avoid clashing with the ml-sharp pip
     # package's own `sharp` namespace.)
-    .add_local_python_source("common.lib", "common.sharp_utils")
-)
-
-
-# submit/poll only spawn / inspect a FunctionCall — no torch needed. A
-# thin image keeps their cold-start small. common.lib ships here because
-# the module top-level calls `configure_logging` and `make_app` on every
-# container start; sharp_utils is gated behind `sharp_image.imports()`
-# so it never loads outside the inference container.
-sharp_thin_image = (
-    modal.Image.debian_slim(python_version="3.13")
-    .pip_install(
-        "fastapi[standard]==0.115.6",
-        "pydantic==2.10.3",
+    .add_local_python_source(
+        "common.lib",
+        "common.sharp_utils",
+        "common.instrument",
+        "common.constants",
+        "common.sentry",
     )
-    .add_local_python_source("common.lib")
 )
 
 
@@ -154,12 +148,15 @@ def preload_weights() -> str:
 
 @app.cls(
     image=sharp_image,
-    gpu="A10G",
+    gpu=GPU_NAME,
     volumes={MODEL_DIR: volume},
-    scaledown_window=10,
-    timeout=600,
+    scaledown_window=SCALEDOWN_WINDOW_S,
+    timeout=MODAL_FUNCTION_TIMEOUT_SECONDS,
     enable_memory_snapshot=True,
-    secrets=[modal.Secret.from_name("supabase-s3")],
+    secrets=[
+        modal.Secret.from_name("supabase-s3"),
+        modal.Secret.from_name("sentry"),
+    ],
     #min_containers=1,
 )
 @modal.concurrent(max_inputs=1)
@@ -169,9 +166,10 @@ class SharpInference:
         """Snapshot hook: load weights into CPU RAM once; cold starts restore from RAM."""
 
         log.info("snapshot-load: load_to_cpu() begin (CPU-only container)")
-        t0 = time.perf_counter()
+        t_snap = time.perf_counter()
 
         ckpt_path = _ensure_checkpoint()
+        t0 = time.perf_counter()
         # mmap + assign: weights stay file-backed instead of bloating the
         # memory snapshot — restore reads MB, not GB.
         state_dict = torch.load(
@@ -185,93 +183,88 @@ class SharpInference:
         self.predictor.load_state_dict(state_dict, assign=True)
         self.predictor.eval()
         init_ms = (time.perf_counter() - t1) * 1000
+        self._snapshot_load_s = time.perf_counter() - t_snap
         log.info(
             f"snapshot-load: create_predictor + load_state_dict done "
-            f"in {init_ms:.0f}ms"
+            f"in {init_ms:.0f}ms (snapshot total {self._snapshot_load_s:.1f}s)"
         )
 
     @modal.enter(snap=False)
     def move_to_gpu(self) -> None:
         """Post-restore hook: shuttle preloaded weights to the GPU."""
 
+        init_sentry("sharp")
         log.info("post-restore: move_to_gpu() begin (GPU now attached)")
         t0 = time.perf_counter()
         self.predictor.to("cuda")
-        to_cuda_ms = (time.perf_counter() - t0) * 1000
-        log.info(f"post-restore: predictor.to(cuda) done in {to_cuda_ms:.0f}ms")
+        to_cuda_s = time.perf_counter() - t0
+        log.info(f"post-restore: predictor.to(cuda) done in {to_cuda_s * 1000:.0f}ms")
+
+        # Built here (snap=False) so each container gets its own identity.
+        self.runner = InferenceRunner(
+            config="sharp",
+            gpu=GPU_NAME,
+            scaledown_window_s=SCALEDOWN_WINDOW_S,
+            log=log,
+            cold={
+                "snapshot_load": getattr(self, "_snapshot_load_s", 0.0),
+                "to_cuda": to_cuda_s,
+            },
+        )
 
     @modal.method()
-    def generate(
-        self,
-        image_bucket: str,
-        image_key: str,
-        request_id: str,
-    ) -> dict[str, Any]:
-        log.info(f"[{request_id}] inference: start; key={image_key}")
-        t0 = time.perf_counter()
+    def generate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        image_bucket = payload["image_bucket"]
+        image_key = payload["image_key"]
 
-        t_dl = time.perf_counter()
-        raw = download_from_s3(image_bucket, image_key)
-        raw = bake_exif_orientation(raw)
-        log.info(
-            f"[{request_id}] s3 download + EXIF bake done in "
-            f"{(time.perf_counter() - t_dl) * 1000:.0f}ms ({len(raw)} bytes)"
-        )
+        with self.runner.start(payload) as run:
+            log.info(f"[{run.request_id}] inference: start; key={image_key}")
 
-        pil = Image.open(io.BytesIO(raw)).convert("RGB")
-        arr = np.array(pil)
-        height, width = arr.shape[:2]
-        # No EXIF f_px on most web uploads; default to ~62° FOV (phone main lens).
-        f_px = float(width) * 0.9
-        log.info(
-            f"[{request_id}] input: {width}x{height}, f_px={f_px:.1f}"
-        )
+            with run.phase("download"):
+                raw = download_from_s3(image_bucket, image_key)
+                raw = bake_exif_orientation(raw)
 
-        t_inf = time.perf_counter()
-        gaussians = self._run_inference(arr, f_px)
-        inference_ms = (time.perf_counter() - t_inf) * 1000
-        log.info(
-            f"[{request_id}] inference: predict_image done in "
-            f"{inference_ms:.0f}ms"
-        )
+            pil = Image.open(io.BytesIO(raw)).convert("RGB")
+            arr = np.array(pil)
+            height, width = arr.shape[:2]
+            # No EXIF f_px on most web uploads; default to ~62° FOV (phone main lens).
+            f_px = float(width) * 0.9
+            log.info(
+                f"[{run.request_id}] input: {width}x{height}, f_px={f_px:.1f}"
+            )
 
-        t_pack = time.perf_counter()
-        splat_bytes, gaussian_count, pos_np, alpha_np = gaussians_to_splat_bytes(
-            gaussians
-        )
-        camera_eye, camera_fwd = auto_frame_camera(pos_np, alpha_np)
-        log.info(
-            f"[{request_id}] gaussians→splat + auto-frame done in "
-            f"{(time.perf_counter() - t_pack) * 1000:.0f}ms; "
-            f"splat_size={len(splat_bytes) / (1024 * 1024):.1f} MB "
-            f"({gaussian_count} gaussians)"
-        )
+            with run.phase("gpu"):
+                gaussians = self._run_inference(arr, f_px)
 
-        t_up = time.perf_counter()
-        result_url = upload_to_s3(
-            data_bytes=splat_bytes,
-            bucket=image_bucket,
-            folder="sharp_results",
-            extension="splat",
-        )
-        log.info(
-            f"[{request_id}] upload: s3 put done in "
-            f"{(time.perf_counter() - t_up) * 1000:.0f}ms; url={result_url}"
-        )
+            with run.phase("pack"):
+                splat_bytes, gaussian_count, pos_np, alpha_np = (
+                    gaussians_to_splat_bytes(gaussians)
+                )
+                camera_eye, camera_fwd = auto_frame_camera(pos_np, alpha_np)
+            log.info(
+                f"[{run.request_id}] splat_size="
+                f"{len(splat_bytes) / (1024 * 1024):.1f} MB "
+                f"({gaussian_count} gaussians)"
+            )
 
-        total_ms = (time.perf_counter() - t0) * 1000
-        log.info(
-            f"[{request_id}] inference: done in {total_ms:.0f}ms "
-            f"(inference={inference_ms:.0f}ms)"
-        )
+            with run.phase("upload"):
+                result_url = upload_to_s3(
+                    data_bytes=splat_bytes,
+                    bucket=image_bucket,
+                    folder="sharp_results",
+                    extension="splat",
+                )
 
-        return {
-            "result_url": result_url,
-            "splat_size_bytes": len(splat_bytes),
-            "gaussian_count": gaussian_count,
-            "camera_eye": camera_eye,
-            "camera_fwd": camera_fwd,
-        }
+            run.batch(1)
+            return run.finish(
+                {
+                    "result_url": result_url,
+                    "splat_size_bytes": len(splat_bytes),
+                    "gaussian_count": gaussian_count,
+                    "camera_eye": camera_eye,
+                    "camera_fwd": camera_fwd,
+                }
+            )
 
     def _run_inference(self, image: "np.ndarray", f_px: float) -> Any:
         """Inlined copy of sharp.cli.predict.predict_image — that lives under
@@ -325,36 +318,3 @@ class SharpInference:
                 intrinsics_resized,
                 internal_shape,
             )
-
-
-@app.function(image=sharp_thin_image, timeout=120)
-@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-def submit(payload: dict[str, Any]) -> dict[str, Any]:
-    """Kick off inference asynchronously; client polls /poll with the call_id."""
-
-    request_id = uuid.uuid4().hex[:8]
-    image_bucket = payload.get("image_bucket")
-    image_key = payload.get("image_key")
-    log.info(
-        f"[{request_id}] submit: received; bucket={image_bucket} key={image_key}"
-    )
-
-    if not image_bucket or not image_key:
-        log.warning(f"[{request_id}] submit: missing image_bucket or image_key")
-        return {"error": "image_bucket and image_key are required"}
-
-    call = SharpInference().generate.spawn(
-        image_bucket=image_bucket,
-        image_key=image_key,
-        request_id=request_id,
-    )
-    log.info(f"[{request_id}] submit: spawned call_id={call.object_id}")
-    return {"call_id": call.object_id, "request_id": request_id}
-
-
-@app.function(image=sharp_thin_image, timeout=120)
-@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-def poll(payload: dict[str, Any]) -> dict[str, Any]:
-    """Non-blocking status check; returns running / done / failed / expired."""
-
-    return poll_function_call(payload.get("call_id"), log)

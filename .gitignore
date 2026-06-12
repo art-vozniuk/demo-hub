@@ -9,6 +9,8 @@
 *.env.docker
 .env
 
+*.htpasswd
+
 .claude/
 
 .mcp.json

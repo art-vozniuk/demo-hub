@@ -1,0 +1,98 @@
+# Reusable Modal deploy, called from deploy-core-infra.yml with per-app flags.
+# Model apps deploy in parallel; gateway strictly after (its ROUTES point at
+# apps by name, so a new route must not go live before its app).
+
+name: deploy modal
+
+on:
+  workflow_call:
+    inputs:
+      flux:
+        type: boolean
+        default: false
+      flux_opt:
+        type: boolean
+        default: false
+      sharp:
+        type: boolean
+        default: false
+      trellis:
+        type: boolean
+        default: false
+      flux_t2i:
+        type: boolean
+        default: false
+      gateway:
+        type: boolean
+        default: false
+
+jobs:
+  # Matrix context isn't usable in a job-level `if`, so build the list here.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      apps: ${{ steps.plan.outputs.apps }}
+    steps:
+      - name: build app matrix
+        id: plan
+        env:
+          FLUX: ${{ inputs.flux }}
+          FLUX_OPT: ${{ inputs.flux_opt }}
+          SHARP: ${{ inputs.sharp }}
+          TRELLIS: ${{ inputs.trellis }}
+          FLUX_T2I: ${{ inputs.flux_t2i }}
+        run: |
+          apps=""
+          [ "$FLUX" = "true" ]     && apps="$apps flux"
+          [ "$FLUX_OPT" = "true" ] && apps="$apps flux_opt"
+          [ "$SHARP" = "true" ]    && apps="$apps sharp"
+          [ "$TRELLIS" = "true" ]  && apps="$apps trellis"
+          [ "$FLUX_T2I" = "true" ] && apps="$apps flux_t2i"
+
+          if [ -z "$apps" ]; then
+            json="[]"
+          else
+            json=$(printf '%s\n' $apps | jq -R . | jq -cs .)
+          fi
+          echo "apps=$json" >> "$GITHUB_OUTPUT"
+          echo "deploying model apps: $json (gateway after: ${{ inputs.gateway }})"
+
+  deploy-models:
+    needs: [plan]
+    if: needs.plan.outputs.apps != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      # Don't cancel siblings; the un-moved last-deploy tag retries failures.
+      fail-fast: false
+      matrix:
+        app: ${{ fromJSON(needs.plan.outputs.apps) }}
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      MODAL_ENVIRONMENT: main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install 'modal>=1.4.2'
+      - name: deploy ${{ matrix.app }}
+        run: python services/modal/${{ matrix.app }}/deploy.py
+
+  deploy-gateway:
+    needs: [plan, deploy-models]
+    # deploy-models may be skipped (gateway-only change) — that's fine.
+    if: ${{ !cancelled() && inputs.gateway && needs.deploy-models.result != 'failure' }}
+    runs-on: ubuntu-latest
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      MODAL_ENVIRONMENT: main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install 'modal>=1.4.2'
+      - name: deploy gateway
+        run: python services/modal/gateway/deploy.py

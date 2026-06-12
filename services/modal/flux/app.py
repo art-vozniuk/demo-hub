@@ -5,27 +5,32 @@ Deploy / preload via services/modal/flux/{deploy,preload}.py.
 
 from __future__ import annotations
 
+import inspect
 import io
 import os
 import time
-import uuid
 from typing import Any
 
 import modal
 
+from common.constants import MODAL_FUNCTION_TIMEOUT_SECONDS
+from common.instrument import InferenceRunner
 from common.lib import (
     MODEL_DIR,
     bake_exif_orientation,
     configure_logging,
     download_from_s3,
     make_app,
-    poll_function_call,
     upload_to_s3,
 )
+from common.sentry import init_sentry
 
 
 MODEL_REPO = "black-forest-labs/FLUX.2-klein-4B"
 MODEL_LOCAL_DIR = f"{MODEL_DIR}/flux2-klein-4b"
+
+GPU_NAME = "A10G"
+SCALEDOWN_WINDOW_S = 2
 
 
 log = configure_logging("flux")
@@ -36,22 +41,19 @@ flux_image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0")
     .pip_install(
-        # Torch/torchvision pinned together — CUDA ABI mismatch hurts.
-        "torch==2.5.1",
-        "torchvision==0.20.1",
-        # Flux2KleinPipeline only landed on diffusers main; no PyPI release
-        # ships it yet. The rest of the ML stack (transformers, accelerate,
-        # safetensors, tokenizers) is left unpinned so pip can resolve a
-        # mutually-compatible set against this dev build. Pin again once a
-        # versioned release cuts.
-        "git+https://github.com/huggingface/diffusers.git",
-        "transformers",
+        # FLUX.2-klein needs torch>=2.7 (float8_e8m0fnu, absent in 2.5.1)
+        # + diffusers-main; commit + transformers pinned for reproducibility.
+        "torch==2.7.1",
+        "torchvision==0.22.1",
+        "git+https://github.com/huggingface/diffusers.git@2c7efb95349296cf6bcce981ea036275a82a94df",
+        "transformers==5.10.2",
         "accelerate",
         "huggingface-hub[hf-transfer]>=0.34.0",
         "Pillow==11.0.0",
         "fastapi[standard]==0.115.6",
         "pydantic==2.10.3",
         "boto3==1.35.92",
+        "sentry-sdk>=2.42.0",
     )
     .env(
         {
@@ -60,20 +62,10 @@ flux_image = (
             "TRANSFORMERS_OFFLINE": "0",
         }
     )
-    # Modal no longer auto-mounts sibling files; ship common.lib explicitly.
-    .add_local_python_source("common.lib")
-)
-
-
-# submit/poll only spawn / inspect a FunctionCall — no torch needed. A
-# thin image keeps their cold-start small. Same pattern as sharp/app.py.
-flux_thin_image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .pip_install(
-        "fastapi[standard]==0.115.6",
-        "pydantic==2.10.3",
+    # Modal no longer auto-mounts sibling files; ship common.* explicitly.
+    .add_local_python_source(
+        "common.lib", "common.instrument", "common.constants", "common.sentry"
     )
-    .add_local_python_source("common.lib")
 )
 
 
@@ -128,13 +120,16 @@ def preload_weights() -> str:
 
 @app.cls(
     image=flux_image,
-    gpu="A10G",
+    gpu=GPU_NAME,
     volumes={MODEL_DIR: volume},
-    scaledown_window=1,
-    timeout=600,
+    scaledown_window=SCALEDOWN_WINDOW_S,
+    timeout=MODAL_FUNCTION_TIMEOUT_SECONDS,
     enable_memory_snapshot=True,
-    secrets=[modal.Secret.from_name("supabase-s3")],
-    #min_containers=1,
+    secrets=[
+        modal.Secret.from_name("supabase-s3"),
+        modal.Secret.from_name("sentry"),
+    ],
+    # min_containers=1,
 )
 @modal.concurrent(max_inputs=1)
 class FluxInference:
@@ -155,10 +150,12 @@ class FluxInference:
             MODEL_LOCAL_DIR,
             torch_dtype=torch.bfloat16,
         )
-        from_pretrained_ms = (time.perf_counter() - t0) * 1000
+        # Snapshotted along with the weights — every restored container
+        # reports how expensive its snapshot was to build.
+        self._snapshot_load_s = time.perf_counter() - t0
         log.info(
             f"snapshot-load: from_pretrained({MODEL_LOCAL_DIR}) "
-            f"finished in {from_pretrained_ms:.0f}ms; "
+            f"finished in {self._snapshot_load_s * 1000:.0f}ms; "
             "Modal will snapshot RAM after this returns"
         )
 
@@ -169,149 +166,129 @@ class FluxInference:
         Cheap because weights are already in RAM — we just shuttle them
         across PCIe to the A10G."""
 
+        init_sentry("flux")
         log.info(
             "post-restore: move_to_gpu() begin; runs after each container "
             "start, with the GPU now attached"
         )
+        wall0 = time.time()
         t0 = time.perf_counter()
         self.pipe.to("cuda")
-        to_cuda_ms = (time.perf_counter() - t0) * 1000
+        to_cuda_s = time.perf_counter() - t0
+        # Per-step timing needs diffusers' step callback; probe once.
+        self._supports_step_cb = (
+            "callback_on_step_end" in inspect.signature(self.pipe.__call__).parameters
+        )
+        self.runner = InferenceRunner(
+            config="flux",
+            gpu=GPU_NAME,
+            scaledown_window_s=SCALEDOWN_WINDOW_S,
+            log=log,
+            cold={
+                "snapshot_load": getattr(self, "_snapshot_load_s", 0.0),
+                "to_cuda": to_cuda_s,
+            },
+            cold_wall=(wall0, wall0 + to_cuda_s),
+        )
         log.info(
-            f"post-restore: pipe.to(cuda) finished in {to_cuda_ms:.0f}ms; "
+            f"post-restore: pipe.to(cuda) finished in {to_cuda_s * 1000:.0f}ms; "
             "ready to serve"
         )
 
     @modal.method()
-    def generate(
-        self,
-        image_bucket: str,
-        image_key: str,
-        prompt: str,
-        request_id: str,
-        guidance_scale: float = 1.0,
-        num_inference_steps: int = 4,
-        max_side: int = 1024,
-    ) -> dict[str, Any]:
-        log.info(
-            f"[{request_id}] inference: start; prompt_len={len(prompt)} "
-            f"steps={num_inference_steps} guidance={guidance_scale} "
-            f"max_side={max_side}"
-        )
-        t0 = time.perf_counter()
+    def generate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        image_bucket = payload["image_bucket"]
+        image_key = payload["image_key"]
+        prompt = payload["prompt"]
+        guidance_scale = float(payload.get("guidance_scale", 1.0))
+        num_inference_steps = int(payload.get("num_inference_steps", 4))
+        max_side = int(payload.get("max_side", 1024))
 
-        t_dl = time.perf_counter()
-        raw = download_from_s3(image_bucket, image_key)
-        raw = bake_exif_orientation(raw)
-        log.info(
-            f"[{request_id}] s3 download + EXIF bake done in "
-            f"{(time.perf_counter() - t_dl) * 1000:.0f}ms ({len(raw)} bytes)"
-        )
-
-        init = Image.open(io.BytesIO(raw)).convert("RGB")
-        log.info(
-            f"[{request_id}] inference: decoded input "
-            f"{init.width}x{init.height}, {len(raw)} bytes"
-        )
-
-        # Cap the longest side. Klein 4B itself fits comfortably on A10G,
-        # but very large inputs blow up the encoder activations.
-        w, h = init.size
-        scale = max_side / max(w, h)
-        if scale < 1.0:
-            new_w = int(round(w * scale))
-            new_h = int(round(h * scale))
+        with self.runner.start(payload) as run:
             log.info(
-                f"[{request_id}] inference: resizing "
-                f"{w}x{h} -> {new_w}x{new_h} (max_side={max_side})"
+                f"[{run.request_id}] inference: start; prompt_len={len(prompt)} "
+                f"steps={num_inference_steps} guidance={guidance_scale} "
+                f"max_side={max_side}"
             )
-            init = init.resize((new_w, new_h), Image.LANCZOS)
 
-        t_inf = time.perf_counter()
-        log.info(
-            f"[{request_id}] inference: pipe(...) call begin; "
-            f"prompt={prompt[:80]!r}{'...' if len(prompt) > 80 else ''}"
-        )
-        out = self.pipe(
-            image=init,
-            prompt=prompt,
-            guidance_scale=guidance_scale,
-            num_inference_steps=num_inference_steps,
-        )
-        inference_ms = (time.perf_counter() - t_inf) * 1000
-        log.info(
-            f"[{request_id}] inference: pipe(...) returned in "
-            f"{inference_ms:.0f}ms"
-        )
+            with run.phase("download"):
+                raw = download_from_s3(image_bucket, image_key)
 
-        result_image: "Image.Image" = out.images[0]
-        buf = io.BytesIO()
-        result_image.save(buf, format="PNG")
-        png_bytes = buf.getvalue()
+            with run.phase("preprocess"):
+                raw = bake_exif_orientation(raw)
+                init = Image.open(io.BytesIO(raw)).convert("RGB")
+                log.info(
+                    f"[{run.request_id}] inference: decoded input "
+                    f"{init.width}x{init.height}, {len(raw)} bytes"
+                )
+                # Cap the longest side. Klein 4B itself fits comfortably on
+                # A10G, but very large inputs blow up encoder activations.
+                w, h = init.size
+                scale = max_side / max(w, h)
+                if scale < 1.0:
+                    new_w = int(round(w * scale))
+                    new_h = int(round(h * scale))
+                    log.info(
+                        f"[{run.request_id}] inference: resizing "
+                        f"{w}x{h} -> {new_w}x{new_h} (max_side={max_side})"
+                    )
+                    init = init.resize((new_w, new_h), Image.LANCZOS)
 
-        t_up = time.perf_counter()
-        result_url = upload_to_s3(
-            data_bytes=png_bytes,
-            bucket=image_bucket,
-            folder="generative_results",
-            extension="png",
-        )
-        upload_ms = (time.perf_counter() - t_up) * 1000
+            step_ends: list[float] = []
+            extra: dict[str, Any] = {}
+            if self._supports_step_cb:
 
-        total_ms = (time.perf_counter() - t0) * 1000
-        log.info(
-            f"[{request_id}] inference: done; output "
-            f"{result_image.width}x{result_image.height} "
-            f"png_size={len(png_bytes)} bytes "
-            f"inference_ms={inference_ms:.0f} upload_ms={upload_ms:.0f} "
-            f"total_ms={total_ms:.0f} url={result_url}"
-        )
+                def _on_step_end(pipe, step, timestep, callback_kwargs):
+                    step_ends.append(time.time())
+                    return callback_kwargs
 
-        return {
-            "result_url": result_url,
-            "width": result_image.width,
-            "height": result_image.height,
-        }
+                extra["callback_on_step_end"] = _on_step_end
 
+            with run.phase("gpu"):
+                gpu_t0 = time.time()
+                out = self.pipe(
+                    image=init,
+                    prompt=prompt,
+                    guidance_scale=guidance_scale,
+                    num_inference_steps=num_inference_steps,
+                    **extra,
+                )
+                gpu_t1 = time.time()
 
-@app.function(image=flux_thin_image, timeout=120)
-@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-def submit(payload: dict[str, Any]) -> dict[str, Any]:
-    """Kick off inference asynchronously; client polls /poll with the call_id."""
+            # Sentry-only breakdown of the opaque pipe() call: text-encode
+            # is inseparable from step 1 (the callback fires at step ends).
+            if step_ends:
+                run.retro_span("gpu.encode_step1", gpu_t0, step_ends[0])
+                if len(step_ends) > 1:
+                    run.retro_span("gpu.denoise_steps", step_ends[0], step_ends[-1])
+                    per_step_ms = (
+                        (step_ends[-1] - step_ends[0]) / (len(step_ends) - 1) * 1000
+                    )
+                    run.tag("gpu.ms_per_step", int(round(per_step_ms)))
+                run.retro_span("gpu.vae_decode", step_ends[-1], gpu_t1)
+            run.tag("steps", num_inference_steps)
+            run.tag("guidance", guidance_scale)
+            run.tag("resolution", f"{init.width}x{init.height}")
 
-    request_id = uuid.uuid4().hex[:8]
-    image_bucket = payload.get("image_bucket")
-    image_key = payload.get("image_key")
-    prompt = payload.get("prompt")
-    log.info(
-        f"[{request_id}] submit: received; bucket={image_bucket} "
-        f"key={image_key} prompt_len={len(prompt) if prompt else 0}"
-    )
+            with run.phase("postprocess"):
+                result_image: "Image.Image" = out.images[0]
+                buf = io.BytesIO()
+                result_image.save(buf, format="PNG")
+                png_bytes = buf.getvalue()
 
-    if not image_bucket or not image_key:
-        log.warning(f"[{request_id}] submit: missing image_bucket or image_key")
-        return {"error": "image_bucket and image_key are required"}
-    if not prompt:
-        log.warning(f"[{request_id}] submit: missing prompt")
-        return {"error": "prompt is required"}
+            with run.phase("upload"):
+                result_url = upload_to_s3(
+                    data_bytes=png_bytes,
+                    bucket=image_bucket,
+                    folder="generative_results",
+                    extension="png",
+                )
 
-    guidance_scale = float(payload.get("guidance_scale", 1.0))
-    num_inference_steps = int(payload.get("num_inference_steps", 4))
-
-    call = FluxInference().generate.spawn(
-        request_id=request_id,
-        image_bucket=image_bucket,
-        image_key=image_key,
-        prompt=prompt,
-        guidance_scale=guidance_scale,
-        num_inference_steps=num_inference_steps,
-    )
-    log.info(f"[{request_id}] submit: spawned call_id={call.object_id}")
-    return {"call_id": call.object_id, "request_id": request_id}
-
-
-@app.function(image=flux_thin_image, timeout=120)
-@modal.fastapi_endpoint(method="POST", requires_proxy_auth=True)
-def poll(payload: dict[str, Any]) -> dict[str, Any]:
-    """Non-blocking status check; returns running / done / failed / expired."""
-
-    return poll_function_call(payload.get("call_id"), log)
+            run.batch(1)
+            return run.finish(
+                {
+                    "result_url": result_url,
+                    "width": result_image.width,
+                    "height": result_image.height,
+                }
+            )

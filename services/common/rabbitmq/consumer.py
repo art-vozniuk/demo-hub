@@ -7,7 +7,7 @@ from aio_pika.abc import AbstractIncomingMessage
 from .connection import RabbitMQConnection
 from .config import RabbitMQConfig
 
-from services.common.logging.config import context_trace_id, context_pipeline_id
+from services.common.logging.config import context_pipeline_id
 
 log = logging.getLogger(__name__)
 
@@ -40,9 +40,7 @@ class RabbitMQConsumer:
         async def process_message(message: AbstractIncomingMessage) -> None:
             try:
                 body = json.loads(message.body.decode())
-                trace_id = body.get("trace_id", "unknown")
                 pipeline_id = body.get("pipeline_id", "unknown")
-                context_trace_id.set(trace_id)
                 context_pipeline_id.set(pipeline_id)
             except Exception as e:
                 log.error(f"Failed to parse message from {queue_name}: {e}")
@@ -59,6 +57,15 @@ class RabbitMQConsumer:
                         await message.ack()
                         log.info(f"Message processed successfully from {queue_name}")
                     except Exception as e:
+                        # TODO: unbounded nack(requeue=True) loops a
+                        # permanently-failing message forever — each
+                        # retry is a full pipeline (and a new Modal call
+                        # on the dispatch side). Add a per-message
+                        # retry-count header + reject(requeue=False)
+                        # to dead-letter after N attempts. Retry+backoff
+                        # inside dispatch's _post_to_modal already
+                        # absorbs transient Modal blips so this is only
+                        # a guardrail against persistent bugs.
                         await message.nack(requeue=True)
                         log.error(
                             f"Error processing message from {queue_name}: {e}",

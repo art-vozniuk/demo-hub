@@ -1,6 +1,7 @@
 # ruff: noqa: E402
 import logging
 import asyncio
+import os
 import signal
 
 import services.common.logging.config as logging_config
@@ -8,8 +9,10 @@ import services.common.logging.config as logging_config
 logging_config.configure()
 
 import services.compute.app.pipelines.consumer as pipeline_router
+import services.common.observability.metrics  # noqa: F401  (registers metrics)
 
 from services.compute.app.config import config
+from services.common.observability import start_metrics_server
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +47,12 @@ async def main():
     signal.signal(signal.SIGTERM, signal_handler)
 
     log.info("Starting compute worker")
+
+    # /metrics on its own port (compute has no HTTP surface otherwise),
+    # mirroring dispatch. Scraped by Prometheus as the `compute` job.
+    metrics_port = int(os.environ.get("COMPUTE_METRICS_PORT", "0"))
+    if metrics_port > 0:
+        start_metrics_server(metrics_port)
 
     await pipeline_router.init()
 

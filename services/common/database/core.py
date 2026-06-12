@@ -1,5 +1,7 @@
 import logging
+import time
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
     AsyncSession,
@@ -26,6 +28,40 @@ engine = create_async_engine(
     pool_recycle=config.DATABASE_POOL_RECYCLE,
     pool_pre_ping=True,
 )
+
+
+def _statement_operation(statement: str) -> str:
+    op = statement.lstrip().split(" ", 1)[0].lower() if statement else ""
+    return (
+        op
+        if op in {"select", "insert", "update", "delete", "begin", "commit"}
+        else "other"
+    )
+
+
+@event.listens_for(engine.sync_engine, "before_cursor_execute")
+def _db_timer_start(conn, cursor, statement, parameters, context, executemany):
+    context._demo_hub_t0 = time.perf_counter()
+
+
+@event.listens_for(engine.sync_engine, "after_cursor_execute")
+def _db_timer_stop(conn, cursor, statement, parameters, context, executemany):
+    from services.common.observability.metrics import db_query_duration_seconds
+
+    t0 = getattr(context, "_demo_hub_t0", None)
+    if t0 is not None:
+        db_query_duration_seconds.labels(
+            operation=_statement_operation(statement)
+        ).observe(time.perf_counter() - t0)
+
+
+@event.listens_for(engine.sync_engine, "handle_error")
+def _db_error(exception_context):
+    from services.common.observability.metrics import db_errors_total
+
+    statement = exception_context.statement or ""
+    db_errors_total.labels(operation=_statement_operation(statement)).inc()
+
 
 async_session_maker = async_sessionmaker(
     engine,

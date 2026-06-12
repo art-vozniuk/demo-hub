@@ -21,6 +21,12 @@ jobs:
       web: ${{ steps.diff.outputs.web }}
       compute: ${{ steps.diff.outputs.compute }}
       dispatch: ${{ steps.diff.outputs.dispatch }}
+      modal_flux: ${{ steps.diff.outputs.modal_flux }}
+      modal_flux_opt: ${{ steps.diff.outputs.modal_flux_opt }}
+      modal_sharp: ${{ steps.diff.outputs.modal_sharp }}
+      modal_trellis: ${{ steps.diff.outputs.modal_trellis }}
+      modal_flux_t2i: ${{ steps.diff.outputs.modal_flux_t2i }}
+      modal_gateway: ${{ steps.diff.outputs.modal_gateway }}
     steps:
       - name: checkout repository
         uses: actions/checkout@v4
@@ -36,6 +42,9 @@ jobs:
             echo "web=true"      >> $GITHUB_OUTPUT
             echo "compute=true"  >> $GITHUB_OUTPUT
             echo "dispatch=true" >> $GITHUB_OUTPUT
+            for a in flux flux_opt sharp trellis flux_t2i gateway; do
+              echo "modal_$a=true" >> $GITHUB_OUTPUT
+            done
             exit 0
           fi
 
@@ -63,6 +72,16 @@ jobs:
           echo "web=$has_web"           >> $GITHUB_OUTPUT
           echo "compute=$has_compute"   >> $GITHUB_OUTPUT
           echo "dispatch=$has_dispatch" >> $GITHUB_OUTPUT
+
+          # Modal apps: per-app dir, common/ (ships into all), or the deploy
+          # workflow itself (same rationale as build-<svc>.yml above).
+          mc=false
+          echo "$changed" | grep -qE '^services/modal/common/|^\.github/workflows/deploy-modal\.yml$' && mc=true
+          for a in flux flux_opt sharp trellis flux_t2i gateway; do
+            v=$mc
+            echo "$changed" | grep -qE "^services/modal/$a/" && v=true
+            echo "modal_$a=$v" >> $GITHUB_OUTPUT
+          done
 
           echo "Changed files:"
           echo "$changed"
@@ -126,6 +145,7 @@ jobs:
         env:
           RABBITMQ_USER: ${{ secrets.RABBITMQ_USER }}
           RABBITMQ_PASSWORD: ${{ secrets.RABBITMQ_PASSWORD }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
           CERTBOT_EMAIL: ${{ secrets.CERTBOT_EMAIL }}
           CERTBOT_DOMAINS: ${{ secrets.CERTBOT_DOMAINS }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
@@ -143,7 +163,7 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          envs: RABBITMQ_USER,RABBITMQ_PASSWORD,CERTBOT_EMAIL,CERTBOT_DOMAINS,GHCR_TOKEN,GH_ACTOR,GH_REPO,CHANGED_CORE,CHANGED_WEB,CHANGED_COMPUTE,CHANGED_DISPATCH
+          envs: RABBITMQ_USER,RABBITMQ_PASSWORD,GRAFANA_ADMIN_PASSWORD,CERTBOT_EMAIL,CERTBOT_DOMAINS,GHCR_TOKEN,GH_ACTOR,GH_REPO,CHANGED_CORE,CHANGED_WEB,CHANGED_COMPUTE,CHANGED_DISPATCH
           script: |
             set -euo pipefail
 
@@ -155,6 +175,10 @@ jobs:
             CERTBOT_EMAIL=${CERTBOT_EMAIL}
             CERTBOT_DOMAINS=${CERTBOT_DOMAINS}
             EOF
+
+            # Must exist as a FILE before `up` or Docker creates a directory.
+            # Empty file => /otel/ 403 until the real credential is set.
+            [ -f nginx/otel.htpasswd ] || touch nginx/otel.htpasswd
 
             # Download renderer data files from GitHub Releases to serve statically.
             # Skips download if the file already matches the current release.
@@ -168,6 +192,7 @@ jobs:
             # Export variables used by docker-compose.yml
             export RABBITMQ_USER="${RABBITMQ_USER}"
             export RABBITMQ_PASSWORD="${RABBITMQ_PASSWORD}"
+            export GRAFANA_ADMIN_PASSWORD="${GRAFANA_ADMIN_PASSWORD}"
 
             echo "Logging in to GHCR..."
             echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GH_ACTOR}" --password-stdin
@@ -210,7 +235,41 @@ jobs:
 
             echo "Deployment completed successfully!"
 
-      # Tag current HEAD so the next deploy knows what changed since this one.
+  # Model apps fan out in parallel, gateway after (see deploy-modal.yml).
+  deploy-modal:
+    needs: [check-changes]
+    if: |
+      needs.check-changes.outputs.modal_flux == 'true' ||
+      needs.check-changes.outputs.modal_flux_opt == 'true' ||
+      needs.check-changes.outputs.modal_sharp == 'true' ||
+      needs.check-changes.outputs.modal_trellis == 'true' ||
+      needs.check-changes.outputs.modal_flux_t2i == 'true' ||
+      needs.check-changes.outputs.modal_gateway == 'true'
+    uses: ./.github/workflows/deploy-modal.yml
+    secrets: inherit
+    with:
+      flux: ${{ needs.check-changes.outputs.modal_flux == 'true' }}
+      flux_opt: ${{ needs.check-changes.outputs.modal_flux_opt == 'true' }}
+      sharp: ${{ needs.check-changes.outputs.modal_sharp == 'true' }}
+      trellis: ${{ needs.check-changes.outputs.modal_trellis == 'true' }}
+      flux_t2i: ${{ needs.check-changes.outputs.modal_flux_t2i == 'true' }}
+      gateway: ${{ needs.check-changes.outputs.modal_gateway == 'true' }}
+
+  # Advance the marker only after BOTH the VDS deploy and the Modal deploy
+  # succeed — else a failed Modal deploy would be skipped on the next run.
+  tag:
+    needs: [deploy, deploy-modal]
+    if: |
+      always() &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: update last-deploy tag
         run: |
           git tag -f last-deploy HEAD
