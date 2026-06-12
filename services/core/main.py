@@ -62,8 +62,8 @@ if config.SENTRY_DSN:
         enable_logs=True,
         traces_sampler=_traces_sampler,
         before_send_transaction=_drop_unrouted_transactions,
-        profile_session_sample_rate=1.0,
-        profile_lifecycle="trace",
+        # No profiling: free plan rejects profile chunks and the SDK's
+        # rate-limit backoff then silently drops transactions for ~60s.
         _experiments={
             "attach_logger_name": True,
         },
