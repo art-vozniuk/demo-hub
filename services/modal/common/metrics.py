@@ -67,7 +67,7 @@ class InferenceMetrics:
         self.config = config
         self.gpu = gpu
         self.container_id = uuid.uuid4().hex[:8]
-        self._started = time.monotonic()
+        self._started = time.perf_counter()
         self.reg = CollectorRegistry()
         self._cold = Histogram(
             "demo_hub_inference_cold_start_duration_seconds",
@@ -112,6 +112,6 @@ class InferenceMetrics:
 
     def push_uptime(self) -> None:
         self._uptime.labels(config=self.config, gpu=self.gpu).inc(
-            time.monotonic() - self._started
+            time.perf_counter() - self._started
         )
         self.push()
