@@ -3,6 +3,7 @@ to a per-model app's class by name (each model keeps its own deploy)."""
 
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any, Mapping
 
@@ -30,7 +31,10 @@ def submit(
         cls = modal.Cls.from_name(app_name, class_name)
         # payload carries the Sentry trace headers through to the model
         # app untouched — the container resumes the pipeline's trace.
-        call = cls().generate.spawn(dict(payload))
+        # spawned_at lets it span Modal's startup window (≈ "Enqueued").
+        enriched = dict(payload)
+        enriched["spawned_at"] = time.time()
+        call = cls().generate.spawn(enriched)
     except Exception as e:
         log.error(f"[{request_id}] gateway spawn failed ({model}): {e}")
         return {"error": f"spawn failed: {e}"}
