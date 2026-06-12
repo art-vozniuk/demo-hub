@@ -1,5 +1,5 @@
 """Shared base for async dispatch pipelines. Concrete classes live in
-sibling modules (generative_editing.py, sharp.py). """
+sibling modules (generative_editing.py, sharp.py)."""
 
 from __future__ import annotations
 
