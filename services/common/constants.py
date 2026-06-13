@@ -30,8 +30,29 @@ def _buckets_to(ceiling: float, base: tuple[float, ...]) -> tuple[float, ...]:
 
 # --- Histogram buckets ---------------------------------------------------
 
-# Short-tail HTTP calls (Modal submit/poll, core endpoints).
-HTTP_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
+# HTTP calls (Modal submit/poll, core endpoints). Dense through the
+# 50-500ms operating band so a 100->200->300ms drift is actually visible
+# on the latency panel; high tail kept to 30s so a request stuck behind a
+# slow/saturated dependency still lands on the chart instead of in +Inf.
+HTTP_BUCKETS = (
+    0.01,
+    0.025,
+    0.05,
+    0.075,
+    0.1,
+    0.15,
+    0.2,
+    0.25,
+    0.3,
+    0.4,
+    0.5,
+    0.75,
+    1.0,
+    2.0,
+    5.0,
+    10.0,
+    30.0,
+)
 
 # Whole-pipeline / per-phase inference durations. Top bucket = pipeline
 # deadline: a run can be slow, but it cannot be off the chart.
@@ -86,8 +107,29 @@ E2E_BUCKETS = _buckets_to(
     (0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 240.0, 480.0, 600.0, 900.0),
 )
 
-# Postgres query durations (core).
-DB_BUCKETS = (0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0)
+# Postgres query durations (core). Dense through 2-100ms (where healthy
+# queries live), but the tail reaches 10s on purpose: the DB is a remote
+# Supabase pooler, so pool saturation / an incident shows up as the high
+# buckets filling — capping at 1s would blind us exactly then.
+DB_BUCKETS = (
+    0.0005,
+    0.001,
+    0.0025,
+    0.005,
+    0.0075,
+    0.01,
+    0.02,
+    0.035,
+    0.05,
+    0.075,
+    0.1,
+    0.2,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
+)
 
 # Realized batch size at GPU dispatch.
 BATCH_SIZE_BUCKETS = (1, 2, 4, 8, 12, 16, 24, 32)
