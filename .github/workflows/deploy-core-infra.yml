@@ -218,6 +218,14 @@ jobs:
             echo "Starting / updating services..."
             docker compose up -d --remove-orphans --scale compute=1
 
+            # prometheus.yml is a single-file bind mount; scp swaps the inode
+            # so the running container keeps the old config and even /-/reload
+            # re-reads the stale inode. Recreate so config changes (scrape
+            # jobs, OTLP, retention) actually take effect — same reason nginx
+            # is force-recreated below.
+            echo "Recreating prometheus to pick up prometheus.yml changes..."
+            docker compose up -d --force-recreate --no-deps prometheus
+
             echo "Recreating nginx to pick up config changes..."
             docker compose up -d --force-recreate nginx
 
