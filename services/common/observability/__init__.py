@@ -27,10 +27,53 @@ __all__ = [
     "CollectorRegistry",
     "collect_text",
     "generate_latest",
+    "register_db_pool_collector",
     "start_metrics_server",
 ]
 
 log = logging.getLogger(__name__)
+
+_db_pool_collector_registered = False
+
+
+def register_db_pool_collector(stats_fn) -> None:
+    """Register a scrape-time collector for SQLAlchemy pool saturation.
+
+    `stats_fn()` returns {checked_out, idle, capacity} (or None when the
+    pool can't be read). Read at scrape so the value is never stale, and
+    idempotent so reimporting the DB module is harmless."""
+
+    global _db_pool_collector_registered
+    if _db_pool_collector_registered:
+        return
+
+    from prometheus_client.core import GaugeMetricFamily
+
+    class _DbPoolCollector:
+        def collect(self):
+            try:
+                s = stats_fn()
+            except Exception:
+                s = None
+            if not s:
+                return
+            conns = GaugeMetricFamily(
+                "demo_hub_db_pool_connections",
+                "SQLAlchemy connection-pool connections by state.",
+                labels=["state"],
+            )
+            conns.add_metric(["checked_out"], s["checked_out"])
+            conns.add_metric(["idle"], s["idle"])
+            yield conns
+            cap = GaugeMetricFamily(
+                "demo_hub_db_pool_capacity",
+                "Max connections the pool can hand out (pool_size + max_overflow).",
+            )
+            cap.add_metric([], s["capacity"])
+            yield cap
+
+    REGISTRY.register(_DbPoolCollector())
+    _db_pool_collector_registered = True
 
 
 def start_metrics_server(port: int) -> None:

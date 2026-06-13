@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase
 
 from .config import config
+from services.common.observability import register_db_pool_collector
 
 log = logging.getLogger(__name__)
 
@@ -68,3 +69,21 @@ async_session_maker = async_sessionmaker(
     class_=AsyncSession,
     expire_on_commit=False,
 )
+
+
+def _pool_stats() -> dict[str, float] | None:
+    """Live connection-pool counters for the saturation collector. Workers
+    contending for connections shows up as checked_out nearing capacity."""
+
+    try:
+        pool = engine.sync_engine.pool
+        return {
+            "checked_out": pool.checkedout(),
+            "idle": pool.checkedin(),
+            "capacity": config.DATABASE_POOL_SIZE + config.DATABASE_MAX_OVERFLOW,
+        }
+    except Exception:
+        return None
+
+
+register_db_pool_collector(_pool_stats)

@@ -152,6 +152,30 @@
       "id": 14,
       "targets": [{"expr": "up", "legendFormat": "{{job}}", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short", "min": 0, "max": 1, "custom": {"drawStyle": "line", "fillOpacity": 20}}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "DB pool saturation (in use / capacity)",
+      "description": "Connection-pool utilization per process. Climbing toward 1.0 = workers contending for connections; at 1.0 new queries block up to pool_timeout, then error. Direct saturation signal for our own pool (Supabase's server-side pooler is separate — see their dashboard).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 30},
+      "id": 15,
+      "targets": [{"expr": "sum by (job) (demo_hub_db_pool_connections{state=\"checked_out\"}) / sum by (job) (demo_hub_db_pool_capacity)", "legendFormat": "{{job}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "custom": {"drawStyle": "line", "fillOpacity": 20}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.7}, {"color": "red", "value": 0.9}]}}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "DB pool connections",
+      "description": "Raw pool counters per process: in-use vs idle vs the capacity ceiling (pool_size + max_overflow).",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 30},
+      "id": 16,
+      "targets": [
+        {"expr": "demo_hub_db_pool_connections{state=\"checked_out\"}", "legendFormat": "{{job}} in use", "refId": "A"},
+        {"expr": "demo_hub_db_pool_connections{state=\"idle\"}", "legendFormat": "{{job}} idle", "refId": "B"},
+        {"expr": "demo_hub_db_pool_capacity", "legendFormat": "{{job}} capacity", "refId": "C"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "decimals": 0, "custom": {"drawStyle": "line", "fillOpacity": 10}}, "overrides": []}
     }
   ],
   "refresh": "30s",
