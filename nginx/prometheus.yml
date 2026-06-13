@@ -41,3 +41,8 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["compute:9100"]
+
+  # Host (VDS) metrics — CPU/mem/disk/net/load via node_exporter.
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
