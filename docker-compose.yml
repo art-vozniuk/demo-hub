@@ -129,6 +129,27 @@ services:
       - app_network
     restart: unless-stopped
 
+  # Host metrics (CPU/mem/disk/net/load) for the VDS System dashboard.
+  # Reads the host via read-only /proc, /sys, / mounts; --path.procfs makes
+  # even network/disk stats reflect the host, not this container. Stays on
+  # app_network (not host networking) so prometheus resolves node-exporter:9100.
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: node-exporter
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    pid: host
+    networks:
+      - app_network
+    restart: unless-stopped
+
   web:
     image: ghcr.io/art-vozniuk/web:latest
     container_name: web
