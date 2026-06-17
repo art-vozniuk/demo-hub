@@ -118,6 +118,10 @@ trellis_image = (
         "pydantic==2.10.3",
         "boto3==1.35.92",
         "sentry-sdk>=2.42.0",
+        # PyTorch3D (MIT) pure-Python deps — installed here to keep the
+        # GPU run_commands layer focused on CUDA compilation.
+        "fvcore",
+        "iopath",
         extra_options="--extra-index-url https://download.pytorch.org/whl/cu124",
     )
     .env(
@@ -127,7 +131,7 @@ trellis_image = (
             "TRANSFORMERS_OFFLINE": "0",
             # Portable spconv backend.
             "SPCONV_ALGO": "native",
-            # Off-screen rendering for nvdiffrast.
+            # Headless EGL for OpenGL-backed libraries in the image.
             "PYOPENGL_PLATFORM": "egl",
             # trellis2 has no setup.py; import from a checkout.
             "PYTHONPATH": TRELLIS_SRC,
@@ -139,6 +143,15 @@ trellis_image = (
             "LDSHARED": "g++ -shared",
         }
     )
+    # Stage the patched postprocess.py before the TRELLIS.2 clone so we
+    # can overwrite the nvdiffrast-dependent version before pip-installing
+    # o-voxel. copy_local_file layers are applied before run_commands in
+    # this chain, so the file lands at /tmp/postprocess_p3d.py in the
+    # image and is copied into place by the first run_commands step.
+    .copy_local_file(
+        "trellis_patches/postprocess.py",
+        "/tmp/postprocess_p3d.py",
+    )
     # FlexGEMM and CuMesh first: o-voxel pyproject lists them as git+
     # runtime deps, pre-installing lets o-voxel pass --no-deps.
     .run_commands(
@@ -147,12 +160,19 @@ trellis_image = (
         "pip install /tmp/extensions/FlexGEMM --no-build-isolation",
         "git clone --recursive https://github.com/JeffreyXiang/CuMesh.git /tmp/extensions/CuMesh",
         "pip install /tmp/extensions/CuMesh --no-build-isolation",
+        # Replace nvdiffrast-dependent postprocess.py with our PyTorch3D
+        # (MIT) version before pip-installing o-voxel, so the installed
+        # package contains the patched file from the start.
+        f"cp /tmp/postprocess_p3d.py {TRELLIS_SRC}/o-voxel/o_voxel/postprocess.py",
         # Folder is o-voxel (hyphen), Python package is o_voxel.
         f"pip install {TRELLIS_SRC}/o-voxel --no-build-isolation --no-deps",
-        "git clone -b v0.4.0 https://github.com/NVlabs/nvdiffrast.git /tmp/extensions/nvdiffrast",
-        "pip install /tmp/extensions/nvdiffrast --no-build-isolation",
-        "git clone -b renderutils https://github.com/JeffreyXiang/nvdiffrec.git /tmp/extensions/nvdiffrec",
-        "pip install /tmp/extensions/nvdiffrec --no-build-isolation",
+        # nvdiffrast (NVlabs non-commercial) and nvdiffrec (NVlabs non-commercial)
+        # have been removed. PyTorch3D (MIT) handles UV-space rasterization instead.
+        #
+        # Try pre-built wheels first (fast); fall back to source build (slow,
+        # ~20 min, but Modal caches the image layer so it's a one-time cost).
+        "pip install --extra-index-url https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py311_cu124_pyt260/ pytorch3d"
+        " || pip install 'git+https://github.com/facebookresearch/pytorch3d.git' --no-build-isolation",
         "pip install flash-attn==2.7.3 --no-build-isolation",
         "pip install git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8",
         gpu="A10G",
