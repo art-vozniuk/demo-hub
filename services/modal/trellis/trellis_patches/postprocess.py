@@ -225,17 +225,14 @@ def to_glb(
     if verbose:
         print("Sampling attributes...", end='', flush=True)
 
-    # UV-space rasterization via PyTorch3D (MIT), replacing nvdiffrast
-    # (NVIDIA non-commercial). Same barycentric math; both put row 0 at
-    # the top (NDC y=+1), but PyTorch3D rasterizes with +X-left while
-    # nvdiffrast is +X-right, so U is negated below to avoid a mirror.
+    # UV-space rasterization via PyTorch3D (MIT). Standard barycentric
+    # interpolation; PyTorch3D's NDC→pixel mapping is +X-left, +Y-up (origin
+    # top-left), so negate U and V to match the OpenGL (origin bottom-left)
+    # texture layout the mesh UVs and viewer assume. z must be > 0: PyTorch3D
+    # culls faces with a vertex at z < kEpsilon (z=0 rasterizes nothing).
     from pytorch3d.renderer.mesh.rasterize_meshes import rasterize_meshes
     from pytorch3d.structures import Meshes
 
-    # PyTorch3D's NDC→pixel mapping flips both axes vs nvdiffrast (OpenGL):
-    # negate U and V so the baked texture matches the nvdiffrast layout the
-    # viewer expects. z must be > 0 — PyTorch3D culls faces with a vertex at
-    # z < kEpsilon, so z=0 rasterizes nothing (empty mask → bad kernel launch).
     uv_ndc_xy = -(out_uvs * 2 - 1)
     uv_verts_ndc = torch.cat(
         [uv_ndc_xy, torch.full((len(out_uvs), 1), 0.5, device="cuda")], dim=-1

@@ -36,20 +36,23 @@ MODEL_REPO = "microsoft/TRELLIS.2-4B"
 MODEL_LOCAL_DIR = f"{MODEL_DIR}/trellis2-4b"
 # HF cache lives on the volume so transitive downloads survive scaledowns.
 HF_CACHE_DIR = f"{MODEL_DIR}/hf_cache"
-# Upstream configs reference dinov3 (Meta, closed) and RMBG-2.0 (Bria,
-# gated). camenduru mirrors both as open repos; preload patches the
-# config json to swap the names.
+# Pipeline configs reference two restricted repos; preload rewrites both:
+#   dinov3 (Meta, gated; commercial OK with a "Built with DINOv3" attribution)
+#     -> camenduru open mirror (same weights, ungated).
+#   RMBG-2.0 (BRIA, CC BY-NC / non-commercial) -> BiRefNet (MIT, same arch,
+#     loaded by the identical AutoModelForImageSegmentation interface).
 HF_REPO_REWRITES = {
     "facebook/dinov3-vitl16-pretrain-lvd1689m": "camenduru/dinov3-vitl16-pretrain-lvd1689m",
-    "briaai/RMBG-2.0": "camenduru/RMBG-2.0",
+    # Both spellings, so a volume already rewritten to the mirror is re-pointed.
+    "briaai/RMBG-2.0": "ZhengPeng7/BiRefNet",
+    "camenduru/RMBG-2.0": "ZhengPeng7/BiRefNet",
 }
-HF_AUX_REPOS = [
-    "microsoft/TRELLIS-image-large",
-    *HF_REPO_REWRITES.values(),
-]
+HF_AUX_REPOS = list(
+    dict.fromkeys(["microsoft/TRELLIS-image-large", *HF_REPO_REWRITES.values()])
+)
 
-# Texture bake size. 4096 is upstream's default but nvdiffrast rasterization
-# scales O(N²) — on A10G it stalls past 10 min. 2048 keeps detail without that.
+# Texture bake size. 4096 is upstream's default but UV-space rasterization
+# scales O(N²) — at 4096 it stalls; 2048 keeps detail without the slowdown.
 TEXTURE_RESOLUTION = 2048
 
 # Sampler steps when the request doesn't override it. 12 is upstream default
@@ -79,7 +82,7 @@ trellis_image = (
         "build-essential",
         "ninja-build",
         "cmake",
-        # GL/EGL stack for nvdiffrast headless rendering.
+        # GL/EGL stack for headless GL-backed libraries.
         "libgl1",
         "libglib2.0-0",
         "libegl1",
@@ -158,9 +161,8 @@ trellis_image = (
         "pip install /tmp/extensions/FlexGEMM --no-build-isolation",
         "git clone --recursive https://github.com/JeffreyXiang/CuMesh.git /tmp/extensions/CuMesh",
         "pip install /tmp/extensions/CuMesh --no-build-isolation",
-        # nvdiffrast/nvdiffrec (NVlabs non-commercial) removed; PyTorch3D
-        # (MIT) handles UV-space rasterization. Prebuilt wheel first, source
-        # fallback (~20 min, cached after first build).
+        # PyTorch3D (MIT) handles UV-space rasterization. Prebuilt wheel
+        # first, source fallback (~20 min, cached after first build).
         "pip install --extra-index-url https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py311_cu124_pyt260/ pytorch3d"
         " || pip install 'git+https://github.com/facebookresearch/pytorch3d.git' --no-build-isolation",
         "pip install flash-attn==2.7.3 --no-build-isolation",
@@ -199,7 +201,7 @@ with trellis_image.imports():
 def _warmup_pipeline(pipe: Any) -> None:
     """Force every JIT'd CUDA kernel along the full inference path to
     compile before the snapshot is captured: diffusion (pipe.run) +
-    cumesh remesh + nvdiffrast texture bake (to_glb). Otherwise the
+    cumesh remesh + PyTorch3D texture bake (to_glb). Otherwise the
     first real request hits cold-JIT and export inflates ~3-5x.
     """
 
@@ -507,7 +509,7 @@ class TrellisInference:
                     shape_slat_sampler_params=steps_override,
                     tex_slat_sampler_params=steps_override,
                 )[0]
-                # nvdiffrast hard limit on face count.
+                # Cap raw face count before export.
                 mesh.simplify(16777216)
 
             with run.phase("export"):
