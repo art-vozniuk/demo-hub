@@ -65,6 +65,10 @@ app, volume = make_app("demo-hub-trellis", "trellis-models")
 # Devel base needed for nvcc + headers to compile TRELLIS.2's CUDA exts.
 CUDA_TAG = "12.4.1"
 TRELLIS_SRC = "/opt/TRELLIS.2"
+# Absolute path so the build doesn't depend on modal's working directory.
+_POSTPROCESS_PATCH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "trellis_patches", "postprocess.py"
+)
 
 trellis_image = (
     modal.Image.from_registry(
@@ -118,6 +122,10 @@ trellis_image = (
         "pydantic==2.10.3",
         "boto3==1.35.92",
         "sentry-sdk>=2.42.0",
+        # PyTorch3D (MIT) pure-Python deps — installed here to keep the
+        # GPU run_commands layer focused on CUDA compilation.
+        "fvcore",
+        "iopath",
         extra_options="--extra-index-url https://download.pytorch.org/whl/cu124",
     )
     .env(
@@ -127,7 +135,7 @@ trellis_image = (
             "TRANSFORMERS_OFFLINE": "0",
             # Portable spconv backend.
             "SPCONV_ALGO": "native",
-            # Off-screen rendering for nvdiffrast.
+            # Headless EGL for OpenGL-backed libraries in the image.
             "PYOPENGL_PLATFORM": "egl",
             # trellis2 has no setup.py; import from a checkout.
             "PYTHONPATH": TRELLIS_SRC,
@@ -139,6 +147,9 @@ trellis_image = (
             "LDSHARED": "g++ -shared",
         }
     )
+    # Heavy installs that DON'T depend on the patched postprocess.py go
+    # first, ahead of add_local_file, so editing the patch never rebuilds
+    # the slow pytorch3d source build below.
     # FlexGEMM and CuMesh first: o-voxel pyproject lists them as git+
     # runtime deps, pre-installing lets o-voxel pass --no-deps.
     .run_commands(
@@ -147,14 +158,28 @@ trellis_image = (
         "pip install /tmp/extensions/FlexGEMM --no-build-isolation",
         "git clone --recursive https://github.com/JeffreyXiang/CuMesh.git /tmp/extensions/CuMesh",
         "pip install /tmp/extensions/CuMesh --no-build-isolation",
-        # Folder is o-voxel (hyphen), Python package is o_voxel.
-        f"pip install {TRELLIS_SRC}/o-voxel --no-build-isolation --no-deps",
-        "git clone -b v0.4.0 https://github.com/NVlabs/nvdiffrast.git /tmp/extensions/nvdiffrast",
-        "pip install /tmp/extensions/nvdiffrast --no-build-isolation",
-        "git clone -b renderutils https://github.com/JeffreyXiang/nvdiffrec.git /tmp/extensions/nvdiffrec",
-        "pip install /tmp/extensions/nvdiffrec --no-build-isolation",
+        # nvdiffrast/nvdiffrec (NVlabs non-commercial) removed; PyTorch3D
+        # (MIT) handles UV-space rasterization. Prebuilt wheel first, source
+        # fallback (~20 min, cached after first build).
+        "pip install --extra-index-url https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py311_cu124_pyt260/ pytorch3d"
+        " || pip install 'git+https://github.com/facebookresearch/pytorch3d.git' --no-build-isolation",
         "pip install flash-attn==2.7.3 --no-build-isolation",
         "pip install git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8",
+        gpu="A10G",
+    )
+    # Patched postprocess.py + o-voxel install LAST: editing the patch reruns
+    # only these two cheap layers. copy=True bakes the file into a build
+    # layer so the cp below can see it.
+    .add_local_file(
+        _POSTPROCESS_PATCH,
+        "/tmp/postprocess_p3d.py",
+        copy=True,
+    )
+    .run_commands(
+        # Swap in our PyTorch3D postprocess, then install o-voxel (folder
+        # o-voxel with a hyphen, Python package o_voxel).
+        f"cp /tmp/postprocess_p3d.py {TRELLIS_SRC}/o-voxel/o_voxel/postprocess.py",
+        f"pip install {TRELLIS_SRC}/o-voxel --no-build-isolation --no-deps",
         gpu="A10G",
     )
     .add_local_python_source(
@@ -163,12 +188,12 @@ trellis_image = (
 )
 
 
-# Module-level imports are captured by Modal's memory snapshot — they
-# stay loaded after restore.
+# o_voxel (→flex_gemm→triton) and trellis2 init a CUDA driver at import, so
+# they can't load on the CPU preload container. Only CPU-safe PIL stays a
+# module global; the GPU class imports the rest in load() (snap=True), which
+# still captures them in the memory snapshot.
 with trellis_image.imports():
-    import o_voxel
     from PIL import Image
-    from trellis2.pipelines import Trellis2ImageTo3DPipeline
 
 
 def _warmup_pipeline(pipe: Any) -> None:
@@ -394,6 +419,8 @@ class TrellisInference:
         the failure as a normal function error instead.
         """
 
+        global o_voxel
+
         self.pipe = None
         self.init_error: BaseException | None = None
         self._to_cuda_s = 0.0
@@ -401,6 +428,9 @@ class TrellisInference:
         t0 = time.perf_counter()
 
         try:
+            import o_voxel
+            from trellis2.pipelines import Trellis2ImageTo3DPipeline
+
             self.pipe = Trellis2ImageTo3DPipeline.from_pretrained(MODEL_LOCAL_DIR)
             from_pretrained_ms = (time.perf_counter() - t0) * 1000
             log.info(
