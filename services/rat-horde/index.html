@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Крысиная орда</title>
+<style>
+  :root { --acc: #9dff3c; --cyan: #4fd0e0; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #080b12;
+    font-family: "Segoe UI", system-ui, sans-serif; color: #e7eef7; user-select: none; touch-action: none; }
+  #c { display: block; position: fixed; inset: 0; }
+
+  /* hurt vignette */
+  #hurt { position: fixed; inset: 0; pointer-events: none; opacity: 0;
+    box-shadow: inset 0 0 180px 40px rgba(255,40,40,.75); transition: opacity .1s; }
+
+  /* HUD */
+  #hud { position: fixed; top: 0; left: 0; right: 0; padding: 14px 18px;
+    display: flex; align-items: center; gap: 16px; pointer-events: none;
+    font-weight: 800; letter-spacing: .5px; text-shadow: 0 2px 6px #000; }
+  #hpwrap { width: 230px; max-width: 42vw; height: 16px; background: #0c1018;
+    border: 2px solid #2a3a4f; border-radius: 9px; overflow: hidden; }
+  #hpfill { height: 100%; width: 100%; background: linear-gradient(90deg,#ff4d4d,#ffd24d);
+    transition: width .12s; }
+  #wave { color: var(--acc); }
+  #score { margin-left: auto; color: #fff; }
+  #kills { color: var(--cyan); }
+  .hudtag { font-size: 15px; }
+
+  #banner { position: fixed; top: 18%; left: 0; right: 0; text-align: center;
+    font-size: 44px; font-weight: 900; letter-spacing: 4px; color: var(--acc);
+    text-shadow: 0 0 24px rgba(157,255,60,.6), 0 4px 10px #000; opacity: 0;
+    pointer-events: none; transition: opacity .2s; }
+
+  #pops { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  .pop { position: absolute; left: 0; top: 0; font-weight: 900; font-family: monospace;
+    text-shadow: 0 0 10px rgba(157,255,60,.7), 0 2px 4px #000; opacity: 0; will-change: transform, opacity; }
+
+  #dev { position: fixed; bottom: 6px; left: 8px; color: #0f0; font: 12px monospace; display: none; }
+
+  /* screens */
+  .screen { position: fixed; inset: 0; display: none; flex-direction: column;
+    align-items: center; justify-content: center; gap: 18px; text-align: center;
+    background: radial-gradient(ellipse at center, rgba(8,11,18,.72), rgba(8,11,18,.94)); z-index: 10; padding: 24px; }
+  .screen.on { display: flex; }
+  h1 { margin: 0; font-size: clamp(34px, 8vw, 72px); font-weight: 900; letter-spacing: 6px;
+    color: var(--acc); text-shadow: 0 0 30px rgba(157,255,60,.5), 0 6px 18px #000; }
+  .muted { color: #9fb0c4; font-size: 15px; line-height: 1.7; max-width: 540px; }
+  .big { color: #fff; }
+  button.btn { font-family: inherit; font-weight: 900; letter-spacing: 2px; font-size: 22px;
+    color: #06210a; background: var(--acc); border: none; border-radius: 12px;
+    padding: 16px 46px; cursor: pointer; box-shadow: 0 0 26px rgba(157,255,60,.45);
+    transition: transform .08s; }
+  button.btn:active { transform: scale(.95); }
+
+  #cards { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+  .card { width: 190px; min-height: 150px; background: #0e1622; border: 2px solid #27506a;
+    border-radius: 14px; padding: 18px 14px; cursor: pointer; color: #e7eef7; font-family: inherit;
+    display: flex; flex-direction: column; align-items: center; gap: 8px; transition: transform .08s, border-color .12s; }
+  .card:hover { border-color: var(--acc); transform: translateY(-4px); }
+  .ck { width: 30px; height: 30px; border-radius: 50%; background: #27506a; color: #fff;
+    font-weight: 900; display: flex; align-items: center; justify-content: center; }
+  .cn { font-size: 20px; font-weight: 900; color: var(--cyan); }
+  .cd { font-size: 14px; color: #9fb0c4; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hurt"></div>
+
+<div id="hud">
+  <div id="hpwrap"><div id="hpfill"></div></div>
+  <span id="wave" class="hudtag">ВОЛНА 0</span>
+  <span id="kills" class="hudtag">КРЫСЫ 0</span>
+  <span id="score" class="hudtag">ОЧКИ 0</span>
+</div>
+<div id="banner"></div>
+<div id="pops"></div>
+<div id="dev"></div>
+
+<!-- menu -->
+<div id="menuScreen" class="screen on">
+  <h1 id="ttl">КРЫСИНАЯ ОРДА</h1>
+  <div id="sub" class="big" style="font-size:20px;font-weight:800;letter-spacing:3px;">Top-down rogue-like</div>
+  <button id="startBtn" class="btn">ИГРАТЬ</button>
+  <div class="muted">
+    <div id="howK"></div><div id="howP"></div><div id="howT"></div>
+  </div>
+</div>
+
+<!-- upgrade -->
+<div id="upgradeScreen" class="screen">
+  <h1 id="upTtl" style="font-size:clamp(26px,5vw,44px);">ВЫБЕРИ УЛУЧШЕНИЕ</h1>
+  <div id="cards"></div>
+  <div id="upHint" class="muted"></div>
+</div>
+
+<!-- game over -->
+<div id="overScreen" class="screen">
+  <h1 id="ovrTtl" style="color:#ff4d4d;text-shadow:0 0 30px rgba(255,77,77,.5),0 6px 18px #000;">ТЕБЯ ЗАГРЫЗЛИ</h1>
+  <div id="overScore" class="big" style="font-size:26px;font-weight:900;"></div>
+  <div id="overWave" class="muted"></div>
+  <button id="restartBtn" class="btn">ЗАНОВО</button>
+</div>
+
+<script type="module" src="./game.js"></script>
+</body>
+</html>
