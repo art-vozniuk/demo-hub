@@ -6,6 +6,14 @@ rats, grab an upgrade between waves, see how far you get.
 
 Live build deployed to the Higgsfield marketplace.
 
+## Deployment
+
+- **Play:** https://glowing-pine-894.higgsfield.gg/
+- Higgsfield `game_id`: `2b444410-2e00-4417-b483-baf034ee5c43`
+  (pass this back to `deploy_game` to update the live game in place).
+- Card art for the listing lives in `dist/` (`thumb.png` 16:9, `favicon.png` 1:1).
+
+
 ## Play
 
 - **Move** — WASD / arrows (or left stick / left-screen touch)
