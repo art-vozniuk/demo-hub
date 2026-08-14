@@ -27,7 +27,15 @@ log = logging.getLogger(__name__)
 
 # Forwarded only when set, so the Modal app's own defaults stay the single
 # source of truth for model/language/speaker-count behaviour.
-_OPTIONAL_FIELDS = ("model", "language", "num_speakers")
+#
+# The Whisper size is sent as `whisper_model`, not `model`: the gateway routes
+# on payload["model"] and overwrites it with the route key, so a size left
+# there is dropped before the container reads it.
+_OPTIONAL_FIELDS: dict[str, str] = {
+    "model": "whisper_model",
+    "language": "language",
+    "num_speakers": "num_speakers",
+}
 
 
 class TranscriberPipeline(AsyncPipeline):
@@ -93,10 +101,10 @@ class TranscriberPipeline(AsyncPipeline):
             "audio_key": key,
             "llm_cleanup": self.pipeline_input.llm_cleanup,
         }
-        for field in _OPTIONAL_FIELDS:
+        for field, payload_key in _OPTIONAL_FIELDS.items():
             value = getattr(self.pipeline_input, field)
             if value is not None:
-                payload[field] = value
+                payload[payload_key] = value
 
         result = await invoke_transcriber(payload)
 

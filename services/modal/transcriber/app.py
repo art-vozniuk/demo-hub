@@ -55,6 +55,10 @@ SCALEDOWN_WINDOW_S = 10
 # resolve through huggingface_hub, so one env var puts every weight there.
 HF_CACHE_DIR = f"{MODEL_DIR}/hf_cache"
 
+# Xet's chunk cache and logs, on the container's own disk rather than the
+# volume — see the HF_XET_CACHE note on the image below.
+XET_CACHE_DIR = "/tmp/hf-xet"
+
 # Whisper sizes the UI can ask for. Restricted so a payload can't make the
 # container download an arbitrary repo.
 ALLOWED_MODELS = ("large-v3", "large-v3-turbo", "medium")
@@ -146,6 +150,16 @@ transcriber_image = (
         {
             "HF_HUB_ENABLE_HF_TRANSFER": "1",
             "HF_HOME": HF_CACHE_DIR,
+            # Off the volume, deliberately. huggingface_hub defaults this to
+            # $HF_HOME/xet, where hf_xet keeps a chunk cache *and* a rotating
+            # log file. Snapshot restore walks the volume's 9p filesystem and
+            # trips over a log that has since been rotated away:
+            #   failed to walk ".../hf_cache/xet/logs/xet_….log": no such file
+            #   or directory  →  Runner failed with exit code: 128
+            # Modal retries, the next container dies the same way, and a cold
+            # start burns minutes on it. Weights belong on the volume; churn
+            # does not.
+            "HF_XET_CACHE": XET_CACHE_DIR,
             "TOKENIZERS_PARALLELISM": "false",
         }
     )
@@ -267,6 +281,20 @@ SMOKE_CLIP_SECONDS = 15
 # A phrase the first sample definitely contains; the check that the transcript
 # is a transcript rather than plausible-looking noise.
 SMOKE_EXPECTED_PHRASE = "country"
+
+
+def _gateway_payload(route: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """The payload as the gateway hands it over, not as it is nicer to write.
+
+    dispatch calls the gateway, which routes on payload["model"] and overwrites
+    it with its own route key before spawning this app. A smoke test that
+    invokes `generate` with a hand-made dict is free to put anything in `model`
+    — and one that put the Whisper size there passed while production raised
+    `unsupported model 'transcriber'` on every request. So shape it the way the
+    gateway does, route key included.
+    """
+
+    return {**payload, "model": route, "spawned_at": time.time()}
 
 
 @app.function(
@@ -422,7 +450,9 @@ def smoke_test(
     extraction: dict[str, Any] | None = None
     if source == "video":
         log.info(f"smoke: running {target} AudioExtractor")
-        extraction = extractor_cls().generate.remote(dict(payload))
+        extraction = extractor_cls().generate.remote(
+            _gateway_payload("transcriber_extract", payload)
+        )
         payload = {
             "audio_bucket": extraction["audio_bucket"],
             "audio_key": extraction["audio_key"],
@@ -431,7 +461,9 @@ def smoke_test(
     log.info(
         f"smoke: running {target} TranscriberInference on {payload['audio_key']}"
     )
-    result = inference_cls().generate.remote({**payload, "model": model})
+    result = inference_cls().generate.remote(
+        _gateway_payload("transcriber", {**payload, "whisper_model": model})
+    )
 
     transcript = " ".join(seg["text"] for seg in result.get("preview", []))
     log.info(f"smoke: transcript -> {transcript}")
@@ -707,7 +739,10 @@ class TranscriberInference:
     def generate(self, payload: dict[str, Any]) -> dict[str, Any]:
         audio_bucket = payload["audio_bucket"]
         audio_key = payload["audio_key"]
-        model = _validate_model(payload.get("model"))
+        # `whisper_model`, not `model`: the gateway routes on payload["model"]
+        # and overwrites it with its own route key ("transcriber") on the way
+        # in, so a Whisper size put there never reaches this container.
+        model = _validate_model(payload.get("whisper_model"))
         language = _validate_language(payload.get("language"))
         num_speakers = _validate_speakers(payload.get("num_speakers"))
         llm_cleanup = bool(payload.get("llm_cleanup"))
