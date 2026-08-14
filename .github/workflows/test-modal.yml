@@ -27,14 +27,11 @@ jobs:
       - name: install uv
         run: pip install uv
 
-      # Only the dev extra: these are pure-logic tests over the vendored
-      # transcriber pipeline, so nothing pulls torch, CUDA or a model.
-      - name: install dependencies
-        run: |
-          cd services/modal
-          uv pip install --system ".[dev]"
-
+      # An ephemeral env with just the two dependencies the tests need. This
+      # directory is a collection of Modal entry points, not an installable
+      # distribution, so --no-project keeps uv from trying to build it — and
+      # nothing here pulls torch, CUDA or a model.
       - name: run tests
         run: |
           cd services/modal
-          pytest tests/ -v --tb=short
+          uv run --no-project --with pytest --with numpy pytest tests/ -v --tb=short

@@ -8,13 +8,6 @@ dependencies = [
     "modal>=1.4.2",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.0.0",
-    # transcriber_pipeline's pure-logic modules import numpy at module load.
-    "numpy>=1.26",
-]
-
 [tool.pytest.ini_options]
 # So `pytest tests/` resolves the local source packages (transcriber_pipeline,
 # common) no matter how pytest was invoked.

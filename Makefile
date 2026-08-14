@@ -110,8 +110,7 @@ test-dispatch:
 # no model downloads.
 test-modal:
 	@echo "Running modal tests..."
-	cd services/modal && uv pip install ".[dev]"
-	cd services/modal && uv run pytest tests/ -v
+	cd services/modal && uv run --no-project --with pytest --with numpy pytest tests/ -v
 
 # Dispatch service
 build-dispatch:
