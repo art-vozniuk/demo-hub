@@ -1,17 +1,23 @@
-"""Modal app: audio → diarized transcript on a cheap GPU.
+"""Modal app: audio or video → diarized transcript on a cheap GPU.
 
-Silero VAD → faster-whisper (CTranslate2, float16) per speech chunk →
-hallucination filter → pyannote speaker turns → word-level speaker assignment
-→ segment merge, with optional LLM cleanup. The pipeline lives in
-services/modal/transcriber_pipeline and ships into the image as a local source
-package.
+Two classes, both endpoint-less and invoked by name through the gateway:
+
+- `AudioExtractor` (CPU): demuxes a video upload to 16 kHz mono FLAC. A
+  90-minute recording is gigabytes of frames around a few dozen megabytes of
+  speech, and none of that should touch a GPU container — so dispatch runs this
+  first for video and hands the GPU the extracted audio.
+- `TranscriberInference` (GPU): Silero VAD → faster-whisper (CTranslate2,
+  float16) per speech chunk → hallucination filter → pyannote speaker turns →
+  word-level speaker assignment → segment merge, with optional LLM cleanup.
+
+The pipeline itself lives in services/modal/transcriber_pipeline and ships into
+the image as a local source package.
 
 The container owns the whole job: download the upload from S3, run the
 pipeline, render .json/.txt/.srt and upload all three back to S3. Dispatch only
 forwards the URLs, so a long transcript never travels through RabbitMQ or lands
 in Postgres.
 
-Endpoint-less: invoked by name through the gateway.
 Deploy / preload via services/modal/transcriber/{deploy,preload,preload_llm}.py.
 """
 
@@ -24,14 +30,16 @@ from typing import Any
 
 import modal
 
-from common.constants import MODAL_FUNCTION_TIMEOUT_SECONDS
+from common.constants import MODAL_LONG_FUNCTION_TIMEOUT_SECONDS
 from common.instrument import InferenceRunner
 from common.lib import (
     MODEL_DIR,
     configure_logging,
     download_from_s3,
+    download_from_s3_to_file,
     make_app,
     upload_to_s3,
+    upload_to_s3_with_key,
 )
 from common.sentry import init_sentry
 
@@ -70,13 +78,13 @@ ALLOWED_LANGUAGES = (
 
 MAX_SPEAKERS = 10
 
-# The dispatch worker gives up at MODAL_FUNCTION_TIMEOUT_SECONDS (600s), and the
-# Modal function times out at the same moment by design. Warm throughput on an
-# L4 is roughly 8-15x realtime end to end, so 30 minutes of audio is ~2-4
-# minutes of compute — inside the budget with room for a cold start.
-MAX_AUDIO_SECONDS = 30 * 60
+# Both classes run to MODAL_LONG_FUNCTION_TIMEOUT_SECONDS (1800s), matched by
+# the deadline dispatch polls to. Warm throughput on an L4 is roughly 8-15x
+# realtime end to end, so 90 minutes of audio is ~6-11 minutes on turbo and
+# ~15-20 on large-v3 — inside the budget, with the cold start on top.
+MAX_AUDIO_SECONDS = 90 * 60
 # Cleanup is one LLM generation per segment, which dominates the run; hold it to
-# a shorter ceiling rather than letting it eat the whole deadline.
+# a much shorter ceiling rather than letting it eat the whole deadline.
 LLM_MAX_AUDIO_SECONDS = 15 * 60
 
 # Segments inlined in the response so the UI can render immediately; the rest
@@ -137,6 +145,12 @@ with transcriber_image.imports():
     from transcriber_pipeline import asr, llm
     from transcriber_pipeline.audio import probe_duration
     from transcriber_pipeline.export import to_json, to_payload, to_srt, to_txt
+    from transcriber_pipeline.media import (
+        EXTRACT_EXTENSION,
+        NoAudioStreamError,
+        extract_audio,
+        probe_media,
+    )
     from transcriber_pipeline.pipeline import TranscriptionPipeline
 
 
@@ -281,10 +295,116 @@ def _validate_speakers(raw: Any) -> int | None:
 
 @app.cls(
     image=transcriber_image,
+    # No GPU: this is ffmpeg demuxing, bounded by download and disk. Generous
+    # CPU because ffmpeg threads well; generous ephemeral memory is not needed
+    # because both the source and the output are streamed through files.
+    cpu=4.0,
+    memory=4096,
+    scaledown_window=SCALEDOWN_WINDOW_S,
+    timeout=MODAL_LONG_FUNCTION_TIMEOUT_SECONDS,
+    secrets=[
+        modal.Secret.from_name("supabase-s3"),
+        modal.Secret.from_name("sentry"),
+    ],
+)
+@modal.concurrent(max_inputs=1)
+class AudioExtractor:
+    """Video in S3 → 16 kHz mono FLAC in S3.
+
+    Runs before the GPU class for video uploads so the transcription container
+    never downloads gigabytes of frames it would immediately throw away. The
+    length guard lives here too: rejecting an over-long recording before
+    extraction saves the extraction as well as the transcription.
+    """
+
+    @modal.enter()
+    def setup(self) -> None:
+        init_sentry("transcriber-extract")
+        self.runner = InferenceRunner(
+            config="transcriber_extract",
+            # Not a GPU workload; the label keeps the metric series honest
+            # rather than attributing CPU seconds to a GPU.
+            gpu="cpu",
+            scaledown_window_s=SCALEDOWN_WINDOW_S,
+            log=log,
+        )
+
+    @modal.method()
+    def generate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        source_bucket = payload["audio_bucket"]
+        source_key = payload["audio_key"]
+        # Forwarded so the length guard below applies the same ceiling the
+        # transcription step would — rejecting here saves the extraction too.
+        llm_cleanup = bool(payload.get("llm_cleanup"))
+
+        with self.runner.start(payload) as run:
+            log.info(f"[{run.request_id}] extract: start; key={source_key}")
+            source_path = f"/tmp/{uuid.uuid4().hex}{_extension_suffix(source_key)}"
+            dest_path = f"/tmp/{uuid.uuid4().hex}.{EXTRACT_EXTENSION}"
+
+            try:
+                with run.phase("download"):
+                    source_bytes = download_from_s3_to_file(
+                        source_bucket, source_key, source_path
+                    )
+                log.info(
+                    f"[{run.request_id}] downloaded "
+                    f"{source_bytes / (1024 * 1024):.1f} MB"
+                )
+
+                with run.phase("probe"):
+                    facts = probe_media(source_path)
+                if not facts["has_audio"]:
+                    raise NoAudioStreamError(
+                        "This file has no audio track, so there is nothing to "
+                        "transcribe."
+                    )
+                duration_s = facts["duration_s"]
+                _guard_duration(duration_s, llm_cleanup)
+
+                with run.phase("extract"):
+                    extract_audio(source_path, dest_path)
+
+                audio_bytes = os.path.getsize(dest_path)
+                with run.phase("upload"):
+                    with open(dest_path, "rb") as fh:
+                        audio_key, audio_url = upload_to_s3_with_key(
+                            data_bytes=fh.read(),
+                            bucket=source_bucket,
+                            folder="transcriber_audio",
+                            extension=EXTRACT_EXTENSION,
+                        )
+            finally:
+                _unlink_quietly(source_path)
+                _unlink_quietly(dest_path)
+
+            log.info(
+                f"[{run.request_id}] extract: done; "
+                f"{source_bytes / (1024 * 1024):.1f} MB -> "
+                f"{audio_bytes / (1024 * 1024):.1f} MB"
+            )
+            run.batch(1)
+            return run.finish(
+                {
+                    # Same shape the transcription step takes as input, so
+                    # dispatch can hand this straight on.
+                    "audio_bucket": source_bucket,
+                    "audio_key": audio_key,
+                    "audio_url": audio_url,
+                    "duration_s": round(duration_s, 2) if duration_s else None,
+                    "source_size_bytes": source_bytes,
+                    "audio_size_bytes": audio_bytes,
+                    "had_video": bool(facts["has_video"]),
+                }
+            )
+
+
+@app.cls(
+    image=transcriber_image,
     gpu=GPU_NAME,
     volumes={MODEL_DIR: volume},
     scaledown_window=SCALEDOWN_WINDOW_S,
-    timeout=MODAL_FUNCTION_TIMEOUT_SECONDS,
+    timeout=MODAL_LONG_FUNCTION_TIMEOUT_SECONDS,
     enable_memory_snapshot=True,
     secrets=[
         modal.Secret.from_name("supabase-s3"),
@@ -419,13 +539,18 @@ class TranscriberInference:
             )
 
 
-def _write_temp_audio(raw: bytes, audio_key: str) -> str:
-    """Persist the upload so ffmpeg/ffprobe can seek it. The extension is
-    cosmetic — both sniff the container — but keeps logs readable."""
+def _extension_suffix(key: str) -> str:
+    """`.mov` for an S3 key ending in one, `.bin` otherwise. Cosmetic — ffmpeg
+    and ffprobe sniff the container — but it keeps logs and errors readable."""
 
-    _, _, tail = audio_key.rpartition(".")
-    ext = tail.lower() if tail and len(tail) <= 5 else "bin"
-    path = f"/tmp/{uuid.uuid4().hex}.{ext}"
+    _, _, tail = key.rpartition(".")
+    return f".{tail.lower()}" if tail and len(tail) <= 5 else ".bin"
+
+
+def _write_temp_audio(raw: bytes, audio_key: str) -> str:
+    """Persist the upload so ffmpeg/ffprobe can seek it."""
+
+    path = f"/tmp/{uuid.uuid4().hex}{_extension_suffix(audio_key)}"
     with open(path, "wb") as fh:
         fh.write(raw)
     return path

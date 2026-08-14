@@ -26,10 +26,32 @@ def test_modal_function_timeout_matches_pipeline_deadline():
     )
 
 
+def test_modal_long_function_timeout_matches_long_pipeline_deadline():
+    modal_constants = _load_modal_constants()
+    assert (
+        modal_constants.MODAL_LONG_FUNCTION_TIMEOUT_SECONDS
+        == canonical.MODAL_LONG_PIPELINE_DEADLINE_SECONDS
+    )
+
+
+def test_long_deadline_is_longer_than_the_default():
+    assert (
+        canonical.MODAL_LONG_PIPELINE_DEADLINE_SECONDS
+        > canonical.MODAL_PIPELINE_DEADLINE_SECONDS
+    )
+
+
 def test_top_buckets_equal_deadlines():
-    assert canonical.INFERENCE_BUCKETS[-1] == canonical.MODAL_PIPELINE_DEADLINE_SECONDS
+    # Duration buckets top out at the *longest* deadline any pipeline can run
+    # to, so a long transcription lands on the chart instead of in +Inf.
+    assert (
+        canonical.INFERENCE_BUCKETS[-1]
+        == canonical.MODAL_LONG_PIPELINE_DEADLINE_SECONDS
+    )
     assert canonical.QUEUE_WAIT_BUCKETS[-1] == canonical.MODAL_PIPELINE_DEADLINE_SECONDS
-    assert canonical.E2E_BUCKETS[-1] == 2 * canonical.MODAL_PIPELINE_DEADLINE_SECONDS
+    assert (
+        canonical.E2E_BUCKETS[-1] == 2 * canonical.MODAL_LONG_PIPELINE_DEADLINE_SECONDS
+    )
     for buckets in (
         canonical.INFERENCE_BUCKETS,
         canonical.QUEUE_WAIT_BUCKETS,

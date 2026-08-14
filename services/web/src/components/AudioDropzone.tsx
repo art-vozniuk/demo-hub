@@ -1,93 +1,70 @@
 import { useCallback, useState } from "react";
-import { AudioLines, Upload, X } from "lucide-react";
+import { AudioLines, Film, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
-
-// Mirrors the ceilings in services/modal/transcriber/app.py. Checked here so
-// the user finds out before a multi-megabyte upload, not after.
-export const MAX_AUDIO_MB = 100;
-export const MAX_AUDIO_MINUTES = 30;
-
-// Browsers are inconsistent about audio MIME types (m4a shows up as
-// audio/x-m4a, audio/mp4 or nothing at all), so accept anything that either
-// declares an audio type or carries a known extension.
-const ACCEPTED_EXTENSIONS = [
-  "mp3", "m4a", "mp4", "wav", "flac", "ogg", "oga", "opus", "webm", "aac", "wma",
-];
-
-const ACCEPT_ATTR = [
-  "audio/*",
-  ...ACCEPTED_EXTENSIONS.map((ext) => `.${ext}`),
-].join(",");
-
-const extensionOf = (name: string): string =>
-  name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
-
-const formatDuration = (seconds: number): string => {
-  const total = Math.round(seconds);
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
-};
-
-/** Read duration from the browser's decoder. Resolves null when it can't
- *  decode the container — the server re-checks with ffprobe either way. */
-const probeDuration = (file: File): Promise<number | null> =>
-  new Promise((resolve) => {
-    const url = URL.createObjectURL(file);
-    const audio = new Audio();
-    const done = (value: number | null) => {
-      URL.revokeObjectURL(url);
-      resolve(value);
-    };
-    audio.preload = "metadata";
-    audio.onloadedmetadata = () =>
-      done(Number.isFinite(audio.duration) ? audio.duration : null);
-    audio.onerror = () => done(null);
-    audio.src = url;
-  });
+import {
+  AUDIO_EXTENSIONS,
+  MAX_MEDIA_MB,
+  MAX_MEDIA_MINUTES,
+  MEDIA_ACCEPT_ATTR,
+  formatMediaDuration,
+  formatMediaSize,
+  mediaKindOf,
+  probeMediaDuration,
+  type MediaKind,
+} from "@/lib/media";
+import type { UploadProgress } from "@/lib/s3";
 
 interface AudioDropzoneProps {
-  onFileSelect: (file: File | null) => void;
+  onFileSelect: (file: File | null, kind: MediaKind | null) => void;
   selectedFile: File | null;
   disabled?: boolean;
+  /** Set while the file is uploading, to show real progress. */
+  progress?: UploadProgress | null;
 }
 
 const AudioDropzone = ({
   onFileSelect,
   selectedFile,
   disabled = false,
+  progress = null,
 }: AudioDropzoneProps) => {
   const [isDragging, setIsDragging] = useState(false);
   const [duration, setDuration] = useState<number | null>(null);
+  const [kind, setKind] = useState<MediaKind | null>(null);
 
   const accept = useCallback(
     async (file: File) => {
-      const looksLikeAudio =
-        file.type.startsWith("audio/") ||
-        ACCEPTED_EXTENSIONS.includes(extensionOf(file.name));
-      if (!looksLikeAudio) {
+      const mediaKind = mediaKindOf(file);
+      if (!mediaKind) {
         toast.error(
-          `Unsupported file. Try ${ACCEPTED_EXTENSIONS.slice(0, 5).join(", ")}…`,
+          `Unsupported file. Upload audio (${AUDIO_EXTENSIONS.slice(0, 4).join(
+            ", ",
+          )}…) or video (mov, mp4, mkv…).`,
         );
         return;
       }
-      if (file.size > MAX_AUDIO_MB * 1024 * 1024) {
-        toast.error(`File must be under ${MAX_AUDIO_MB} MB`);
+      if (file.size > MAX_MEDIA_MB * 1024 * 1024) {
+        toast.error(
+          `File must be under ${(MAX_MEDIA_MB / 1024).toFixed(0)} GB — this ` +
+            `one is ${formatMediaSize(file.size)}`,
+        );
         return;
       }
 
-      const seconds = await probeDuration(file);
-      if (seconds !== null && seconds > MAX_AUDIO_MINUTES * 60) {
+      const seconds = await probeMediaDuration(file, mediaKind);
+      if (seconds !== null && seconds > MAX_MEDIA_MINUTES * 60) {
         toast.error(
           `Recording is ${Math.round(seconds / 60)} min; the limit is ` +
-            `${MAX_AUDIO_MINUTES} min`,
+            `${MAX_MEDIA_MINUTES} min`,
         );
         return;
       }
 
       setDuration(seconds);
-      onFileSelect(file);
+      setKind(mediaKind);
+      onFileSelect(file, mediaKind);
     },
     [onFileSelect],
   );
@@ -112,23 +89,40 @@ const AudioDropzone = ({
 
   const handleRemove = () => {
     setDuration(null);
-    onFileSelect(null);
+    setKind(null);
+    onFileSelect(null, null);
   };
 
   if (selectedFile) {
+    const percent =
+      progress && progress.total > 0
+        ? Math.min(100, Math.round((progress.loaded / progress.total) * 100))
+        : null;
+    const Icon = kind === "video" ? Film : AudioLines;
+
     return (
       <div className="w-full max-w-2xl mx-auto">
         <div className="card-gradient relative overflow-hidden rounded-xl border border-border p-6">
           <div className="flex items-center gap-4">
             <div className="rounded-lg bg-primary/10 p-3">
-              <AudioLines className="h-6 w-6 text-primary" />
+              <Icon className="h-6 w-6 text-primary" />
             </div>
-            <div className="flex-1 min-w-0">
+            <div className="flex-1 min-w-0 space-y-1">
               <p className="truncate font-medium">{selectedFile.name}</p>
               <p className="text-sm text-muted-foreground tabular-nums">
-                {(selectedFile.size / 1024 / 1024).toFixed(1)} MB
-                {duration !== null && ` · ${formatDuration(duration)}`}
+                {formatMediaSize(selectedFile.size)}
+                {duration !== null && ` · ${formatMediaDuration(duration)}`}
+                {kind === "video" && " · video"}
               </p>
+              {percent !== null && progress && (
+                <div className="space-y-1 pt-1">
+                  <Progress value={percent} className="h-1.5" />
+                  <p className="text-xs text-muted-foreground tabular-nums">
+                    Uploading {percent}% ({formatMediaSize(progress.loaded)} of{" "}
+                    {formatMediaSize(progress.total)})
+                  </p>
+                </div>
+              )}
             </div>
             <Button
               variant="ghost"
@@ -165,7 +159,7 @@ const AudioDropzone = ({
           type="file"
           id="audio-upload"
           className="absolute inset-0 cursor-pointer opacity-0"
-          accept={ACCEPT_ATTR}
+          accept={MEDIA_ACCEPT_ATTR}
           disabled={disabled}
           onChange={handleFileInput}
         />
@@ -184,8 +178,12 @@ const AudioDropzone = ({
               </label>
             </p>
             <p className="mt-2 text-sm text-muted-foreground">
-              MP3, M4A, WAV, FLAC, OGG, WEBM · up to {MAX_AUDIO_MINUTES} min ·
-              max {MAX_AUDIO_MB} MB
+              Audio (MP3, M4A, WAV, FLAC…) or video (MOV, MP4, MKV…) · up to{" "}
+              {MAX_MEDIA_MINUTES} min
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Video is stripped to its audio track on the way in, so only the
+              sound is transcribed.
             </p>
           </div>
         </div>

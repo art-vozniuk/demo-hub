@@ -21,6 +21,12 @@ class Config(BaseSettings):
     # module — it must stay equal to the Modal function timeout and the
     # top histogram bucket, so override with care.
     MODAL_PIPELINE_DEADLINE_SECONDS: int = constants.MODAL_PIPELINE_DEADLINE_SECONDS
+    # Opt-in ceiling for pipelines whose runtime scales with input size
+    # (transcription). Same rule as above: keep it equal to the Modal function
+    # timeout those apps declare.
+    MODAL_LONG_PIPELINE_DEADLINE_SECONDS: int = (
+        constants.MODAL_LONG_PIPELINE_DEADLINE_SECONDS
+    )
     MODAL_POLL_INTERVAL_SECONDS: float = constants.MODAL_POLL_INTERVAL_SECONDS
 
     # Transient HTTP errors against Modal-gateway are retried in-place

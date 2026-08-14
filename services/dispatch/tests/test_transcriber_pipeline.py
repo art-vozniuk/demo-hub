@@ -25,6 +25,17 @@ MODAL_RESULT = {
 }
 
 
+EXTRACT_RESULT = {
+    "audio_bucket": "media",
+    "audio_key": "transcriber_audio/extracted.flac",
+    "audio_url": "https://s3.example/transcriber_audio/extracted.flac",
+    "duration_s": 612.5,
+    "source_size_bytes": 1_500_000_000,
+    "audio_size_bytes": 90_000_000,
+    "had_video": True,
+}
+
+
 @pytest.fixture
 def captured_payload(mocker):
     """Patch the Modal call and expose the payload it was handed."""
@@ -38,6 +49,23 @@ def captured_payload(mocker):
     mocker.patch(
         "services.dispatch.app.pipelines.transcriber.invoke_transcriber",
         side_effect=fake_invoke,
+    )
+    return captured
+
+
+@pytest.fixture
+def captured_extract(mocker):
+    """Patch the extraction call and expose the payload it was handed."""
+
+    captured: dict = {}
+
+    async def fake_extract(payload):
+        captured.update(payload)
+        return dict(EXTRACT_RESULT)
+
+    mocker.patch(
+        "services.dispatch.app.pipelines.transcriber.invoke_transcriber_extract",
+        side_effect=fake_extract,
     )
     return captured
 
@@ -134,3 +162,119 @@ async def test_a_result_without_a_url_fails_loudly(mock_s3_client, mocker):
 
     with pytest.raises(RuntimeError, match="no result_url"):
         await build(mock_s3_client).run()
+
+
+# --------------------------- video → extract first -------------------------- #
+
+
+class TestNeedsExtraction:
+    def test_an_explicit_video_kind_wins(self, mock_s3_client):
+        pipeline = build(mock_s3_client, source_kind="video")
+
+        assert pipeline.needs_extraction() is True
+
+    def test_an_explicit_audio_kind_skips_it_even_for_a_video_key(self, mock_s3_client):
+        # The client knows what it picked; trust it over the extension.
+        pipeline = TranscriberPipeline(
+            s3=mock_s3_client,
+            pipeline_input=TranscriberPipelineInput(
+                audio_bucket="media",
+                audio_key="user/clip.mov",
+                source_kind="audio",
+            ),
+        )
+
+        assert pipeline.needs_extraction() is False
+
+    @pytest.mark.parametrize("key", ["user/a.mov", "user/a.MOV", "user/a.mp4"])
+    def test_a_video_extension_triggers_it_without_a_hint(self, mock_s3_client, key):
+        pipeline = TranscriberPipeline(
+            s3=mock_s3_client,
+            pipeline_input=TranscriberPipelineInput(
+                audio_bucket="media", audio_key=key
+            ),
+        )
+
+        assert pipeline.needs_extraction() is True
+
+    @pytest.mark.parametrize("key", ["user/a.mp3", "user/a.m4a", "user/noext"])
+    def test_audio_keys_skip_it(self, mock_s3_client, key):
+        pipeline = TranscriberPipeline(
+            s3=mock_s3_client,
+            pipeline_input=TranscriberPipelineInput(
+                audio_bucket="media", audio_key=key
+            ),
+        )
+
+        assert pipeline.needs_extraction() is False
+
+
+async def test_audio_never_calls_the_extractor(mock_s3_client, mocker):
+    extract = mocker.patch(
+        "services.dispatch.app.pipelines.transcriber.invoke_transcriber_extract"
+    )
+    mocker.patch(
+        "services.dispatch.app.pipelines.transcriber.invoke_transcriber",
+        return_value=dict(MODAL_RESULT),
+    )
+
+    await build(mock_s3_client).run()
+
+    extract.assert_not_called()
+
+
+async def test_video_transcribes_the_extracted_audio_not_the_upload(
+    mock_s3_client, captured_payload, captured_extract
+):
+    await build(mock_s3_client, source_kind="video").run()
+
+    assert captured_extract["audio_key"] == "user/meeting.m4a"
+    # The GPU step must be handed the extracted track, never the video.
+    assert captured_payload["audio_key"] == EXTRACT_RESULT["audio_key"]
+    assert captured_payload["audio_bucket"] == EXTRACT_RESULT["audio_bucket"]
+
+
+async def test_extraction_is_told_about_cleanup_so_it_can_reject_early(
+    mock_s3_client, captured_payload, captured_extract
+):
+    await build(mock_s3_client, source_kind="video", llm_cleanup=True).run()
+
+    assert captured_extract["llm_cleanup"] is True
+
+
+async def test_video_result_exposes_the_extracted_audio(
+    mock_s3_client, captured_payload, captured_extract
+):
+    result = await build(mock_s3_client, source_kind="video").run()
+
+    assert result["extracted_audio_url"] == EXTRACT_RESULT["audio_url"]
+
+
+async def test_audio_result_has_no_extracted_url(mock_s3_client, captured_payload):
+    result = await build(mock_s3_client).run()
+
+    assert result["extracted_audio_url"] is None
+
+
+async def test_extraction_without_a_key_fails_loudly(mock_s3_client, mocker):
+    mocker.patch(
+        "services.dispatch.app.pipelines.transcriber.invoke_transcriber_extract",
+        return_value={"duration_s": 1.0},
+    )
+
+    with pytest.raises(RuntimeError, match="no audio_key"):
+        await build(mock_s3_client, source_kind="video").run()
+
+
+async def test_a_failed_extraction_never_reaches_the_gpu(mock_s3_client, mocker):
+    transcribe = mocker.patch(
+        "services.dispatch.app.pipelines.transcriber.invoke_transcriber"
+    )
+    mocker.patch(
+        "services.dispatch.app.pipelines.transcriber.invoke_transcriber_extract",
+        side_effect=RuntimeError("this file has no audio track"),
+    )
+
+    with pytest.raises(RuntimeError, match="no audio track"):
+        await build(mock_s3_client, source_kind="video").run()
+    transcribe.assert_not_called()

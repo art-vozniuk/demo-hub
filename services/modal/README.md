@@ -15,7 +15,7 @@ class by name, keyed on `payload["model"]`.
 | `demo-hub-flux` | Flux | `flux/app.py` | `flux-models` |
 | `demo-hub-sharp` | SHARP (single-image → 3DGS) | `sharp/app.py` | `sharp-models` |
 | `demo-hub-trellis` | TRELLIS.2 (single-image → GLB mesh) | `trellis/app.py` | `trellis-models` |
-| `demo-hub-transcriber` | Transcriber (audio → diarized transcript) | `transcriber/app.py` | `transcriber-models` |
+| `demo-hub-transcriber` | Transcriber (audio/video → diarized transcript) | `transcriber/app.py` | `transcriber-models` |
 
 Every app exposes the same shape through the gateway: `submit` spawns the GPU
 job and returns a `call_id`, and `poll` is hit on a fixed cadence until the call
@@ -286,11 +286,27 @@ GPU: 512-res inference targets an A10G (24GB). If a real input OOMs,
 bump the `@app.cls(gpu=...)` tier to `L40S` (48GB) — do not drop the
 render resolution.
 
-## Transcriber — audio → diarized transcript
+## Transcriber — audio/video → diarized transcript
 
 Serverless GPU backend for the **Transcriber** demo. Takes an uploaded
-recording and returns a transcript split by speaker, as `.json` / `.txt` /
-`.srt` URLs plus summary metadata.
+recording — audio or video — and returns a transcript split by speaker, as
+`.json` / `.txt` / `.srt` URLs plus summary metadata.
+
+Two classes, because a video upload should not cost GPU time to throw frames
+away:
+
+| Class | Hardware | Job |
+|---|---|---|
+| `AudioExtractor` | CPU | demux video → 16 kHz mono FLAC, back into S3 |
+| `TranscriberInference` | L4 | the transcription pipeline |
+
+Dispatch runs the extractor first when the upload is video (`source_kind` from
+the client, or the key's extension), then hands the GPU only the extracted
+track. A 90-minute video is gigabytes of frames around a few dozen megabytes of
+speech; the extractor streams it to disk rather than into memory, and FLAC keeps
+the hand-off lossless. Guessing wrong is cheap either way — the transcription
+pipeline decodes video containers fine, and extracting audio-only input still
+yields correct audio.
 
 The pipeline lives in `transcriber_pipeline/` and ships into the image as a
 local source package. It is a CUDA port of
@@ -342,6 +358,17 @@ and [segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0), or
 }
 ```
 
+`transcriber_extract` takes just the source location (plus `llm_cleanup`, so it
+can apply the same length ceiling before doing the work) and returns the
+extracted track:
+
+```json
+{ "audio_bucket": "media", "audio_key": "transcriber_audio/<uuid>.flac",
+  "audio_url": "https://...", "duration_s": 612.5,
+  "source_size_bytes": 1500000000, "audio_size_bytes": 90000000,
+  "had_video": true }
+```
+
 `model`, `language` and `num_speakers` are optional — absent means the app's own
 default (`large-v3-turbo`, auto-detect, auto-detect). `poll` returns:
 
@@ -366,9 +393,11 @@ the page renders before it fetches the JSON.
 
 ### Limits
 
-The dispatch worker gives up at 600s and the Modal function times out at the
-same moment by design, so audio is capped at **30 minutes** (warm throughput is
-roughly 8-15x realtime end to end on an L4). LLM cleanup runs one generation
+Both classes run to `MODAL_LONG_FUNCTION_TIMEOUT_SECONDS` (**1800s**), the
+opt-in deadline for pipelines whose runtime scales with input size, matched by
+the deadline dispatch polls to. Media is capped at **90 minutes** — warm
+throughput is roughly 8-15x realtime end to end on an L4, so that is ~6-11
+minutes on turbo and ~15-20 on large-v3. LLM cleanup runs one generation
 per segment and dominates the run, so it is capped at **15 minutes** and fails
 fast when `preload_llm.py` has never been run — rather than pulling 15GB inside
 a request that would then blow the deadline. Per-stage timings (vad, transcribe,

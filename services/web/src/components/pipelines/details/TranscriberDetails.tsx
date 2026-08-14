@@ -30,6 +30,9 @@ const TranscriberDetails = ({ pipeline }: Props) => {
   const { segments } = useTranscript(result.result_url, result.preview ?? []);
   const excerpt = segments.slice(0, EXCERPT_SEGMENTS);
   const duration = formatDuration(result.duration_s);
+  // For a video run the source key is the video, which an <audio> element
+  // can't play — prefer the extracted track the pipeline produced.
+  const playableUrl = result.extracted_audio_url || sourceUrl;
 
   return (
     <div className="space-y-3">
@@ -67,14 +70,14 @@ const TranscriberDetails = ({ pipeline }: Props) => {
         )}
       </div>
 
-      {sourceUrl && (
+      {playableUrl && (
         <audio
           controls
           preload="none"
-          src={sourceUrl}
+          src={playableUrl}
           className="w-full max-w-md"
         >
-          <a href={sourceUrl}>Download the source recording</a>
+          <a href={playableUrl}>Download the audio</a>
         </audio>
       )}
 

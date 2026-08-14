@@ -1,4 +1,5 @@
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { Upload } from "@aws-sdk/lib-storage";
 
 const s3Config = {
   region: import.meta.env.VITE_S3_REGION || "us-east-1",
@@ -43,6 +44,73 @@ export async function uploadToS3(
     key,
     url,
   };
+}
+
+/** Bytes sent so far out of the total, for an upload progress bar. */
+export interface UploadProgress {
+  loaded: number;
+  total: number;
+}
+
+// 8 MB parts, four in flight: enough to saturate a home connection without
+// holding much of the file in memory at once.
+const MULTIPART_PART_SIZE = 8 * 1024 * 1024;
+const MULTIPART_CONCURRENCY = 4;
+
+/**
+ * Upload a media file, in parts, reporting progress.
+ *
+ * `uploadToS3` reads the whole file into one PutObject, which is fine for a
+ * photo and hopeless for a 90-minute video: it would buffer gigabytes in the
+ * tab and give the user no feedback for minutes. `Upload` splits the file and
+ * retries individual parts. Files smaller than one part still go up as a
+ * single PutObject, so this is not a regression for short clips.
+ */
+export async function uploadMediaToS3(
+  file: File,
+  bucket: string,
+  key: string,
+  onProgress?: (progress: UploadProgress) => void,
+): Promise<S3UploadResult> {
+  const upload = new Upload({
+    client: s3Client,
+    params: {
+      Bucket: bucket,
+      Key: key,
+      Body: file,
+      ContentType: file.type || "application/octet-stream",
+    },
+    partSize: MULTIPART_PART_SIZE,
+    queueSize: MULTIPART_CONCURRENCY,
+    leavePartsOnError: false,
+  });
+
+  if (onProgress) {
+    upload.on("httpUploadProgress", ({ loaded, total }) => {
+      onProgress({ loaded: loaded ?? 0, total: total ?? file.size });
+    });
+  }
+
+  try {
+    await upload.done();
+  } catch (err) {
+    // A storage-side size cap is the one failure a user can act on, and the
+    // raw SDK error doesn't say so.
+    const message = err instanceof Error ? err.message : String(err);
+    if (/EntityTooLarge|exceeded the maximum|413/i.test(message)) {
+      throw new Error(
+        `The storage service rejected this file as too large (${(
+          file.size /
+          1024 /
+          1024
+        ).toFixed(0)} MB). Its upload size limit needs raising.`,
+      );
+    }
+    throw err;
+  }
+
+  const publicEndpoint = import.meta.env.VITE_S3_PUBLIC_BUCKETS_ENDPOINT;
+  return { bucket, key, url: `${publicEndpoint}/${bucket}/${key}` };
 }
 
 export interface ParsedS3Url {

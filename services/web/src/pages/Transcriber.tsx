@@ -20,7 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { DemoHeader } from "@/components/DemoHeader";
-import AudioDropzone, { MAX_AUDIO_MINUTES } from "@/components/AudioDropzone";
+import AudioDropzone from "@/components/AudioDropzone";
 import OutOfTokensDialog from "@/components/OutOfTokensDialog";
 import SharePipelineButton from "@/components/SharePipelineButton";
 import TranscriptView from "@/components/transcriber/TranscriptView";
@@ -31,14 +31,21 @@ import {
   type PipelineStatusItem,
   type TranscriberResult,
 } from "@/api";
-import { getFileExtension, uploadToS3 } from "@/lib/s3";
+import { MAX_MEDIA_MINUTES, type MediaKind } from "@/lib/media";
+import {
+  getFileExtension,
+  uploadMediaToS3,
+  type UploadProgress,
+} from "@/lib/s3";
 import { useAnalytics } from "@/hooks/useAnalytics";
 import { useAuth } from "@/contexts/AuthContext";
 import { useWallet } from "@/contexts/WalletContext";
 
 const POLL_INTERVAL_MS = 1500;
-// Generous: the pipeline deadline is 600s and a cold GPU adds start-up on top.
-const POLL_TIMEOUT_MS = 780_000;
+// The pipeline deadline for transcription is 1800s, and a video adds an
+// extraction step plus a cold container on top; give up only well past that so
+// the UI never abandons a run the backend is still finishing.
+const POLL_TIMEOUT_MS = 2_400_000;
 
 // Mirrors ALLOWED_MODELS / the cost multipliers in migration 021.
 const MODELS = [
@@ -94,7 +101,11 @@ const Transcriber = () => {
   const { balance, refresh: refreshBalance } = useWallet();
 
   const [audio, setAudio] = useState<File | null>(null);
+  const [mediaKind, setMediaKind] = useState<MediaKind | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(
+    null,
+  );
   const [uploadedRef, setUploadedRef] = useState<{
     bucket: string;
     key: string;
@@ -186,15 +197,27 @@ const Transcriber = () => {
       try {
         const id = uuidv4();
         const ext = getFileExtension(audio.name);
-        const result = await uploadToS3(audio, "media", `user/${id}.${ext}`);
+        const result = await uploadMediaToS3(
+          audio,
+          "media",
+          `user/${id}.${ext}`,
+          (p) => {
+            if (alive) setUploadProgress(p);
+          },
+        );
         if (alive) setUploadedRef({ bucket: result.bucket, key: result.key });
       } catch (err) {
         if (alive) {
-          toast.error(`Upload failed: ${err}`);
+          const message = err instanceof Error ? err.message : String(err);
+          toast.error(`Upload failed: ${message}`);
           setAudio(null);
+          setMediaKind(null);
         }
       } finally {
-        if (alive) setIsUploading(false);
+        if (alive) {
+          setIsUploading(false);
+          setUploadProgress(null);
+        }
       }
     })();
 
@@ -256,7 +279,12 @@ const Transcriber = () => {
 
       track({
         name: "transcriber_run_started",
-        params: { pipeline_id: newPipelineId, model, llm_cleanup: llmCleanup },
+        params: {
+          pipeline_id: newPipelineId,
+          model,
+          llm_cleanup: llmCleanup,
+          source_kind: mediaKind ?? "audio",
+        },
       });
 
       try {
@@ -277,6 +305,9 @@ const Transcriber = () => {
                   ? {}
                   : { num_speakers: Number(speakers) }),
                 llm_cleanup: llmCleanup,
+                // Lets dispatch route a video through the extraction step
+                // without having to guess from the file extension.
+                ...(mediaKind ? { source_kind: mediaKind } : {}),
               },
             },
           ],
@@ -336,6 +367,7 @@ const Transcriber = () => {
     language,
     speakers,
     llmCleanup,
+    mediaKind,
     refreshBalance,
     pollOnce,
     clearPolling,
@@ -343,6 +375,8 @@ const Transcriber = () => {
 
   const handleReset = useCallback(() => {
     setAudio(null);
+    setMediaKind(null);
+    setUploadProgress(null);
     setUploadedRef(null);
     setPipelineId(null);
     setPipelineStatus(null);
@@ -388,8 +422,10 @@ const Transcriber = () => {
         cost={cost}
         description={
           <>
-            Upload a recording and get it back as a transcript split by speaker
-            — who said what, and when. Silero VAD trims the silence,
+            Upload a recording — audio or video — and get it back as a
+            transcript split by speaker: who said what, and when. Video is
+            stripped to its audio track on a CPU container first, so the GPU
+            never touches the frames. Silero VAD trims the silence,
             Whisper transcribes each speech chunk with word-level timestamps,
             and{" "}
             <a
@@ -415,7 +451,7 @@ const Transcriber = () => {
         }
         tagline={
           !audio && !result && !failed
-            ? `Drop a recording — up to ${MAX_AUDIO_MINUTES} minutes`
+            ? `Drop audio or video — up to ${MAX_MEDIA_MINUTES} minutes`
             : undefined
         }
       />
@@ -424,9 +460,13 @@ const Transcriber = () => {
         {!result && !failed && (
           <>
             <AudioDropzone
-              onFileSelect={setAudio}
+              onFileSelect={(file, kind) => {
+                setAudio(file);
+                setMediaKind(kind);
+              }}
               selectedFile={audio}
               disabled={isProcessing}
+              progress={uploadProgress}
             />
 
             {audio && (
