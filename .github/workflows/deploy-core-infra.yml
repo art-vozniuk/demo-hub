@@ -78,9 +78,17 @@ jobs:
           # workflow itself (same rationale as build-<svc>.yml above).
           mc=false
           echo "$changed" | grep -qE '^services/modal/common/|^\.github/workflows/deploy-modal\.yml$' && mc=true
+          # transcriber_pipeline/ is the ported ASR pipeline; it ships into the
+          # transcriber app through add_local_python_source, so it is that app's
+          # source even though it lives outside its directory. Without this a
+          # pipeline-only fix reaches main and never redeploys.
+          extra_transcriber='^services/modal/transcriber_pipeline/'
           for a in flux flux_opt sharp trellis flux_t2i transcriber gateway; do
             v=$mc
             echo "$changed" | grep -qE "^services/modal/$a/" && v=true
+            extra_name="extra_$a"
+            extra="${!extra_name:-}"
+            [ -n "$extra" ] && echo "$changed" | grep -qE "$extra" && v=true
             echo "modal_$a=$v" >> $GITHUB_OUTPUT
           done
 
