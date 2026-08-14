@@ -106,6 +106,13 @@ test-dispatch:
 	cd services/dispatch && uv pip install -e ".[dev]"
 	cd services/dispatch && PYTHONPATH="$(PWD)" uv run pytest tests/ -v
 
+# Pure-logic tests over the vendored transcriber pipeline — no torch, no CUDA,
+# no model downloads.
+test-modal:
+	@echo "Running modal tests..."
+	cd services/modal && uv pip install ".[dev]"
+	cd services/modal && uv run pytest tests/ -v
+
 # Dispatch service
 build-dispatch:
 	docker build --platform $(PLATFORM) -f services/dispatch/Dockerfile -t $(DISPATCH_IMAGE) --build-arg BUILD_TAG=$(TAG) .
@@ -130,7 +137,7 @@ test-e2e:
 	set -a && source .env && set +a && \
 	uv run python e2e_recast_pipeline_test.py $(if $(COUNT),--count $(COUNT),)
 
-test: test-core test-compute test-dispatch
+test: test-core test-compute test-dispatch test-modal
 	@echo "All tests passed!"
 
 lint:

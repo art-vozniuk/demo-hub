@@ -22,6 +22,9 @@ on:
       flux_t2i:
         type: boolean
         default: false
+      transcriber:
+        type: boolean
+        default: false
       gateway:
         type: boolean
         default: false
@@ -41,6 +44,7 @@ jobs:
           SHARP: ${{ inputs.sharp }}
           TRELLIS: ${{ inputs.trellis }}
           FLUX_T2I: ${{ inputs.flux_t2i }}
+          TRANSCRIBER: ${{ inputs.transcriber }}
         run: |
           apps=""
           [ "$FLUX" = "true" ]     && apps="$apps flux"
@@ -48,6 +52,7 @@ jobs:
           [ "$SHARP" = "true" ]    && apps="$apps sharp"
           [ "$TRELLIS" = "true" ]  && apps="$apps trellis"
           [ "$FLUX_T2I" = "true" ] && apps="$apps flux_t2i"
+          [ "$TRANSCRIBER" = "true" ] && apps="$apps transcriber"
 
           if [ -z "$apps" ]; then
             json="[]"

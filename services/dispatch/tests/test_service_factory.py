@@ -5,12 +5,14 @@ from services.dispatch.app.pipelines.service import (
     GenerativeEditingCustomService,
     GenerativeEditingService,
     SharpService,
+    TranscriberService,
     TrellisService,
 )
 from services.dispatch.app.pipelines.schemas import (
     GenerativeEditingCustomPipelineInput,
     GenerativeEditingPipelineInput,
     SharpPipelineInput,
+    TranscriberPipelineInput,
     TrellisPipelineInput,
 )
 
@@ -153,5 +155,53 @@ def test_create_service_generative_editing_custom_invalid_input(mock_s3_client):
             pipeline_id="gec",
             pipeline_name="generative_editing_custom",
             pipeline_input={"image_bucket": "media"},  # missing image_key + prompt
+            s3_client=mock_s3_client,
+        )
+
+
+def test_create_service_transcriber(mock_s3_client):
+    svc = create_service(
+        pipeline_id="trs",
+        pipeline_name="transcriber",
+        pipeline_input={
+            "audio_bucket": "media",
+            "audio_key": "user/meeting.m4a",
+            "model": "large-v3",
+            "language": "ru",
+            "num_speakers": 3,
+            "llm_cleanup": True,
+        },
+        s3_client=mock_s3_client,
+    )
+
+    assert isinstance(svc, TranscriberService)
+    assert svc.id == "trs"
+    assert isinstance(svc.pipeline_input, TranscriberPipelineInput)
+    assert svc.pipeline_input.audio_key == "user/meeting.m4a"
+    assert svc.pipeline_input.num_speakers == 3
+    assert svc.pipeline_input.llm_cleanup is True
+
+
+def test_create_service_transcriber_knobs_are_optional(mock_s3_client):
+    svc = create_service(
+        pipeline_id="trs",
+        pipeline_name="transcriber",
+        pipeline_input={"audio_bucket": "media", "audio_key": "user/a.mp3"},
+        s3_client=mock_s3_client,
+    )
+
+    assert svc.pipeline_input.model is None
+    assert svc.pipeline_input.language is None
+    assert svc.pipeline_input.num_speakers is None
+    # Absent means off: the expensive path is never entered by default.
+    assert svc.pipeline_input.llm_cleanup is False
+
+
+def test_create_service_transcriber_invalid_input(mock_s3_client):
+    with pytest.raises(ValueError, match="Invalid input for transcriber"):
+        create_service(
+            pipeline_id="trs",
+            pipeline_name="transcriber",
+            pipeline_input={"audio_bucket": "media"},  # missing audio_key
             s3_client=mock_s3_client,
         )

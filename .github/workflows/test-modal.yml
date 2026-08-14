@@ -1,0 +1,37 @@
+name: test modal
+
+on:
+  pull_request:
+    paths:
+      - 'services/modal/**'
+      - '.github/workflows/test-modal.yml'
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+
+      - name: set up python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: install uv
+        run: pip install uv
+
+      # Only the dev extra: these are pure-logic tests over the vendored
+      # transcriber pipeline, so nothing pulls torch, CUDA or a model.
+      - name: install dependencies
+        run: |
+          cd services/modal
+          uv pip install --system ".[dev]"
+
+      - name: run tests
+        run: |
+          cd services/modal
+          pytest tests/ -v --tb=short

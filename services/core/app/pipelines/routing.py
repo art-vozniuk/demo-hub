@@ -25,6 +25,7 @@ _ROUTES: dict[str, str] = {
     "generative_t2i": rabbitmq_config.routing_dispatch,
     "sharp": rabbitmq_config.routing_dispatch,
     "trellis": rabbitmq_config.routing_dispatch,
+    "transcriber": rabbitmq_config.routing_dispatch,
     # Optimised FLUX deployment — each (gpu, batching) variant is a
     # distinct Modal app so billing in Modal UI stays separable by
     # config. See services/modal/flux_opt/app.py.

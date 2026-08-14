@@ -26,6 +26,7 @@ const ALL_LINKS: NavItem[] = [
   { to: "/flux", label: "Flux" },
   { to: "/trellis", label: "Trellis" },
   { to: "/sharp", label: "SHARP" },
+  { to: "/transcriber", label: "Transcriber" },
   { to: "/renderer", label: "Gaussian Splatting" },
   { to: "/face-fusion", label: "Face Swap" },
   { to: "/editor", label: "3D Editor" },

@@ -11,10 +11,10 @@
 MODAL_DIR := $(patsubst %/,%,$(dir $(realpath $(lastword $(MAKEFILE_LIST)))))
 REPO_ROOT := $(realpath $(MODAL_DIR)/../..)
 
-# Prod apps that occupy the 8-web-function workspace cap (submit+poll each:
-# flux, sharp, trellis, flux_t2i = 8). Gateway is excluded — see
-# deploy-prod-gateway.
-PROD_APPS := flux sharp trellis flux_t2i
+# Prod model apps. All of them are endpoint-less (invoked by name through the
+# gateway), so they cost nothing against the 8-web-function workspace cap —
+# only the gateway's own submit+poll pair does. See docs/DEPLOY.md.
+PROD_APPS := flux sharp trellis flux_t2i transcriber
 
 .PHONY: help deploy-prod deploy-prod-flux-opt deploy-prod-gateway \
         setup-dev-env preload-dev deploy-dev serve-gateway-dev
@@ -25,7 +25,7 @@ help:
 	@echo "  Production (env=main) — usually CI (.github/workflows/deploy-modal.yml):"
 	@echo "    make deploy-prod           deploy $(PROD_APPS) into main"
 	@echo "    make deploy-prod-flux-opt  deploy flux_opt into main (0 web fns, experimental)"
-	@echo "    make deploy-prod-gateway   BLOCKED: over the 8 web-fn cap (see target)"
+	@echo "    make deploy-prod-gateway   deploy the gateway into main (the only web fns)"
 	@echo ""
 	@echo "  Dev (env=dev) — laptop against docker-compose.local.yml:"
 	@echo "    make setup-dev-env         create the dev environment + dev secrets (interactive)"
@@ -46,15 +46,11 @@ deploy-prod:
 deploy-prod-flux-opt:
 	cd "$(MODAL_DIR)" && MODAL_ENVIRONMENT=main python flux_opt/deploy.py
 
-# The gateway adds a 9th + 10th web function on top of the 8 already spent by
-# flux/sharp/trellis/flux_t2i, so `modal deploy` fails in main on the free
-# tier. Only viable once the live models move behind the gateway (drop their
-# own endpoints) — then prod is 2 web functions total.
+# Every model app is endpoint-less now, so the gateway's submit+poll pair is
+# the workspace's entire web-function spend (2 of 8) and this is deployable.
+# Deploy it AFTER the model apps: its ROUTES resolve them by name.
 deploy-prod-gateway:
-	@echo "Refusing: the gateway would exceed the 8 web-function cap in 'main'."
-	@echo "Enable only after migrating flux/sharp/trellis/flux_t2i behind the gateway."
-	@echo "See docs/DEPLOY.md (Gateway & the web-function cap)."
-	@exit 1
+	cd "$(MODAL_DIR)" && MODAL_ENVIRONMENT=main python gateway/deploy.py
 
 # ---- dev (env=dev) ---------------------------------------------------------
 

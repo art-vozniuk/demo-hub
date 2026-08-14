@@ -22,6 +22,7 @@ export type AnalyticsEvent =
   | { name: 'nav_sharp_clicked'; params: Record<string, never> }
   | { name: 'nav_trellis_clicked'; params: Record<string, never> }
   | { name: 'sharp_generate_started'; params: { pipeline_id: string } }
+  | { name: 'transcriber_run_started'; params: { pipeline_id: string; model: string; llm_cleanup: boolean } }
   | { name: 'generative_preset_opened'; params: { preset_slug: string } }
   | { name: 'generative_generate_started'; params: { preset_slug: string; pipeline_id: string } }
   | { name: 'generative_refine_face_started'; params: { preset_slug: string; flux_pipeline_id: string; refine_pipeline_id: string } }

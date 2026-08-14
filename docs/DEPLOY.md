@@ -7,8 +7,9 @@ full local dev loop against an isolated Modal `dev` environment.
   `grafana`) runs on the VDS (`artemv.tech`) from `docker-compose.yml` using
   `ghcr.io/art-vozniuk/*` images.
 - **Modal GPU apps** run serverless on Modal: `flux` (legacy — serves the live
-  demo), `sharp`, `trellis`, `flux_t2i`, plus `flux_opt` (experimental,
-  gateway-routed) and `gateway` (single web entry point).
+  demo), `sharp`, `trellis`, `flux_t2i`, `transcriber`, plus `flux_opt`
+  (experimental) and `gateway` (single web entry point). Every model app is
+  endpoint-less and invoked by name through the gateway.
 
 ---
 
@@ -39,28 +40,24 @@ apps, secrets, and volumes:
 
 ## Gateway & the web-function cap
 
-Modal's free/Starter tier caps **web functions at 8 per workspace**. Today
-`main` spends all 8:
+Modal's free/Starter tier caps **web functions at 8 per workspace**, and the
+cap is documented as workspace-level — do not assume it's per-environment.
 
-| App        | Web functions      |
-|------------|--------------------|
-| `flux`     | submit + poll = 2  |
-| `sharp`    | submit + poll = 2  |
-| `trellis`  | submit + poll = 2  |
-| `flux_t2i` | submit + poll = 2  |
-| **total**  | **8**              |
+Every model app is **endpoint-less**: it exposes no `@modal.fastapi_endpoint`
+and is invoked by name (`modal.Cls.from_name`) through the gateway. So the
+gateway's `submit` + `poll` pair is the workspace's entire web-function spend:
 
-- `flux_opt` exposes **0** web functions — it's invoked by name through the
-  gateway — so it's safe to deploy in `main`.
-- The **`gateway`** exposes 2 web functions. Deploying it in `main` on top of the
-  8 above exceeds the cap, so `modal deploy gateway/app.py` fails there. **It is
-  intentionally not deployed to `main`** (commented out in the CI workflow and
-  blocked in the Makefile).
-- The cap is documented as workspace-level; do not assume it's per-environment.
-- **Migration path:** once the live models move behind the gateway (drop their
-  own `@modal.fastapi_endpoint`s and accept the raw payload in `generate()`, like
-  `flux_opt` already does), prod collapses to just the gateway's **2** web
-  functions and the gateway can be enabled in `main`.
+| App | Web functions |
+|------------------------------------------------|---|
+| `gateway`                                      | submit + poll = 2 |
+| `flux`, `sharp`, `trellis`, `flux_t2i`, `transcriber`, `flux_opt` | 0 each |
+| **total**                                      | **2 of 8** |
+
+- **Adding a model app costs 0 web functions.** A new demo is a new app
+  directory plus one row in `gateway/app.py:ROUTES`.
+- **Deploy order matters:** model apps first, gateway last. Its ROUTES resolve
+  apps by name, so a route must never go live before the app it points at.
+  `deploy-modal.yml` enforces this (`deploy-gateway` needs `deploy-models`).
 - In `dev` the gateway runs via **`modal serve`**, whose endpoints are ephemeral
   and **do not count** against the cap.
 
@@ -77,8 +74,8 @@ alongside the VDS deploy).
 - **Per-app gating:** an app deploys only when its own dir — or
   `services/modal/common/`, which ships into every app — changed since the
   `last-deploy` tag (same detection as the service images).
-- **Order:** endpoint-less model apps first, **gateway last**, so the
-  8-web-function cap is never exceeded mid-deploy; prod ends at the gateway's 2.
+- **Order:** model apps first, **gateway last** — its ROUTES resolve apps by
+  name, so a new route must not go live before the app it points at.
 - **Auth:** repo secrets `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` (Modal service
   token, Contributor on `main`); `MODAL_ENVIRONMENT=main` set by the job.
 - The shared `last-deploy` tag advances (in the `tag` job) only after BOTH the
@@ -100,11 +97,31 @@ modal secret create huggingface HF_TOKEN=... --env main
 The `flux-models` volume already exists in `main` (prod flux uses it); `flux_opt`
 shares it.
 
+**Per-app volume preloads** (once per environment, from a laptop with `modal`
+logged in — they run on Modal CPU containers and are idempotent):
+
+```bash
+cd services/modal
+python sharp/preload.py
+python trellis/preload.py
+python flux_t2i/preload.py
+python transcriber/preload.py        # Whisper sizes + pyannote, ~5.5GB
+python transcriber/preload_llm.py    # optional transcript cleanup LLM, ~15GB
+```
+
+`transcriber` additionally needs the account owning the `huggingface` secret's
+`HF_TOKEN` to have accepted the model terms for **both**
+[pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
+and [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
+— they are gated, and without that `preload.py` fails with a pointer to exactly
+this. Requests with `llm_cleanup: true` fail fast until `preload_llm.py` has
+run, so skipping it degrades one optional toggle rather than the demo.
+
 **Manual fallback** (from a laptop with the service token exported, or a
 logged-in `modal`):
 
 ```bash
-make -C services/modal deploy-prod           # flux, sharp, trellis, flux_t2i
+make -C services/modal deploy-prod           # flux, sharp, trellis, flux_t2i, transcriber
 make -C services/modal deploy-prod-flux-opt   # optional, experimental
 ```
 
@@ -172,10 +189,11 @@ including the real-cost panels (container uptime × GPU rate).
 curl -fsS https://artemv.tech/health            # -> healthy
 ```
 
-- Run a generation in the **live flux demo** — exercises the legacy
-  `generative_editing*` → `MODAL_GENERATIVE_*` → `demo-hub-flux` path. This is the
-  prod path that must keep working; `MODAL_GATEWAY_*` is unset in prod and is not
-  needed (the frontend never calls `flux_opt`).
+- Run a generation in the **live flux demo** — exercises
+  `generative_editing*` → gateway → `demo-hub-flux`. This is the prod path that
+  must keep working.
+- Run a **Transcriber** job on a short clip — exercises the newest app and, on a
+  cold container, the whole snapshot-restore path.
 - Open `https://artemv.tech/grafana/` — **Platform Overview** and **Pipeline
   Detail** should populate from that one run (panels are built to show single
   runs, not just averages under load), and the run should appear as one full
@@ -280,10 +298,14 @@ filter the Modal System dashboard by `environment_name="dev"`.)
 ## Guardrails — don't break prod
 
 - **Don't touch the live demo path:** `generative_editing` /
-  `generative_editing_custom` → `MODAL_GENERATIVE_*` → `demo-hub-flux`. The
-  frontend depends on it. `MODAL_GATEWAY_*` stays unset in prod.
-- **Gateway is not deployed to `main`** (web-function cap). Don't enable it there
-  until the live models are migrated behind it.
+  `generative_editing_custom` → gateway → `demo-hub-flux`. The frontend depends
+  on it.
+- **`MODAL_GATEWAY_SUBMIT_URL` / `_POLL_URL` must be set in prod.** Dispatch
+  reaches every model app through the gateway (`modal_client._invoke_gateway`),
+  so an unset pair breaks all Modal-backed demos, not just the newest one. They
+  are baked into the dispatch image at build from repo secrets.
+- **Deploy the gateway last.** Its ROUTES resolve model apps by name, so a new
+  route going live before its app means a `submit` that can't find its target.
 - **`compute` dep lockstep:** if you change dependencies in `services/common`,
   relock compute or its worker crashes on the first job
   (`pipeline_worker._process` lazily imports `services.common.observability.metrics`):

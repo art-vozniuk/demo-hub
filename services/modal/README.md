@@ -3,23 +3,26 @@
 > **Environments, CI/CD, and the dev runbook are in [docs/DEPLOY.md](../../docs/DEPLOY.md).**
 > Prod (`main`) deploys via `.github/workflows/deploy-modal.yml`; dev uses
 > `make -C services/modal <target>`. That doc also explains the 8-web-function
-> cap and why the gateway isn't deployed to `main`.
+> cap and why only the gateway spends against it.
 
-Two independent Modal apps live in this directory, one per demo. They
-share the same GPU + memory-snapshot pattern but use separate volumes,
-endpoints, and proxy-auth tokens.
+One Modal app per demo lives in this directory, each with its own model volume.
+They share the same GPU + memory-snapshot pattern and are all **endpoint-less**:
+the single `gateway/` app owns the only web endpoints and routes to a model's
+class by name, keyed on `payload["model"]`.
 
-| App | Demo | Entry file | Volume | Endpoint env vars |
-|---|---|---|---|---|
-| `demo-hub-flux` | Flux | `flux/app.py` | `flux-models` | `MODAL_GENERATIVE_SUBMIT_URL`, `MODAL_GENERATIVE_POLL_URL` |
-| `demo-hub-sharp` | SHARP (single-image → 3DGS) | `sharp/app.py` | `sharp-models` | `MODAL_SHARP_SUBMIT_URL`, `MODAL_SHARP_POLL_URL` |
-| `demo-hub-trellis` | TRELLIS.2 (single-image → GLB mesh) | `trellis/app.py` | `trellis-models` | `MODAL_TRELLIS_SUBMIT_URL`, `MODAL_TRELLIS_POLL_URL` |
+| App | Demo | Entry file | Volume |
+|---|---|---|---|
+| `demo-hub-flux` | Flux | `flux/app.py` | `flux-models` |
+| `demo-hub-sharp` | SHARP (single-image → 3DGS) | `sharp/app.py` | `sharp-models` |
+| `demo-hub-trellis` | TRELLIS.2 (single-image → GLB mesh) | `trellis/app.py` | `trellis-models` |
+| `demo-hub-transcriber` | Transcriber (audio → diarized transcript) | `transcriber/app.py` | `transcriber-models` |
 
-Every app exposes the same shape: a `submit` endpoint that spawns the
-GPU job and returns a `call_id`, and a `poll` endpoint dispatch hits
-on a fixed cadence until the call resolves. A sync `@fastapi_endpoint`
-would trip Modal's ~60s gateway cap on a cold start; spawn-poll
-sidesteps that and keeps the dispatch surface uniform across apps.
+Every app exposes the same shape through the gateway: `submit` spawns the GPU
+job and returns a `call_id`, and `poll` is hit on a fixed cadence until the call
+resolves. A sync `@fastapi_endpoint` would trip Modal's ~60s gateway cap on a
+cold start; spawn-poll sidesteps that and keeps the dispatch surface uniform
+across apps. Adding a demo = a new directory here plus one row in
+`gateway/app.py:ROUTES`.
 
 ## Layout
 
@@ -41,11 +44,26 @@ services/modal/
 │   ├── deploy.py
 │   ├── preload.py
 │   └── destroy.py
-└── trellis/
-    ├── app.py
-    ├── deploy.py
-    ├── preload.py
-    └── destroy.py
+├── trellis/
+│   ├── app.py
+│   ├── deploy.py
+│   ├── preload.py
+│   └── destroy.py
+├── transcriber/
+│   ├── app.py
+│   ├── deploy.py
+│   ├── preload.py       # Whisper sizes + pyannote
+│   ├── preload_llm.py   # optional cleanup LLM (~15GB), separate on purpose
+│   └── destroy.py
+├── transcriber_pipeline/ # the CUDA transcription pipeline, shipped into the image
+│   ├── audio.py          # ffmpeg decode + duration probe + wav export
+│   ├── vad.py            # Silero (ONNX bundled in the faster-whisper wheel)
+│   ├── asr.py            # faster-whisper / CTranslate2
+│   ├── llm.py            # optional 4-bit Qwen for cleanup
+│   ├── postprocess.py    # the cleanup pass over a finished transcript
+│   ├── pipeline.py       # orchestration: chunk, filter, diarize, merge
+│   └── export.py         # .txt / .srt / .json
+└── tests/                # pure-logic tests for transcriber_pipeline
 ```
 
 Each per-app script is a 3-line wrapper around a function in
@@ -94,17 +112,13 @@ python sharp/destroy.py
 python trellis/destroy.py
 ```
 
-Each deploy writes both endpoint URLs (submit then poll) to a sibling
-`.endpoint-flux` / `.endpoint-sharp`. Copy into the dispatch worker's
-env:
+Model apps own no endpoints, so there is nothing per-app to copy. Only the
+gateway deploy prints URLs (written to a sibling `.endpoint-gateway`), and that
+single pair is what the dispatch worker needs:
 
 ```
-MODAL_GENERATIVE_SUBMIT_URL=https://<workspace>--demo-hub-flux-submit.modal.run
-MODAL_GENERATIVE_POLL_URL=https://<workspace>--demo-hub-flux-poll.modal.run
-MODAL_SHARP_SUBMIT_URL=https://<workspace>--demo-hub-sharp-submit.modal.run
-MODAL_SHARP_POLL_URL=https://<workspace>--demo-hub-sharp-poll.modal.run
-MODAL_TRELLIS_SUBMIT_URL=https://<workspace>--demo-hub-trellis-submit.modal.run
-MODAL_TRELLIS_POLL_URL=https://<workspace>--demo-hub-trellis-poll.modal.run
+MODAL_GATEWAY_SUBMIT_URL=https://<workspace>--demo-hub-gateway-submit.modal.run
+MODAL_GATEWAY_POLL_URL=https://<workspace>--demo-hub-gateway-poll.modal.run
 ```
 
 ## Secrets and proxy-auth
@@ -271,3 +285,92 @@ green. Nothing else in the stack depends on the exact recipe.
 GPU: 512-res inference targets an A10G (24GB). If a real input OOMs,
 bump the `@app.cls(gpu=...)` tier to `L40S` (48GB) — do not drop the
 render resolution.
+
+## Transcriber — audio → diarized transcript
+
+Serverless GPU backend for the **Transcriber** demo. Takes an uploaded
+recording and returns a transcript split by speaker, as `.json` / `.txt` /
+`.srt` URLs plus summary metadata.
+
+The pipeline lives in `transcriber_pipeline/` and ships into the image as a
+local source package. It is a CUDA port of
+[art-vozniuk/transcriber](https://github.com/art-vozniuk/transcriber) (MIT),
+which stays as it is — MLX-Whisper on a Mac — so neither side constrains the
+other. Stages: Silero VAD → faster-whisper per speech chunk → hallucination
+filter → pyannote speaker turns → word-level speaker assignment → segment merge
+→ optional LLM cleanup. What the port swapped, and why, is in the package
+docstring.
+
+GPU: **L4** (24GB Ada, $0.80/h) — the cheapest tier that fits Whisper large-v3
+(~3GB), pyannote (~1.5GB) and, with cleanup on, a 4-bit 7B (~5.5GB) at once. A
+T4 ($0.59/h, 16GB) also works with cleanup off; it is ~2x slower on large-v3.
+
+### Image build caveat
+
+The base is `nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04`, not Modal's
+`debian_slim`: CTranslate2's wheel is built against CUDA 12.4 + cuDNN 9 and
+dlopens both, but — unlike torch — declares no `nvidia-*` pip dependencies, so
+the libraries have to come from the base image. `ffmpeg` is apt-installed for
+decoding m4a/opus/webm and for reading duration via `ffprobe` without decoding.
+
+### Setup
+
+```bash
+python transcriber/preload.py       # Whisper sizes + pyannote (~5.5GB)
+python transcriber/preload_llm.py   # optional: cleanup LLM (~15GB)
+python transcriber/deploy.py
+
+pytest tests/                       # pure-logic tests, no torch/CUDA/network
+```
+
+**pyannote is gated.** The account owning the `huggingface` secret's `HF_TOKEN`
+must accept the terms for both
+[speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
+and [segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0), or
+`preload.py` fails with a pointer to exactly that.
+
+### Payload contract
+
+```json
+{
+  "audio_bucket": "media",
+  "audio_key": "user/<uuid>.m4a",
+  "model": "large-v3-turbo",
+  "language": "ru",
+  "num_speakers": 3,
+  "llm_cleanup": false
+}
+```
+
+`model`, `language` and `num_speakers` are optional — absent means the app's own
+default (`large-v3-turbo`, auto-detect, auto-detect). `poll` returns:
+
+```json
+{ "status": "done", "result": {
+    "result_url": "https://.../transcriber_results/<uuid>.json",
+    "txt_url": "https://.../transcriber_results/<uuid>.txt",
+    "srt_url": "https://.../transcriber_results/<uuid>.srt",
+    "duration_s": 612.5,
+    "language": "ru",
+    "model": "large-v3-turbo",
+    "speakers": ["SPEAKER_00", "SPEAKER_01"],
+    "segment_count": 87,
+    "llm_cleanup": false,
+    "preview": [{ "start": 0.0, "end": 4.2, "speaker": "SPEAKER_00", "text": "..." }]
+} }
+```
+
+Only URLs and metadata cross the wire: the full transcript never travels
+through RabbitMQ or lands in Postgres. `preview` holds the first 20 segments so
+the page renders before it fetches the JSON.
+
+### Limits
+
+The dispatch worker gives up at 600s and the Modal function times out at the
+same moment by design, so audio is capped at **30 minutes** (warm throughput is
+roughly 8-15x realtime end to end on an L4). LLM cleanup runs one generation
+per segment and dominates the run, so it is capped at **15 minutes** and fails
+fast when `preload_llm.py` has never been run — rather than pulling 15GB inside
+a request that would then blow the deadline. Per-stage timings (vad, transcribe,
+diarize, llm, ...) ride back in the `_obs` block, so Grafana gets the breakdown
+and Sentry gets the waterfall.

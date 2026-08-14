@@ -39,6 +39,10 @@ def test_trellis_routes_to_dispatch_queue():
     assert get_routing_key("trellis") == rabbitmq_config.routing_dispatch
 
 
+def test_transcriber_routes_to_dispatch_queue():
+    assert get_routing_key("transcriber") == rabbitmq_config.routing_dispatch
+
+
 def test_unknown_pipeline_raises():
     with pytest.raises(ValueError):
         get_routing_key("nope")
@@ -53,6 +57,7 @@ def test_known_pipeline_names_contains_all():
     assert "generative_editing_custom" in names
     assert "generative_t2i" in names
     assert "trellis" in names
+    assert "transcriber" in names
 
 
 def test_compute_pool_is_sequential():
@@ -66,6 +71,7 @@ def test_dispatch_pool_is_parallel():
     assert is_parallel_pipeline("generative_editing_custom") is True
     assert is_parallel_pipeline("generative_t2i") is True
     assert is_parallel_pipeline("trellis") is True
+    assert is_parallel_pipeline("transcriber") is True
 
 
 def test_same_pool_names_for_compute():
@@ -79,6 +85,7 @@ def test_same_pool_names_for_dispatch():
         "generative_editing_custom",
         "generative_t2i",
         "trellis",
+        "transcriber",
         "flux_opt_a10g",
         "flux_opt_h100",
     }
@@ -87,6 +94,7 @@ def test_same_pool_names_for_dispatch():
     assert names_in_same_pool("generative_editing_custom") == expected
     assert names_in_same_pool("generative_t2i") == expected
     assert names_in_same_pool("trellis") == expected
+    assert names_in_same_pool("transcriber") == expected
 
 
 def test_flux_opt_routes_to_dispatch_queue():
