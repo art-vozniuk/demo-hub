@@ -93,7 +93,12 @@ PREVIEW_SEGMENTS = 20
 
 
 log = configure_logging("transcriber")
-app, volume = make_app("demo-hub-transcriber", "transcriber-models")
+
+# Named, because the smoke test resolves the deployed classes by app name the
+# same way the gateway's ROUTES do.
+APP_NAME = "demo-hub-transcriber"
+
+app, volume = make_app(APP_NAME, "transcriber-models")
 
 
 # cudnn-runtime, not plain runtime: CTranslate2's wheel is built against CUDA
@@ -280,6 +285,7 @@ def smoke_test(
     source: str = "audio",
     model: str = "medium",
     bucket: str = "media",
+    target: str = "source",
 ) -> dict[str, Any]:
     """End-to-end check of the real classes against a real recording.
 
@@ -289,6 +295,13 @@ def smoke_test(
     speech from the sample. Run it with
     `modal run services/modal/transcriber/app.py::smoke_test`, or through the
     smoke-transcriber workflow.
+
+    `target` picks which copy of those classes runs. "source" uses the ones in
+    this file, so the check covers the branch you are on. "deployed" resolves
+    them by name, exactly as the gateway does, which is the only way to exercise
+    what production does at container start-up: `modal run` builds an ephemeral
+    app, and Modal disables memory snapshots for those — so the snapshot hooks,
+    where a broken diarizer load actually killed production, never execute.
     """
 
     import subprocess
@@ -296,6 +309,14 @@ def smoke_test(
 
     if source not in ("audio", "video"):
         raise ValueError(f"source must be 'audio' or 'video', got {source!r}")
+    if target not in ("source", "deployed"):
+        raise ValueError(f"target must be 'source' or 'deployed', got {target!r}")
+
+    if target == "deployed":
+        extractor_cls = modal.Cls.from_name(APP_NAME, "AudioExtractor")
+        inference_cls = modal.Cls.from_name(APP_NAME, "TranscriberInference")
+    else:
+        extractor_cls, inference_cls = AudioExtractor, TranscriberInference
 
     work = f"/tmp/smoke-{uuid.uuid4().hex}"
     os.makedirs(work, exist_ok=True)
@@ -400,15 +421,17 @@ def smoke_test(
     payload: dict[str, Any] = {"audio_bucket": bucket, "audio_key": key}
     extraction: dict[str, Any] | None = None
     if source == "video":
-        log.info("smoke: running AudioExtractor")
-        extraction = AudioExtractor().generate.remote(dict(payload))
+        log.info(f"smoke: running {target} AudioExtractor")
+        extraction = extractor_cls().generate.remote(dict(payload))
         payload = {
             "audio_bucket": extraction["audio_bucket"],
             "audio_key": extraction["audio_key"],
         }
 
-    log.info(f"smoke: running TranscriberInference on {payload['audio_key']}")
-    result = TranscriberInference().generate.remote({**payload, "model": model})
+    log.info(
+        f"smoke: running {target} TranscriberInference on {payload['audio_key']}"
+    )
+    result = inference_cls().generate.remote({**payload, "model": model})
 
     transcript = " ".join(seg["text"] for seg in result.get("preview", []))
     log.info(f"smoke: transcript -> {transcript}")
@@ -433,6 +456,7 @@ def smoke_test(
     log.info("smoke: OK")
     return {
         "source": source,
+        "target": target,
         "model": model,
         "source_url": url,
         "extraction": extraction,
