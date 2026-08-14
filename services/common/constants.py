@@ -15,6 +15,14 @@ from __future__ import annotations
 # give up together rather than racing each other.
 MODAL_PIPELINE_DEADLINE_SECONDS = 600
 
+# Ceiling for pipelines whose work scales with the size of the input rather
+# than being a fixed forward pass. Transcription is the case that forced it:
+# 90 minutes of audio on an L4 is ~900-1200s on the slowest Whisper size,
+# several times the default. Kept as a separate value, not a raise of the
+# default, so a hung image pipeline still fails in ten minutes instead of
+# thirty. Pipelines opt in individually — see dispatch's modal_client.
+MODAL_LONG_PIPELINE_DEADLINE_SECONDS = 1800
+
 # How often dispatch polls a spawned Modal call. Also the quantization
 # noise floor for the "modal overhead" metric.
 MODAL_POLL_INTERVAL_SECONDS = 2.0
@@ -54,10 +62,11 @@ HTTP_BUCKETS = (
     30.0,
 )
 
-# Whole-pipeline / per-phase inference durations. Top bucket = pipeline
-# deadline: a run can be slow, but it cannot be off the chart.
+# Whole-pipeline / per-phase inference durations. Top bucket = the longest
+# deadline any pipeline can run to: a run can be slow, but it cannot be off
+# the chart. The 600-1800s span is where transcription lives.
 INFERENCE_BUCKETS = _buckets_to(
-    MODAL_PIPELINE_DEADLINE_SECONDS,
+    MODAL_LONG_PIPELINE_DEADLINE_SECONDS,
     (
         0.1,
         0.25,
@@ -74,6 +83,9 @@ INFERENCE_BUCKETS = _buckets_to(
         120.0,
         240.0,
         480.0,
+        600.0,
+        900.0,
+        1200.0,
     ),
 )
 
@@ -103,8 +115,25 @@ QUEUE_WAIT_BUCKETS = _buckets_to(
 # User-perceived end-to-end (queue POST → terminal status in DB). Can
 # exceed one pipeline deadline when jobs queue behind each other.
 E2E_BUCKETS = _buckets_to(
-    2 * MODAL_PIPELINE_DEADLINE_SECONDS,
-    (0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 240.0, 480.0, 600.0, 900.0),
+    2 * MODAL_LONG_PIPELINE_DEADLINE_SECONDS,
+    (
+        0.5,
+        1.0,
+        2.0,
+        5.0,
+        10.0,
+        20.0,
+        30.0,
+        60.0,
+        120.0,
+        240.0,
+        480.0,
+        600.0,
+        900.0,
+        1200.0,
+        1800.0,
+        2400.0,
+    ),
 )
 
 # Postgres query durations (core). Dense through 2-100ms (where healthy
@@ -148,3 +177,40 @@ GPU_HOURLY_USD: dict[str, float] = {
     "L4": 0.80,
     "T4": 0.59,
 }
+
+
+# --- Media handling -------------------------------------------------------
+
+# Containers that may carry a video stream, so an upload with one of these
+# extensions goes through the audio-extraction step before transcription
+# instead of being handed to a GPU whole. Extension-based on purpose: it is
+# the one signal available from an S3 key alone, and a wrong guess is cheap
+# either way — the transcription pipeline's own decode reads video containers
+# fine, and extracting a file that turned out to be audio-only still yields
+# correct audio. `webm` is in the list because it is far more often video.
+VIDEO_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        "mov",
+        "mp4",
+        "m4v",
+        "mkv",
+        "avi",
+        "webm",
+        "wmv",
+        "flv",
+        "mpg",
+        "mpeg",
+        "mts",
+        "m2ts",
+        "ts",
+        "3gp",
+        "ogv",
+    }
+)
+
+
+def has_video_extension(key: str) -> bool:
+    """True when an S3 key (or filename) ends in a known video container."""
+
+    _, _, tail = key.rpartition(".")
+    return tail.lower() in VIDEO_EXTENSIONS if tail else False

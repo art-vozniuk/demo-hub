@@ -68,6 +68,9 @@ export interface TranscriberResult {
   llm_cleanup?: boolean;
   // First segments, inlined so the page renders before result_url is fetched.
   preview: TranscriptSegment[];
+  // Video only: the audio track pulled out of the upload, so a result page can
+  // play what was transcribed without re-downloading the video.
+  extracted_audio_url?: string | null;
 }
 
 export type PipelineResult =

@@ -102,3 +102,63 @@ def test_cleanup_prompt_omits_empty_sections():
 
     assert "Glossary" not in prompt
     assert "Previous context" not in prompt
+
+
+# ------------------------------ media probing ------------------------------ #
+#
+# The ffmpeg/ffprobe calls themselves need real files, but parsing ffprobe's
+# key=value output is where a silent wrong answer would come from: a missing
+# audio stream read as "present" means a failed extraction instead of a clear
+# message.
+
+
+def _parse(monkeypatch, stdout: str) -> dict:
+    from transcriber_pipeline import media
+
+    class FakeProc:
+        def __init__(self, out: bytes) -> None:
+            self.stdout = out
+
+    monkeypatch.setattr(media, "_run", lambda cmd, what: FakeProc(stdout.encode()))
+    return media.probe_media("whatever.mov")
+
+
+def test_probe_reads_duration_and_both_stream_kinds(monkeypatch):
+    facts = _parse(
+        monkeypatch, "codec_type=video\ncodec_type=audio\nduration=612.500000\n"
+    )
+
+    assert facts["duration_s"] == 612.5
+    assert facts["has_audio"] is True
+    assert facts["has_video"] is True
+
+
+def test_probe_reports_a_silent_video(monkeypatch):
+    facts = _parse(monkeypatch, "codec_type=video\nduration=30.0\n")
+
+    assert facts["has_video"] is True
+    assert facts["has_audio"] is False
+
+
+def test_probe_reports_an_audio_only_file(monkeypatch):
+    facts = _parse(monkeypatch, "codec_type=audio\nduration=30.0\n")
+
+    assert facts["has_audio"] is True
+    assert facts["has_video"] is False
+
+
+def test_probe_survives_a_missing_duration(monkeypatch):
+    # A stream copy or a live capture can carry no container duration.
+    facts = _parse(monkeypatch, "codec_type=audio\nduration=N/A\n")
+
+    assert facts["duration_s"] is None
+    assert facts["has_audio"] is True
+
+
+def test_probe_handles_several_audio_streams(monkeypatch):
+    facts = _parse(
+        monkeypatch,
+        "codec_type=video\ncodec_type=audio\ncodec_type=audio\nduration=10.0\n",
+    )
+
+    assert facts["streams"].count("audio") == 2

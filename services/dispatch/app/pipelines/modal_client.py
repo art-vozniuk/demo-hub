@@ -201,8 +201,15 @@ async def _submit_and_poll(
     submit_url_label: str,
     poll_url_label: str,
     payload: dict[str, Any],
+    deadline_seconds: int | None = None,
 ) -> dict[str, Any]:
-    """POST to /submit, then /poll on a fixed cadence until done."""
+    """POST to /submit, then /poll on a fixed cadence until done.
+
+    `deadline_seconds` defaults to the standard pipeline deadline; pipelines
+    whose runtime scales with input size pass the longer one. It must match the
+    timeout the target Modal function declares, or one side gives up first and
+    the other keeps burning a container.
+    """
 
     with span("modal.submit", label):
         submit_resp = await _post_to_modal(submit_url_label, submit_url, payload)
@@ -217,15 +224,18 @@ async def _submit_and_poll(
             f"Modal {label} submit returned no call_id; body={submit_resp}"
         )
 
-    log.info(f"[{request_id}] {label} submit ok; polling call_id={call_id}")
-    deadline = time.monotonic() + config.MODAL_PIPELINE_DEADLINE_SECONDS
+    budget = deadline_seconds or config.MODAL_PIPELINE_DEADLINE_SECONDS
+    log.info(
+        f"[{request_id}] {label} submit ok; polling call_id={call_id} "
+        f"(deadline {budget}s)"
+    )
+    deadline = time.monotonic() + budget
     poll_count = 0
     with span("modal.poll", label) as poll_span:
         while True:
             if time.monotonic() > deadline:
                 raise ModalInferenceError(
-                    f"Modal {label} poll timed out after "
-                    f"{config.MODAL_PIPELINE_DEADLINE_SECONDS}s; call_id={call_id}"
+                    f"Modal {label} poll timed out after {budget}s; call_id={call_id}"
                 )
 
             poll_resp = await _post_to_modal(
@@ -307,7 +317,11 @@ def _record_inference_obs(
 
 # Every pipeline goes through the shared Modal web gateway; the target app +
 # class is chosen server-side by payload["model"] (see gateway ROUTES).
-async def _invoke_gateway(model: str, payload: dict[str, Any]) -> dict[str, Any]:
+async def _invoke_gateway(
+    model: str,
+    payload: dict[str, Any],
+    deadline_seconds: int | None = None,
+) -> dict[str, Any]:
     from services.common.logging.config import context_pipeline_id
 
     # Sentry headers let the container resume the pipeline's trace;
@@ -325,6 +339,7 @@ async def _invoke_gateway(model: str, payload: dict[str, Any]) -> dict[str, Any]
         submit_url_label="MODAL_GATEWAY_SUBMIT_URL",
         poll_url_label="MODAL_GATEWAY_POLL_URL",
         payload=enriched,
+        deadline_seconds=deadline_seconds,
     )
     try:
         _record_inference_obs(model, result, time.monotonic() - t0)
@@ -349,8 +364,23 @@ async def invoke_trellis(payload: dict[str, Any]) -> dict[str, Any]:
     return await _invoke_gateway("trellis", payload)
 
 
+# Both transcriber steps run to the long deadline: transcription because its
+# runtime scales with audio length, extraction because demuxing a multi-GB
+# video is bounded by download + disk, not by a model.
 async def invoke_transcriber(payload: dict[str, Any]) -> dict[str, Any]:
-    return await _invoke_gateway("transcriber", payload)
+    return await _invoke_gateway(
+        "transcriber",
+        payload,
+        deadline_seconds=config.MODAL_LONG_PIPELINE_DEADLINE_SECONDS,
+    )
+
+
+async def invoke_transcriber_extract(payload: dict[str, Any]) -> dict[str, Any]:
+    return await _invoke_gateway(
+        "transcriber_extract",
+        payload,
+        deadline_seconds=config.MODAL_LONG_PIPELINE_DEADLINE_SECONDS,
+    )
 
 
 async def invoke_generative_t2i(payload: dict[str, Any]) -> dict[str, Any]:

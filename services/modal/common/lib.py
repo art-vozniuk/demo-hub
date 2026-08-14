@@ -85,6 +85,35 @@ def download_from_s3(bucket: str, key: str) -> bytes:
     return resp["Body"].read()
 
 
+def download_from_s3_to_file(bucket: str, key: str, path: str) -> int:
+    """Stream an object to disk and return its size.
+
+    For inputs that can be large — a 90-minute video is gigabytes — where
+    download_from_s3's read-it-all would need that much container memory.
+    """
+
+    _s3_client().download_file(Bucket=bucket, Key=key, Filename=path)
+    return os.path.getsize(path)
+
+
+def upload_to_s3_with_key(
+    data_bytes: bytes,
+    bucket: str,
+    folder: str,
+    extension: str,
+) -> tuple[str, str]:
+    """Upload and return (key, public_url).
+
+    The key matters when the object is an intermediate another step has to read
+    back — recovering it by string-surgery on the URL would break the moment
+    the bucket name also appears in the endpoint.
+    """
+
+    key = f"{folder}/{uuid4().hex}.{extension}"
+    _s3_client().put_object(Bucket=bucket, Key=key, Body=data_bytes)
+    return key, f"{os.environ['S3_PUBLIC_BUCKETS_ENDPOINT']}/{bucket}/{key}"
+
+
 def upload_to_s3(
     data_bytes: bytes,
     bucket: str,
@@ -97,9 +126,8 @@ def upload_to_s3(
     returned URL is the same shape dispatch would have produced.
     """
 
-    key = f"{folder}/{uuid4().hex}.{extension}"
-    _s3_client().put_object(Bucket=bucket, Key=key, Body=data_bytes)
-    return f"{os.environ['S3_PUBLIC_BUCKETS_ENDPOINT']}/{bucket}/{key}"
+    _, url = upload_to_s3_with_key(data_bytes, bucket, folder, extension)
+    return url
 
 
 def bake_exif_orientation(image_bytes: bytes) -> bytes:

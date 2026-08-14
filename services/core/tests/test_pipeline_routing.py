@@ -105,3 +105,16 @@ def test_flux_opt_routes_to_dispatch_queue():
 def test_flux_opt_is_parallel():
     assert is_parallel_pipeline("flux_opt_a10g") is True
     assert is_parallel_pipeline("flux_opt_h100") is True
+
+
+def test_video_extension_detection():
+    from services.common.constants import has_video_extension
+
+    # Drives whether an upload gets demuxed before it reaches a GPU.
+    assert has_video_extension("user/clip.mov") is True
+    assert has_video_extension("user/clip.MOV") is True
+    assert has_video_extension("user/clip.mp4") is True
+    assert has_video_extension("user/talk.mp3") is False
+    assert has_video_extension("user/talk.m4a") is False
+    assert has_video_extension("user/noextension") is False
+    assert has_video_extension("") is False

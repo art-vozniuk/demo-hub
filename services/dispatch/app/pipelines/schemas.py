@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -39,11 +41,15 @@ class TrellisPipelineInput(PipelineInput):
 
 
 class TranscriberPipelineInput(PipelineInput):
-    """User-supplied audio plus the knobs the transcript demo exposes.
+    """User-supplied audio or video plus the knobs the transcript demo exposes.
 
     Every knob is optional: None means "let the Modal app apply its own
     default", so the allowed model/language sets live in one place
     (services/modal/transcriber/app.py) instead of being mirrored here.
+
+    `source_kind` is the client telling us which it uploaded, so video can be
+    demuxed to audio before it reaches a GPU. It's a hint, not a contract —
+    absent, the key's extension decides.
     """
 
     audio_bucket: str
@@ -52,6 +58,7 @@ class TranscriberPipelineInput(PipelineInput):
     language: str | None = None
     num_speakers: int | None = None
     llm_cleanup: bool = False
+    source_kind: Literal["audio", "video"] | None = None
 
 
 class GenerativeEditingCustomPipelineInput(PipelineInput):

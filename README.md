@@ -36,8 +36,10 @@ an async dispatch worker draining a dedicated RabbitMQ queue.
 
 ### Transcriber
 
-Upload a recording and get it back as a transcript split by speaker — who
-said what, and when. Silero VAD trims the silence, Whisper transcribes
+Upload a recording — audio or video, up to 90 minutes — and get it back as
+a transcript split by speaker: who said what, and when. Video is demuxed to
+its audio track on a CPU container first, so the GPU never downloads the
+frames. Silero VAD trims the silence, Whisper transcribes
 each speech chunk with word-level timestamps, and
 [pyannote](https://github.com/pyannote/pyannote-audio) assigns a speaker
 to every word. The transcription pipeline is a CUDA port of
