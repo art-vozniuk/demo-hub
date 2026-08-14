@@ -93,7 +93,7 @@ async def test_unset_knobs_are_omitted_so_modal_defaults_apply(
 ):
     await build(mock_s3_client).run()
 
-    assert "model" not in captured_payload
+    assert "whisper_model" not in captured_payload
     assert "language" not in captured_payload
     assert "num_speakers" not in captured_payload
 
@@ -115,10 +115,27 @@ async def test_set_knobs_are_forwarded(mock_s3_client, captured_payload):
         llm_cleanup=True,
     ).run()
 
-    assert captured_payload["model"] == "large-v3"
+    assert captured_payload["whisper_model"] == "large-v3"
     assert captured_payload["language"] == "en"
     assert captured_payload["num_speakers"] == 4
     assert captured_payload["llm_cleanup"] is True
+
+
+async def test_whisper_size_survives_the_gateway_route_key(
+    mock_s3_client, captured_payload
+):
+    """The size must not travel as `model`.
+
+    `_invoke_gateway` builds `{**payload, "model": <route key>}`, so a Whisper
+    size left under `model` is replaced by "transcriber" before the container
+    reads it — which is exactly how production came to raise
+    `unsupported model 'transcriber'` on every request.
+    """
+
+    await build(mock_s3_client, model="medium").run()
+
+    enriched = {**captured_payload, "model": "transcriber"}
+    assert enriched["whisper_model"] == "medium"
 
 
 async def test_result_forwards_urls_and_metadata(mock_s3_client, captured_payload):
