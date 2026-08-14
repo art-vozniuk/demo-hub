@@ -55,6 +55,10 @@ SCALEDOWN_WINDOW_S = 10
 # resolve through huggingface_hub, so one env var puts every weight there.
 HF_CACHE_DIR = f"{MODEL_DIR}/hf_cache"
 
+# Xet's chunk cache and logs, on the container's own disk rather than the
+# volume — see the HF_XET_CACHE note on the image below.
+XET_CACHE_DIR = "/tmp/hf-xet"
+
 # Whisper sizes the UI can ask for. Restricted so a payload can't make the
 # container download an arbitrary repo.
 ALLOWED_MODELS = ("large-v3", "large-v3-turbo", "medium")
@@ -146,6 +150,16 @@ transcriber_image = (
         {
             "HF_HUB_ENABLE_HF_TRANSFER": "1",
             "HF_HOME": HF_CACHE_DIR,
+            # Off the volume, deliberately. huggingface_hub defaults this to
+            # $HF_HOME/xet, where hf_xet keeps a chunk cache *and* a rotating
+            # log file. Snapshot restore walks the volume's 9p filesystem and
+            # trips over a log that has since been rotated away:
+            #   failed to walk ".../hf_cache/xet/logs/xet_….log": no such file
+            #   or directory  →  Runner failed with exit code: 128
+            # Modal retries, the next container dies the same way, and a cold
+            # start burns minutes on it. Weights belong on the volume; churn
+            # does not.
+            "HF_XET_CACHE": XET_CACHE_DIR,
             "TOKENIZERS_PARALLELISM": "false",
         }
     )
