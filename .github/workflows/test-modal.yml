@@ -16,10 +16,13 @@ jobs:
       - name: checkout repository
         uses: actions/checkout@v4
 
+      # Matches services/modal/.python-version and the package's own
+      # requires-python; the container runs 3.11, but these tests are pure
+      # stdlib + numpy logic, so the interpreter is not what they exercise.
       - name: set up python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: install uv
         run: pip install uv
