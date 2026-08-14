@@ -26,9 +26,11 @@ from .schemas import (
     GenerativeT2IPipelineInput,
     PipelineInput,
     SharpPipelineInput,
+    TranscriberPipelineInput,
     TrellisPipelineInput,
 )
 from .sharp import SharpPipeline
+from .transcriber import TranscriberPipeline
 from .trellis import TrellisPipeline
 
 log = logging.getLogger(__name__)
@@ -86,6 +88,16 @@ class TrellisService(Service):
         if not isinstance(self.pipeline_input, TrellisPipelineInput):
             raise ValueError("Invalid pipeline input for TrellisService")
         return TrellisPipeline(
+            s3=self.s3,
+            pipeline_input=self.pipeline_input,
+        )
+
+
+class TranscriberService(Service):
+    async def prepare_pipeline(self) -> AsyncPipeline:
+        if not isinstance(self.pipeline_input, TranscriberPipelineInput):
+            raise ValueError("Invalid pipeline input for TranscriberService")
+        return TranscriberPipeline(
             s3=self.s3,
             pipeline_input=self.pipeline_input,
         )
@@ -168,6 +180,13 @@ pipeline_templates: dict[str, PipelineType] = {
         service_type=TrellisService,
         input_type=TrellisPipelineInput,
         estimated_time_ms=180_000,
+    ),
+    "transcriber": PipelineType(
+        service_type=TranscriberService,
+        input_type=TranscriberPipelineInput,
+        # Whole-job wall time scales with audio length, so any fixed number is
+        # a guess; the worker's heartbeat replaces it with the last real run.
+        estimated_time_ms=60_000,
     ),
     "generative_t2i": PipelineType(
         service_type=GenerativeT2IService,

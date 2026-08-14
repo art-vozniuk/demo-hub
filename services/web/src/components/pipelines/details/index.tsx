@@ -4,6 +4,7 @@ import FaceSwapDetails from "./FaceSwapDetails";
 import FaceRecognitionDetails from "./FaceRecognitionDetails";
 import GenerativeT2iDetails from "./GenerativeT2iDetails";
 import SharpDetails from "./SharpDetails";
+import TranscriberDetails from "./TranscriberDetails";
 import TrellisDetails from "./TrellisDetails";
 import UnknownPipelineDetails from "./UnknownPipelineDetails";
 
@@ -26,6 +27,8 @@ const PipelineDetails = ({ pipeline }: Props) => {
       return <SharpDetails pipeline={pipeline} />;
     case "trellis":
       return <TrellisDetails pipeline={pipeline} />;
+    case "transcriber":
+      return <TranscriberDetails pipeline={pipeline} />;
     case "generative_t2i":
       return <GenerativeT2iDetails pipeline={pipeline} />;
     default:
@@ -42,6 +45,7 @@ export const PIPELINE_DISPLAY_NAME: Record<string, string> = {
   face_recognition: "Face Recognition",
   sharp: "SHARP",
   trellis: "TRELLIS",
+  transcriber: "Transcriber",
   generative_t2i: "Generative T2I",
 };
 

@@ -140,3 +140,75 @@ def test_apply_rules_stack_with_zero_collapses_all():
         ("input_field", {"input_field": "high", "values": {"yes": 200}}),
     ]
     assert apply_rules(10, rules, {"free": "yes", "high": "yes"}) == 0
+
+
+# ------------------- shipped transcriber pricing ------------------- #
+#
+# Loads the params straight out of migration 021 so the test breaks if the
+# shipped JSON drifts from the intent, not just if a copy in this file does.
+
+
+def _transcriber_rules() -> tuple[int, list[tuple[str, dict]]]:
+    import importlib.util
+    import json
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "migrations"
+        / "versions"
+        / "2026-08-14_021_seed_transcriber_pipeline_type.py"
+    )
+    spec = importlib.util.spec_from_file_location("migration_021", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return (
+        module.TRANSCRIBER_BASE_COST,
+        [
+            ("input_field", json.loads(module.MODEL_PARAMS)),
+            ("input_field", json.loads(module.LLM_PARAMS)),
+        ],
+    )
+
+
+def test_transcriber_default_input_costs_the_base():
+    base, rules = _transcriber_rules()
+
+    # No model, no cleanup → both rules inactive.
+    assert apply_rules(base, rules, {}) == base
+
+
+def test_transcriber_model_scales_the_cost():
+    base, rules = _transcriber_rules()
+
+    assert apply_rules(base, rules, {"model": "medium"}) == base * 75 // 100
+    assert apply_rules(base, rules, {"model": "large-v3-turbo"}) == base
+    assert apply_rules(base, rules, {"model": "large-v3"}) == base * 150 // 100
+
+
+def test_transcriber_llm_cleanup_is_billed_for_a_python_bool():
+    # str(True) == "True": what actually reaches the handler once FastAPI has
+    # parsed JSON `true`. The obvious "true" key alone would silently no-op.
+    base, rules = _transcriber_rules()
+
+    assert apply_rules(base, rules, {"llm_cleanup": True}) == base * 250 // 100
+
+
+def test_transcriber_llm_cleanup_is_billed_for_a_string_flag():
+    base, rules = _transcriber_rules()
+
+    assert apply_rules(base, rules, {"llm_cleanup": "true"}) == base * 250 // 100
+
+
+def test_transcriber_cleanup_off_is_never_upcharged():
+    base, rules = _transcriber_rules()
+
+    assert apply_rules(base, rules, {"llm_cleanup": False}) == base
+
+
+def test_transcriber_model_and_cleanup_compose():
+    base, rules = _transcriber_rules()
+
+    assert apply_rules(base, rules, {"model": "large-v3", "llm_cleanup": True}) == (
+        base * 150 // 100 * 250 // 100
+    )

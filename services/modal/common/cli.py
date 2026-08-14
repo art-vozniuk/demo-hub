@@ -93,10 +93,15 @@ def deploy_submit_poll(
     print(f"  {poll_env}={poll_url}")
 
 
-def preload(app_path: str) -> None:
-    """Run the app's preload_weights function once (idempotent)."""
+def preload(app_path: str, function: str = "preload_weights") -> None:
+    """Run one of the app's preload functions once (idempotent).
 
-    _run_streaming(["modal", "run", f"{app_path}::preload_weights"])
+    `function` exists for apps that split their downloads — e.g. transcriber
+    keeps its optional multi-GB cleanup LLM in a second entry point so the
+    default volume stays small.
+    """
+
+    _run_streaming(["modal", "run", f"{app_path}::{function}"])
     print("Volume populated successfully.")
 
 

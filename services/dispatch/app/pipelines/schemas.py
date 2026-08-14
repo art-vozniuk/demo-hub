@@ -38,6 +38,22 @@ class TrellisPipelineInput(PipelineInput):
     steps: int | None = None
 
 
+class TranscriberPipelineInput(PipelineInput):
+    """User-supplied audio plus the knobs the transcript demo exposes.
+
+    Every knob is optional: None means "let the Modal app apply its own
+    default", so the allowed model/language sets live in one place
+    (services/modal/transcriber/app.py) instead of being mirrored here.
+    """
+
+    audio_bucket: str
+    audio_key: str
+    model: str | None = None
+    language: str | None = None
+    num_speakers: int | None = None
+    llm_cleanup: bool = False
+
+
 class GenerativeEditingCustomPipelineInput(PipelineInput):
     """User-supplied photo + free-form prompt. Same Modal app as
     generative_editing, but bypasses preset resolution — the user types

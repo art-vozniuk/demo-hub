@@ -1,0 +1,37 @@
+name: test modal
+
+on:
+  pull_request:
+    paths:
+      - 'services/modal/**'
+      - '.github/workflows/test-modal.yml'
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+
+      # Matches services/modal/.python-version and the package's own
+      # requires-python; the container runs 3.11, but these tests are pure
+      # stdlib + numpy logic, so the interpreter is not what they exercise.
+      - name: set up python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: install uv
+        run: pip install uv
+
+      # An ephemeral env with just the two dependencies the tests need. This
+      # directory is a collection of Modal entry points, not an installable
+      # distribution, so --no-project keeps uv from trying to build it — and
+      # nothing here pulls torch, CUDA or a model.
+      - name: run tests
+        run: |
+          cd services/modal
+          uv run --no-project --with pytest --with numpy pytest tests/ -v --tb=short

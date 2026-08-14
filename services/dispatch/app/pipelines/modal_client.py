@@ -349,6 +349,10 @@ async def invoke_trellis(payload: dict[str, Any]) -> dict[str, Any]:
     return await _invoke_gateway("trellis", payload)
 
 
+async def invoke_transcriber(payload: dict[str, Any]) -> dict[str, Any]:
+    return await _invoke_gateway("transcriber", payload)
+
+
 async def invoke_generative_t2i(payload: dict[str, Any]) -> dict[str, Any]:
     return await _invoke_gateway("generative_t2i", payload)
 

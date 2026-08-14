@@ -48,12 +48,35 @@ export interface TrellisResult {
   result_url: string;
 }
 
+export interface TranscriptSegment {
+  start: number;
+  end: number;
+  speaker: string;
+  text: string;
+}
+
+export interface TranscriberResult {
+  // Canonical artifact: the full transcript as JSON ({ meta, segments }).
+  result_url: string;
+  txt_url?: string | null;
+  srt_url?: string | null;
+  duration_s?: number | null;
+  language?: string | null;
+  model?: string | null;
+  speakers: string[];
+  segment_count: number;
+  llm_cleanup?: boolean;
+  // First segments, inlined so the page renders before result_url is fetched.
+  preview: TranscriptSegment[];
+}
+
 export type PipelineResult =
   | FaceRecognitionResult
   | FaceSwapResult
   | FluxResult
   | SharpResult
   | TrellisResult
+  | TranscriberResult
   | Record<string, any>;
 
 export interface PipelineStatusItem {

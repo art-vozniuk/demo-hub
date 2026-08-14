@@ -34,6 +34,7 @@ ROUTES: dict[str, tuple[str, str]] = {
     "sharp": ("demo-hub-sharp", "SharpInference"),
     "trellis": ("demo-hub-trellis", "TrellisInference"),
     "generative_t2i": ("demo-hub-flux-t2i", "FluxT2IInference"),
+    "transcriber": ("demo-hub-transcriber", "TranscriberInference"),
 }
 
 

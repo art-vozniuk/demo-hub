@@ -12,6 +12,7 @@ export const PIPELINE_TRY_HREF: Record<string, string> = {
   generative_editing_custom: "/flux/custom",
   sharp: "/sharp",
   trellis: "/trellis",
+  transcriber: "/transcriber",
 };
 
 export const getTryItHref = (pipelineName: string): string =>

@@ -34,6 +34,17 @@ an async dispatch worker draining a dedicated RabbitMQ queue.
 
 <img width="1040" height="708" alt="image" src="https://github.com/user-attachments/assets/32ca50d4-a517-44e9-a89e-b05f90456e7e" />
 
+### Transcriber
+
+Upload a recording and get it back as a transcript split by speaker — who
+said what, and when. Silero VAD trims the silence, Whisper transcribes
+each speech chunk with word-level timestamps, and
+[pyannote](https://github.com/pyannote/pyannote-audio) assigns a speaker
+to every word. The transcription pipeline is a CUDA port of
+[transcriber](https://github.com/art-vozniuk/transcriber) (an Apple-Silicon
+tool that stays as it is); the platform side is the same async dispatch
+worker the other Modal demos use.
+
 ### Face Swap
 
 Upload a portrait and apply it to various style templates using a GAN-based image generation pipeline.
@@ -46,7 +57,7 @@ Upload a portrait and apply it to various style templates using a GAN-based imag
 
 **Backend** — FastAPI, PostgreSQL, RabbitMQ, Redis, Nginx
 
-**ML/AI** — PyTorch, ONNX Runtime, custom GAN pipeline, FLUX.2 klein on Modal
+**ML/AI** — PyTorch, ONNX Runtime, custom GAN pipeline, FLUX.2 klein on Modal, faster-whisper + pyannote on Modal
 
 **Renderer** — C++, WebGPU, WGSL, Dawn / emdawnwebgpu, Emscripten, WebAssembly
 
@@ -59,7 +70,8 @@ Upload a portrait and apply it to various style templates using a GAN-based imag
 - **Core** — API gateway: auth, rate limiting, pipeline routing, ETA
 - **Compute** — local ML inference workers (face_swap) consuming `pipelines.queue`
 - **Dispatch** — async orchestration workers (generative_editing) consuming `pipelines.dispatch`, calling Modal
-- **Modal** — serverless GPU running FLUX.2 klein, fronted by an HTTP endpoint
+- **Modal** — serverless GPU apps (FLUX.2 klein, SHARP, TRELLIS.2, transcriber),
+  all fronted by one HTTP gateway that routes on `payload["model"]`
 - **Web** — React SPA
 - **Renderer** — Emscripten WASM build served via Supabase Storage + GitHub Releases
 
@@ -80,7 +92,7 @@ demo-hub/
 │   ├── core/            # API gateway + pipeline routing + ETA
 │   ├── compute/         # Local ML workers (face_swap, face_recognition)
 │   ├── dispatch/        # Async workers — call Modal for generative_editing
-│   ├── modal/           # Modal app: FLUX.2 klein on GPU
+│   ├── modal/           # Modal apps: FLUX.2 klein, SHARP, TRELLIS.2, transcriber
 │   ├── web/             # React frontend
 │   └── external/        # renderer + face_swap submodules
 ├── nginx/               # Reverse proxy config
@@ -96,20 +108,24 @@ bash scripts/setup-local-env.sh             # one-time env scaffolding
 docker compose -f docker-compose.local.yml up --build
 ```
 
-For the Flux demo additionally:
+For the Modal-backed demos additionally:
 
 ```bash
 cd services/modal
-./setup.sh                 # Modal CLI + secrets
-python flux/preload.py     # populate flux-models volume (one-shot)
-python flux/deploy.py      # deploy inference endpoint, prints URLs
+./setup.sh                    # Modal CLI + secrets
+python flux/preload.py        # populate a model volume (one-shot, per app)
+python flux/deploy.py         # deploy the model app (no web endpoints)
+python gateway/deploy.py      # deploy the gateway, prints submit/poll URLs
 ```
 
-Then drop the printed endpoint URLs into `services/dispatch/.env.docker`:
+Dispatch reaches every model app through the one gateway, so only its URL pair
+goes into `services/dispatch/.env.docker`:
 
 ```
-MODAL_GENERATIVE_SUBMIT_URL=https://...modal.run
-MODAL_GENERATIVE_POLL_URL=https://...modal.run
+MODAL_GATEWAY_SUBMIT_URL=https://...modal.run
+MODAL_GATEWAY_POLL_URL=https://...modal.run
 MODAL_PROXY_AUTH_TOKEN_ID=...
 MODAL_PROXY_AUTH_TOKEN_SECRET=...
 ```
+
+Full runbook, including which app needs which preload: [docs/DEPLOY.md](docs/DEPLOY.md).
