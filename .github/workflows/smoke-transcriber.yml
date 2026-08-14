@@ -20,6 +20,11 @@ on:
         type: choice
         options: [medium, large-v3-turbo, large-v3]
         default: medium
+      target:
+        description: 'source (this branch) or deployed (the live app, snapshots and all)'
+        type: choice
+        options: [source, deployed]
+        default: source
       preload:
         description: 'Fill the model volume first (needed once per environment)'
         type: boolean
@@ -32,6 +37,9 @@ on:
       model:
         type: string
         default: medium
+      target:
+        type: string
+        default: source
       preload:
         type: boolean
         default: false
@@ -67,4 +75,5 @@ jobs:
         run: |
           modal run transcriber/app.py::smoke_test \
             --source '${{ inputs.source }}' \
-            --model '${{ inputs.model }}'
+            --model '${{ inputs.model }}' \
+            --target '${{ inputs.target }}'
