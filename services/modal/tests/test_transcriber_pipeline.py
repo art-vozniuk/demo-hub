@@ -428,3 +428,69 @@ def test_auth_kwarg_passes_nothing_without_a_token():
         pass
 
     assert auth_kwargs(modern, None) == {}
+
+
+# ------------------------- checkpoint unpickling ---------------------------- #
+#
+# torch 2.6 defaults `weights_only` to True, which pyannote 3.x's checkpoints
+# fail. torch isn't installed here, so drive the context manager against a stub
+# that records what it was handed.
+
+
+@pytest.fixture
+def stub_torch(monkeypatch):
+    """Stand in for the `torch` module `trusted_torch_load` imports."""
+
+    import sys
+    import types
+
+    calls: list[dict] = []
+    module = types.ModuleType("torch")
+
+    def load(path, **kwargs):
+        calls.append(kwargs)
+        return "checkpoint"
+
+    module.load = load
+    module.original_load = load
+    monkeypatch.setitem(sys.modules, "torch", module)
+    return module, calls
+
+
+def test_load_defaults_to_the_permissive_unpickler_inside_the_block(stub_torch):
+    from transcriber_pipeline.pipeline import trusted_torch_load
+
+    module, calls = stub_torch
+    with trusted_torch_load():
+        assert module.load("ckpt", map_location="cpu") == "checkpoint"
+    assert calls == [{"map_location": "cpu", "weights_only": False}]
+
+
+def test_load_leaves_an_explicit_weights_only_alone(stub_torch):
+    from transcriber_pipeline.pipeline import trusted_torch_load
+
+    module, calls = stub_torch
+    with trusted_torch_load():
+        module.load("ckpt", weights_only=True)
+    assert calls == [{"weights_only": True}]
+
+
+def test_load_is_restored_when_the_block_ends(stub_torch):
+    from transcriber_pipeline.pipeline import trusted_torch_load
+
+    module, calls = stub_torch
+    with trusted_torch_load():
+        pass
+    module.load("ckpt")
+    assert module.load is module.original_load
+    assert calls == [{}]
+
+
+def test_load_is_restored_when_the_block_raises(stub_torch):
+    from transcriber_pipeline.pipeline import trusted_torch_load
+
+    module, _ = stub_torch
+    with pytest.raises(RuntimeError):
+        with trusted_torch_load():
+            raise RuntimeError("checkpoint is corrupt")
+    assert module.load is module.original_load

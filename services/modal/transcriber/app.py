@@ -114,6 +114,19 @@ transcriber_image = (
     .pip_install(
         "faster-whisper==1.2.1",
         "pyannote.audio==3.3.2",
+        # pyannote.audio 3.3.2 only floors its own ecosystem (`pyannote.core
+        # >=5`, `pyannote.metrics >=3.2`, ...), so an unbounded install picks up
+        # the 4.x/6.x majors released after it — which is how the diarizer ended
+        # up being handed a `token=` kwarg it never accepted. Cap each at the
+        # major it was released against.
+        "pyannote.core<6",
+        "pyannote.database<6",
+        "pyannote.metrics<4",
+        "pyannote.pipeline<4",
+        # Imported at module scope by pyannote.audio's *training* code, which
+        # `pyannote.audio.pipelines` pulls in transitively — undeclared, and
+        # pyannote.metrics 4.x stopped bringing it in as a side effect.
+        "matplotlib>=3.7",
         # Cleanup LLM (optional at run time, always installed: it is small
         # compared with torch and keeps one image for both paths).
         "transformers==4.46.3",
