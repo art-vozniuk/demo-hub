@@ -376,3 +376,55 @@ def test_duration_is_derived_from_the_sample_count():
     from transcriber_pipeline.audio import SAMPLE_RATE, duration_seconds
 
     assert duration_seconds(np.zeros(SAMPLE_RATE * 3, dtype=np.float32)) == 3.0
+
+
+# --------------------- pyannote auth-argument selection --------------------- #
+#
+# 3.x takes `use_auth_token`, 4.x takes `token`. Passing the wrong one is a
+# TypeError at container start-up, which is how it was found the first time.
+
+
+def test_auth_kwarg_uses_the_modern_name_when_offered():
+    from transcriber_pipeline.pipeline import auth_kwargs
+
+    def modern(checkpoint, token=None, cache_dir=None):
+        pass
+
+    assert auth_kwargs(modern, "hf_x") == {"token": "hf_x"}
+
+
+def test_auth_kwarg_uses_the_legacy_name_when_that_is_what_exists():
+    from transcriber_pipeline.pipeline import auth_kwargs
+
+    def legacy(checkpoint_path, hparams_file=None, use_auth_token=None):
+        pass
+
+    assert auth_kwargs(legacy, "hf_x") == {"use_auth_token": "hf_x"}
+
+
+def test_auth_kwarg_prefers_token_when_a_version_offers_both():
+    from transcriber_pipeline.pipeline import auth_kwargs
+
+    def both(checkpoint, token=None, use_auth_token=None):
+        pass
+
+    assert auth_kwargs(both, "hf_x") == {"token": "hf_x"}
+
+
+def test_auth_kwarg_passes_nothing_when_neither_is_declared():
+    from transcriber_pipeline.pipeline import auth_kwargs
+
+    def neither(checkpoint, cache_dir=None):
+        pass
+
+    # huggingface_hub still picks HF_TOKEN up from the environment.
+    assert auth_kwargs(neither, "hf_x") == {}
+
+
+def test_auth_kwarg_passes_nothing_without_a_token():
+    from transcriber_pipeline.pipeline import auth_kwargs
+
+    def modern(checkpoint, token=None):
+        pass
+
+    assert auth_kwargs(modern, None) == {}

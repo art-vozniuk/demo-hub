@@ -1,0 +1,70 @@
+# End-to-end check of the transcriber app against a real recording, run from
+# source with `modal run` — so it exercises the branch you are on, not the
+# deployed app, and the container's own logs stream into this job's log.
+#
+# Not part of the deploy pipeline: it costs GPU seconds and takes minutes, so it
+# is dispatched by hand after touching the transcriber or its pipeline.
+
+name: smoke transcriber
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'audio (straight to the GPU) or video (via AudioExtractor)'
+        type: choice
+        options: [audio, video]
+        default: audio
+      model:
+        description: 'Whisper size'
+        type: choice
+        options: [medium, large-v3-turbo, large-v3]
+        default: medium
+      preload:
+        description: 'Fill the model volume first (needed once per environment)'
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      source:
+        type: string
+        default: audio
+      model:
+        type: string
+        default: medium
+      preload:
+        type: boolean
+        default: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    # Long because a cold volume downloads several GB of weights before the
+    # first transcription can start.
+    timeout-minutes: 60
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      MODAL_ENVIRONMENT: main
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install 'modal>=1.4.2'
+
+      # Idempotent, and it commits the volume, so a later run starts warm.
+      - name: preload weights
+        if: ${{ inputs.preload }}
+        working-directory: services/modal
+        run: modal run transcriber/app.py::preload_weights
+
+      - name: transcribe a sample
+        working-directory: services/modal
+        run: |
+          modal run transcriber/app.py::smoke_test \
+            --source '${{ inputs.source }}' \
+            --model '${{ inputs.model }}'
