@@ -7,6 +7,7 @@ docstring).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from dataclasses import dataclass, field
@@ -97,6 +98,40 @@ def auth_kwargs(from_pretrained: Callable, token: str | None) -> dict[str, str]:
     return {}
 
 
+@contextlib.contextmanager
+def trusted_torch_load():
+    """Unpickle checkpoints inside this block the way torch did before 2.6.
+
+    torch 2.6 flipped `torch.load`'s `weights_only` default to True, and
+    pyannote 3.x's checkpoints do not survive the restricted unpickler: they
+    carry a `torch.torch_version.TorchVersion`, which it refuses. There is no
+    argument to pass instead — pyannote loads through Lightning, which forwards
+    `weights_only=None` — and no allowlist we could write here would be honest,
+    since it would have to enumerate every object in two checkpoints we don't
+    ship. pyannote 3.4.0, the last 3.x release, still doesn't handle this.
+
+    Restoring the old default is defensible because the block is narrow: the
+    only thing loaded inside it is the diarization pipeline, whose weights come
+    from the gated pyannote repos we name ourselves, over TLS, with our token.
+    An explicit `weights_only=True` from a caller is left alone.
+    """
+
+    import torch
+
+    original = torch.load
+
+    def load(*args, **kwargs):
+        if kwargs.get("weights_only") is None:
+            kwargs["weights_only"] = False
+        return original(*args, **kwargs)
+
+    torch.load = load
+    try:
+        yield
+    finally:
+        torch.load = original
+
+
 @dataclass
 class TranscriptionResult:
     """Everything one run produced: the transcript plus the metadata a job
@@ -165,10 +200,11 @@ class TranscriptionPipeline:
             "Speaker diarization model",
             f"Loading model {DIARIZATION_MODEL}",
         )
-        diarizer = PyannotePipeline.from_pretrained(
-            DIARIZATION_MODEL,
-            **auth_kwargs(PyannotePipeline.from_pretrained, self.hf_token),
-        )
+        with trusted_torch_load():
+            diarizer = PyannotePipeline.from_pretrained(
+                DIARIZATION_MODEL,
+                **auth_kwargs(PyannotePipeline.from_pretrained, self.hf_token),
+            )
         if diarizer is None:
             # from_pretrained returns None (rather than raising) when the token
             # can't read the gated repo — say so plainly.
