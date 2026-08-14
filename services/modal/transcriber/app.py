@@ -233,6 +233,205 @@ def preload_llm_weights() -> str:
     return llm.LLM_MODEL
 
 
+SMOKE_SAMPLE_URLS: tuple[str, ...] = (
+    # ~11s of JFK ("ask not what your country can do for you") and ~20s of a
+    # physics lecture — two different voices, from two long-lived files in
+    # faster-whisper's own test data, so diarization has something real to
+    # separate rather than one speaker talking to themselves.
+    "https://raw.githubusercontent.com/SYSTRAN/faster-whisper/master/tests/data/jfk.flac",
+    "https://raw.githubusercontent.com/SYSTRAN/faster-whisper/master/tests/data/physicsworks.wav",
+)
+
+# Each sample is trimmed to this before being joined, to keep a smoke run
+# cheap while leaving both voices long enough to be told apart.
+SMOKE_CLIP_SECONDS = 15
+
+# A phrase the first sample definitely contains; the check that the transcript
+# is a transcript rather than plausible-looking noise.
+SMOKE_EXPECTED_PHRASE = "country"
+
+
+@app.function(
+    image=transcriber_image,
+    volumes={MODEL_DIR: volume},
+    timeout=MODAL_LONG_FUNCTION_TIMEOUT_SECONDS,
+    cpu=2.0,
+    memory=4096,
+    secrets=[
+        modal.Secret.from_name("supabase-s3"),
+        modal.Secret.from_name("huggingface"),
+        modal.Secret.from_name("sentry"),
+    ],
+)
+def smoke_test(
+    source: str = "audio",
+    model: str = "medium",
+    bucket: str = "media",
+) -> dict[str, Any]:
+    """End-to-end check of the real classes against a real recording.
+
+    Builds a two-speaker sample from public test audio, puts it in S3, and runs
+    exactly what dispatch runs — `AudioExtractor` first when `source` is video,
+    then `TranscriberInference` — asserting the transcript actually contains
+    speech from the sample. Run it with
+    `modal run services/modal/transcriber/app.py::smoke_test`, or through the
+    smoke-transcriber workflow.
+    """
+
+    import subprocess
+    import urllib.request
+
+    if source not in ("audio", "video"):
+        raise ValueError(f"source must be 'audio' or 'video', got {source!r}")
+
+    work = f"/tmp/smoke-{uuid.uuid4().hex}"
+    os.makedirs(work, exist_ok=True)
+
+    clips: list[str] = []
+    for index, url in enumerate(SMOKE_SAMPLE_URLS):
+        raw_path = f"{work}/raw-{index}{_extension_suffix(url)}"
+        log.info(f"smoke: downloading {url}")
+        urllib.request.urlretrieve(url, raw_path)
+        clip = f"{work}/clip-{index}.wav"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-t",
+                str(SMOKE_CLIP_SECONDS),
+                "-i",
+                raw_path,
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                clip,
+            ],
+            check=True,
+        )
+        clips.append(clip)
+
+    joined = f"{work}/joined.flac"
+    concat_list = f"{work}/concat.txt"
+    with open(concat_list, "w") as fh:
+        fh.writelines(f"file '{clip}'\n" for clip in clips)
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concat_list,
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            joined,
+        ],
+        check=True,
+    )
+
+    upload_path, extension = joined, "flac"
+    if source == "video":
+        # A black 5fps track around the audio: enough to make this a real video
+        # container for the extractor to demux.
+        upload_path = f"{work}/joined.mp4"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=320x240:r=5",
+                "-i",
+                joined,
+                "-shortest",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                upload_path,
+            ],
+            check=True,
+        )
+        extension = "mp4"
+
+    size_mb = os.path.getsize(upload_path) / (1024 * 1024)
+    log.info(f"smoke: uploading {size_mb:.2f} MB {extension} sample")
+    with open(upload_path, "rb") as fh:
+        key, url = upload_to_s3_with_key(
+            data_bytes=fh.read(),
+            bucket=bucket,
+            folder="transcriber_smoke",
+            extension=extension,
+        )
+
+    payload: dict[str, Any] = {"audio_bucket": bucket, "audio_key": key}
+    extraction: dict[str, Any] | None = None
+    if source == "video":
+        log.info("smoke: running AudioExtractor")
+        extraction = AudioExtractor().generate.remote(dict(payload))
+        payload = {
+            "audio_bucket": extraction["audio_bucket"],
+            "audio_key": extraction["audio_key"],
+        }
+
+    log.info(f"smoke: running TranscriberInference on {payload['audio_key']}")
+    result = TranscriberInference().generate.remote({**payload, "model": model})
+
+    transcript = " ".join(seg["text"] for seg in result.get("preview", []))
+    log.info(f"smoke: transcript -> {transcript}")
+    log.info(
+        f"smoke: {result.get('segment_count')} segments, "
+        f"speakers={result.get('speakers')}, language={result.get('language')}, "
+        f"duration={result.get('duration_s')}s"
+    )
+
+    problems: list[str] = []
+    if not result.get("segment_count"):
+        problems.append("no segments were produced")
+    if not result.get("speakers"):
+        problems.append("no speakers were assigned")
+    if SMOKE_EXPECTED_PHRASE not in transcript.lower():
+        problems.append(
+            f"transcript does not contain {SMOKE_EXPECTED_PHRASE!r}: {transcript!r}"
+        )
+    if problems:
+        raise RuntimeError("smoke test failed: " + "; ".join(problems))
+
+    log.info("smoke: OK")
+    return {
+        "source": source,
+        "model": model,
+        "source_url": url,
+        "extraction": extraction,
+        "segment_count": result.get("segment_count"),
+        "speakers": result.get("speakers"),
+        "language": result.get("language"),
+        "duration_s": result.get("duration_s"),
+        "result_url": result.get("result_url"),
+        "transcript": transcript,
+    }
+
+
 class StageTimer:
     """Turns the pipeline's on_status stream into per-stage timings.
 

@@ -69,6 +69,34 @@ def _emit(
         on_status(stage_key, title, detail)
 
 
+def auth_kwargs(from_pretrained: Callable, token: str | None) -> dict[str, str]:
+    """How to pass the HF token to pyannote's `from_pretrained`.
+
+    pyannote renamed the argument between majors: 3.x takes `use_auth_token`,
+    4.x takes `token`. Hard-coding either spelling makes the pin and the call
+    site silently coupled — and it broke exactly that way once, at container
+    start-up in production. So ask the installed function which it accepts.
+
+    Returns {} when it declares neither, or when there is no token: pyannote
+    resolves credentials through huggingface_hub, which reads HF_TOKEN from the
+    environment on its own.
+    """
+
+    import inspect
+
+    if not token:
+        return {}
+    parameters = inspect.signature(from_pretrained).parameters
+    for name in ("token", "use_auth_token"):
+        if name in parameters:
+            return {name: token}
+    log.warning(
+        "pyannote's from_pretrained declares neither `token` nor "
+        "`use_auth_token`; relying on HF_TOKEN in the environment"
+    )
+    return {}
+
+
 @dataclass
 class TranscriptionResult:
     """Everything one run produced: the transcript plus the metadata a job
@@ -138,7 +166,8 @@ class TranscriptionPipeline:
             f"Loading model {DIARIZATION_MODEL}",
         )
         diarizer = PyannotePipeline.from_pretrained(
-            DIARIZATION_MODEL, token=self.hf_token
+            DIARIZATION_MODEL,
+            **auth_kwargs(PyannotePipeline.from_pretrained, self.hf_token),
         )
         if diarizer is None:
             # from_pretrained returns None (rather than raising) when the token
